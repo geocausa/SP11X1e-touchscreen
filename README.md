@@ -31,6 +31,8 @@ docs/BUILD.md
 docs/PROTOCOL.md
 docs/TESTING.md
 docs/MULTITOUCH.md
+docs/WINDOWS_HEAT_PROTOCOL.md
+tools/analyze_spb_etw_csv.py
 ```
 
 `spi-geni-qcom.c` is based on the exact Ubuntu Concept controller source and
