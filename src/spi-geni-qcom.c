@@ -1265,7 +1265,7 @@ int qcom_geni_spi_biosref_xfer(struct spi_device *spi_slv,
         u32 irq_status;
         int ret;
 
-        if (!spi_slv || !tx_buf || !tx_len || !rx_buf || !rx_len)
+	if (!spi_slv || !tx_buf || !tx_len || (!!rx_buf != !!rx_len))
                 return -EINVAL;
         if (tx_len > BIOSREF_MAX_TRANS_LEN || rx_len > BIOSREF_MAX_TRANS_LEN)
                 return -EMSGSIZE;
@@ -1325,8 +1325,9 @@ int qcom_geni_spi_biosref_xfer(struct spi_device *spi_slv,
         if (irq_status)
                 writel(irq_status, se->base + SE_GENI_M_IRQ_CLEAR);
 
-        /* Exact UEFI protocol-9 combined command. */
-        geni_se_setup_m_cmd(se, SPI_TX_RX, BIOSREF_QSPI_FAST_PARAM);
+	/* Exact UEFI protocol-9 combined or write-only command. */
+	geni_se_setup_m_cmd(se, rx_len ? SPI_TX_RX : SPI_TX_ONLY,
+			    BIOSREF_QSPI_FAST_PARAM);
         writel(START_TRIGGER, se->base + SE_GENI_CFG_SEQ_START);
 
         deadline = ktime_add_ms(ktime_get(), timeout_ms ?: 1000);
@@ -1352,19 +1353,20 @@ int qcom_geni_spi_biosref_xfer(struct spi_device *spi_slv,
                 if ((irq_status & M_TX_FIFO_WATERMARK_EN) && tx_done < tx_len)
                         biosref_write_tx_fifo(mas, tx_buf, tx_len, &tx_done);
 
-                if (irq_status & (M_RX_FIFO_WATERMARK_EN |
-                                  M_RX_FIFO_LAST_EN))
+		if (rx_len &&
+		    (irq_status & (M_RX_FIFO_WATERMARK_EN |
+				   M_RX_FIFO_LAST_EN)))
                         biosref_read_rx_fifo(mas, rx_buf, rx_len, &rx_done);
 
                 writel(irq_status, se->base + SE_GENI_M_IRQ_CLEAR);
 
                 if (irq_status & M_CMD_DONE_EN) {
                         /* Drain a final FIFO word if LAST and DONE coalesced. */
-                        if (rx_done < rx_len)
+			if (rx_len && rx_done < rx_len)
                                 biosref_read_rx_fifo(mas, rx_buf, rx_len,
                                                      &rx_done);
-                        ret = (tx_done == tx_len && rx_done == rx_len) ?
-                              0 : -EPROTO;
+			ret = (tx_done == tx_len &&
+			       (!rx_len || rx_done == rx_len)) ? 0 : -EPROTO;
                         break;
                 }
         }

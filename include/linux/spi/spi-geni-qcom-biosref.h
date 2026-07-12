@@ -7,9 +7,10 @@
 struct spi_device;
 
 /*
- * Execute the asymmetric FIFO/polled transaction recovered from Surface UEFI
- * SPIDxe protocol 0x09.  This is deliberately not representable as an ordinary
- * struct spi_transfer because the command has independent TX and RX lengths.
+ * Execute the FIFO/polled transaction recovered from Surface UEFI SPIDxe
+ * protocol 0x09. This is deliberately not representable as an ordinary struct
+ * spi_transfer because the command has independent TX and RX lengths. rx_buf
+ * may be NULL when rx_len is zero for a write-only command.
  */
 int qcom_geni_spi_biosref_xfer(struct spi_device *spi,
                                const void *tx_buf, size_t tx_len,

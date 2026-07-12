@@ -42,6 +42,20 @@ bottom-left    0,1023
 
 The tested device produced values within roughly 1–25 units of those bounds.
 
+## Experimental descriptor probe
+
+Phase 53 adds a disabled-by-default, read-only descriptor request. Enable it
+only in a separate test boot by adding:
+
+```text
+g6ts_biosref.descriptor_probe=1
+```
+
+The driver sends only the confirmed HID report-descriptor request, validates
+the returned class-8 length and reports the first 64 descriptor bytes in its
+`state` attribute. It does not enable HEAT mode or replay the captured Windows
+feature-report sequence.
+
 ## Stop conditions
 
 Stop testing and return to the fallback entry if the GENI controller reports

@@ -37,6 +37,12 @@
 #define G6TS_CLASS_TOUCH                1
 #define G6TS_CLASS_SERVICE              3
 #define G6TS_CLASS_READY                7
+#define G6TS_CLASS_DESCRIPTOR           8
+#define G6TS_DESCRIPTOR_PREFIX          4
+
+static bool descriptor_probe;
+module_param(descriptor_probe, bool, 0444);
+MODULE_PARM_DESC(descriptor_probe, "retrieve HID report descriptor at probe");
 
 static const u8 g6ts_header_cmd[8] = {
 	0xeb, 0x00, 0x10, 0x00, 0xff, 0xff, 0xff, 0xff,
@@ -51,6 +57,11 @@ static const u8 g6ts_body_cmd[8] = {
  */
 static const u8 g6ts_ready_cmd[8] = {
 	0xe2, 0x00, 0x20, 0x00, 0x01, 0x00, 0x00, 0x00,
+};
+
+/* Windows ETW: request the complete HID report descriptor. */
+static const u8 g6ts_descriptor_cmd[8] = {
+	0xe2, 0x00, 0x20, 0x00, 0x02, 0x00, 0x00, 0x00,
 };
 
 struct g6ts {
@@ -83,6 +94,10 @@ struct g6ts {
 	u8 last_ready_body[G6TS_DIAG_BODY];
 	size_t last_ready_len;
 	size_t last_ready_total_len;
+	bool descriptor_valid;
+	size_t descriptor_len;
+	u8 descriptor_prefix[G6TS_DIAG_BODY];
+	size_t descriptor_prefix_len;
 };
 
 static int g6ts_acpi_method(struct device *dev, const char *method)
@@ -140,6 +155,12 @@ static int g6ts_transfer(struct g6ts *ts, const u8 cmd[8],
 			 void *rx, size_t rx_len)
 {
 	return qcom_geni_spi_biosref_xfer(ts->spi, cmd, 8, rx, rx_len,
+					 G6TS_SPI_HZ, 1000);
+}
+
+static int g6ts_write_command(struct g6ts *ts, const u8 *cmd, size_t cmd_len)
+{
+	return qcom_geni_spi_biosref_xfer(ts->spi, cmd, cmd_len, NULL, 0,
 					 G6TS_SPI_HZ, 1000);
 }
 
@@ -308,6 +329,54 @@ static int g6ts_reset_controller(struct g6ts *ts)
 	return g6ts_readiness(ts);
 }
 
+/*
+ * Optional, read-only protocol diagnostic. Windows sends E2 function 2 and
+ * then performs the normal EB header/body reads. The returned class-8 body is
+ * a four-byte transport prefix followed by the complete HID report
+ * descriptor. This path is disabled unless descriptor_probe=1 is supplied.
+ */
+static int g6ts_probe_descriptor(struct g6ts *ts)
+{
+	size_t body_len;
+	size_t descriptor_len;
+	u8 cls;
+	int ret;
+
+	ret = g6ts_write_command(ts, g6ts_descriptor_cmd,
+				 sizeof(g6ts_descriptor_cmd));
+	if (ret)
+		return ret;
+
+	ret = g6ts_wait_pending(ts, true, 1000);
+	if (ret)
+		return ret;
+
+	ret = g6ts_read_raw(ts, &cls, &body_len);
+	if (ret)
+		return ret;
+	g6ts_account_class(ts, cls);
+
+	if (cls != G6TS_CLASS_DESCRIPTOR || body_len < G6TS_DESCRIPTOR_PREFIX)
+		return -EPROTO;
+
+	descriptor_len = get_unaligned_le16(&ts->body[1]);
+	if (descriptor_len != body_len - G6TS_DESCRIPTOR_PREFIX)
+		return -EPROTO;
+
+	ts->descriptor_len = descriptor_len;
+	ts->descriptor_prefix_len =
+		min_t(size_t, descriptor_len, sizeof(ts->descriptor_prefix));
+	memcpy(ts->descriptor_prefix, ts->body + G6TS_DESCRIPTOR_PREFIX,
+	       ts->descriptor_prefix_len);
+	ts->descriptor_valid = true;
+
+	dev_info(&ts->spi->dev,
+		 "validated HID report descriptor: %zu bytes, prefix=%*ph\n",
+		 descriptor_len, (int)ts->descriptor_prefix_len,
+		 ts->descriptor_prefix);
+	return 0;
+}
+
 static int g6ts_read_report(struct g6ts *ts)
 {
 	size_t body_len;
@@ -420,6 +489,7 @@ static ssize_t state_show(struct device *dev,
 	return sysfs_emit(buf,
 		"running=%u ready=%u gpio51_pending=%d reads=%llu touches=%llu transport_errors=%llu protocol_errors=%llu\n"
 		"ready_attempts=%llu ready_gpio_timeouts=%llu gpio_errors=%llu class1=%llu class3=%llu class7=%llu class_other=%llu\n"
+		"descriptor_probe=%u descriptor_valid=%u descriptor_len=%zu descriptor_prefix=%*ph\n"
 		"last_ready_total_len=%zu last_ready=%*ph\n"
 		"last_header=%*ph last_body_total_len=%zu last_body=%*ph\n",
 		ts->running, ts->ready, pending, ts->reads, ts->touches,
@@ -427,6 +497,8 @@ static ssize_t state_show(struct device *dev,
 		ts->ready_attempts, ts->ready_gpio_timeouts, ts->gpio_errors,
 		ts->class1_events, ts->class3_events, ts->class7_events,
 		ts->other_class_events,
+		descriptor_probe, ts->descriptor_valid, ts->descriptor_len,
+		(int)ts->descriptor_prefix_len, ts->descriptor_prefix,
 		ts->last_ready_total_len,
 		(int)ts->last_ready_len, ts->last_ready_body,
 		4, ts->last_header, ts->last_body_total_len,
@@ -495,6 +567,13 @@ static int g6ts_probe(struct spi_device *spi)
 	if (ret)
 		dev_warn(&spi->dev,
 			 "reset-controller sequence incomplete (%d)\n", ret);
+
+	if (descriptor_probe) {
+		ret = g6ts_probe_descriptor(ts);
+		if (ret)
+			dev_warn(&spi->dev,
+				 "HID report descriptor probe failed (%d)\n", ret);
+	}
 
 	input = devm_input_allocate_device(&spi->dev);
 	if (!input) {
