@@ -80,17 +80,18 @@ HID contact records. Existing analysis found repeated `0x44`-byte sensor
 regions and dominant `0xb4`/`0xb5` fill values. Linux therefore cannot turn
 these frames into reliable contacts merely by calling `input_mt_slot()`.
 
-## Observed initialization exchange
+## Observed power-cycle and enumeration exchange
 
-The same trace contains a one-time initialization sequence. It retrieves the
-device/report descriptors and several feature reports before normal HEAT
-frames continue. The distinct outbound writes are recoverable with
+The same trace contains a one-time power-cycle and re-enumeration sequence. It
+retrieves the device/report descriptors and several feature reports while
+normal HEAT traffic is also present. The distinct outbound writes are
+recoverable with
 `tools/analyze_spb_etw_csv.py`.
 
 Examples with confirmed meanings include:
 
 ```text
-e2 00 20 00 01 00 00 00        readiness/reset exchange
+e2 00 20 00 01 00 00 00        request HID-over-SPI device descriptor
 e2 00 20 00 02 00 00 00        request full HID report descriptor
 e2 00 20 00 04 00 00 60        request report 0x60
 e2 00 20 00 04 00 00 70        request report 0x70
@@ -98,9 +99,21 @@ e2 00 20 00 04 00 00 06        request report 0x06
 e2 00 20 00 04 00 00 73        request report 0x73
 ```
 
-The trace performs the `EB` header/body read immediately after each `E2`
-request. GPIO51 is not used as a completion gate for these solicited control
-responses; it gates unsolicited input reports.
+The formerly unknown function-7 packet is fully defined by the public
+HID-over-SPI specification:
+
+```text
+e2 00 20 00 07 01 00 01 03 ff ff ff
+```
+
+It is command ID `0x01` (Set Power) with the one-byte value `0x03` (OFF).
+The device is subsequently reset/re-enumerated; it is not a vendor HEAT-enable
+command and must not be replayed as one.
+
+The trace performs the `EB` header/body read after each response-producing
+`E2` request. GPIO51 gates unsolicited input reports; bounded response polling
+is used for solicited control responses and can encounter an unrelated input
+report first.
 
 Other captured writes carry feature-report bodies and must not be replayed
 until their direction, length and state requirements are understood. The
@@ -108,15 +121,12 @@ analysis tool prints them for offline comparison but never accesses hardware.
 
 ## Phase 53 hardware result
 
-Sending function 2 by itself after the known UEFI readiness/reset flow does
-not return the report descriptor. A bounded Linux test received a class-3
-service response instead, after which the existing readiness recovery restored
-normal report-`0x40` touch with no transport, FIFO or protocol errors.
-
-This proves that at least part of the earlier Windows feature/control exchange
-is a prerequisite for descriptor access or HEAT mode. Do not replay the
-remaining captured writes as an undifferentiated sequence; decode their HID
-report types and state requirements first.
+Sending function 2 after the UEFI-derived startup flow initially returned a
+class-3 reset response. Microsoft's specification identifies class 3 as an
+unsolicited reset completion, not a vendor service response. It requires the
+host to request the device descriptor again and then retry the report
+descriptor. The experimental probe now follows that rule. This result does
+not show that the preceding feature writes are descriptor prerequisites.
 
 ## Practical implementation boundary
 

@@ -35,8 +35,8 @@
 #define G6TS_CONTENT_TOUCH              0x40
 #define G6TS_NORMAL_COPY_LEN_MINUS_ONE  5
 #define G6TS_CLASS_TOUCH                1
-#define G6TS_CLASS_SERVICE              3
-#define G6TS_CLASS_READY                7
+#define G6TS_CLASS_RESET                3
+#define G6TS_CLASS_DEVICE_DESCRIPTOR    7
 #define G6TS_CLASS_DESCRIPTOR           8
 #define G6TS_DESCRIPTOR_PREFIX          4
 
@@ -236,10 +236,10 @@ static void g6ts_account_class(struct g6ts *ts, u8 cls)
 	case G6TS_CLASS_TOUCH:
 		ts->class1_events++;
 		break;
-	case G6TS_CLASS_SERVICE:
+	case G6TS_CLASS_RESET:
 		ts->class3_events++;
 		break;
-	case G6TS_CLASS_READY:
+	case G6TS_CLASS_DEVICE_DESCRIPTOR:
 		ts->class7_events++;
 		break;
 	default:
@@ -249,10 +249,44 @@ static void g6ts_account_class(struct g6ts *ts, u8 cls)
 }
 
 /*
+ * Poll for one solicited response without using GPIO51 as a completion gate.
+ * An unrelated input report can race with the requested response, so consume
+ * and account for those while keeping the original request outstanding.
+ */
+static int g6ts_poll_response(struct g6ts *ts, u8 expected,
+			      u8 *actual, size_t *body_len)
+{
+	unsigned int attempt;
+	u8 cls;
+	int ret;
+
+	for (attempt = 0; attempt < 200; attempt++) {
+		usleep_range(5000, 6000);
+		ret = g6ts_read_raw(ts, &cls, body_len);
+		if (ret == -ENODATA)
+			continue;
+		if (ret)
+			return ret;
+
+		g6ts_account_class(ts, cls);
+		if (actual)
+			*actual = cls;
+		if (cls == expected || cls == G6TS_CLASS_RESET)
+			return 0;
+
+		/* An unsolicited touch report may precede the response. */
+		if (cls != G6TS_CLASS_TOUCH)
+			return -EPROTO;
+	}
+
+	return -ETIMEDOUT;
+}
+
+/*
  * EFI readiness flow (RVA 0x5B88 + 0x5964): send 0xE2 command, wait for
- * the response, accept class 7.  Class 3 responses are acknowledged by
- * re-sending the command.  INT-pin wait is replaced by a bounded read
- * poll since the response read itself is authoritative.
+ * the response, accept class 7. A class-3 reset response means the device
+ * descriptor request must be issued again. The interrupt pin is used here
+ * because both reset completion and the descriptor response assert it.
  */
 static int g6ts_readiness(struct g6ts *ts)
 {
@@ -278,7 +312,7 @@ static int g6ts_readiness(struct g6ts *ts)
 		if (ret)
 			break;
 		g6ts_account_class(ts, cls);
-		if (cls == G6TS_CLASS_READY) {
+		if (cls == G6TS_CLASS_DEVICE_DESCRIPTOR) {
 			ts->last_ready_total_len = body_len;
 			ts->last_ready_len =
 				min_t(size_t, body_len,
@@ -293,8 +327,8 @@ static int g6ts_readiness(struct g6ts *ts)
 				 ts->last_ready_body);
 			return 0;
 		}
-		if (cls == G6TS_CLASS_SERVICE)
-			continue; /* firmware responds by re-sending 0xE2 */
+		if (cls == G6TS_CLASS_RESET)
+			continue; /* restart at the device-descriptor request */
 
 		dev_info(&ts->spi->dev,
 			 "readiness: unexpected class %u body=%*ph\n",
@@ -337,27 +371,36 @@ static int g6ts_reset_controller(struct g6ts *ts)
  */
 static int g6ts_probe_descriptor(struct g6ts *ts)
 {
-	unsigned int attempt;
+	unsigned int recovery;
 	size_t body_len;
 	size_t descriptor_len;
 	u8 cls;
 	int ret;
 
-	ret = g6ts_write_command(ts, g6ts_descriptor_cmd,
-				 sizeof(g6ts_descriptor_cmd));
-	if (ret)
-		return ret;
+	for (recovery = 0; recovery < 2; recovery++) {
+		ret = g6ts_write_command(ts, g6ts_descriptor_cmd,
+					 sizeof(g6ts_descriptor_cmd));
+		if (ret)
+			return ret;
 
-	/* Poll only the solicited response; do not resend the E2 command. */
-	for (attempt = 0; attempt < 20; attempt++) {
-		usleep_range(5000, 6000);
-		ret = g6ts_read_raw(ts, &cls, &body_len);
-		if (ret != -ENODATA)
+		ret = g6ts_poll_response(ts, G6TS_CLASS_DESCRIPTOR, &cls,
+					 &body_len);
+		if (ret)
+			return ret;
+		if (cls == G6TS_CLASS_DESCRIPTOR)
 			break;
+
+		/*
+		 * HID-over-SPI permits an unsolicited reset response. Section
+		 * 6.1.3 requires restarting at the device-descriptor request,
+		 * then retrying the report-descriptor request.
+		 */
+		dev_info(&ts->spi->dev,
+			 "descriptor request met reset response; re-enumerating\n");
+		ret = g6ts_readiness(ts);
+		if (ret)
+			return ret;
 	}
-	if (ret)
-		return ret;
-	g6ts_account_class(ts, cls);
 
 	if (cls != G6TS_CLASS_DESCRIPTOR || body_len < G6TS_DESCRIPTOR_PREFIX) {
 		dev_info(&ts->spi->dev,
@@ -398,15 +441,15 @@ static int g6ts_read_report(struct g6ts *ts)
 		return ret;
 	g6ts_account_class(ts, cls);
 
-	if (cls == G6TS_CLASS_SERVICE) {
-		/* EFI acks service class via the full readiness helper. */
+	if (cls == G6TS_CLASS_RESET) {
+		/* Re-enumerate after an unsolicited reset response. */
 		ret = g6ts_readiness(ts);
 		if (ret)
 			return ret;
 		return -EAGAIN;
 	}
 	if (cls != G6TS_CLASS_TOUCH)
-		return -EAGAIN; /* service/readiness class, not normal input */
+		return -EAGAIN; /* descriptor/response class, not normal input */
 
 	payload_len = get_unaligned_le16(&ts->body[1]);
 	if (body_len < 9 || payload_len != G6TS_NORMAL_COPY_LEN_MINUS_ONE ||

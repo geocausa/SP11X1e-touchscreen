@@ -17,6 +17,36 @@ from pathlib import Path
 
 HEX_RE = re.compile(r"0x([0-9a-fA-F]+)")
 
+OUTPUT_REPORT_TYPES = {
+    0x01: "get-device-descriptor",
+    0x02: "get-report-descriptor",
+    0x03: "set-feature",
+    0x04: "get-feature",
+    0x05: "set-output-report",
+    0x06: "get-input-report",
+    0x07: "command",
+}
+
+
+def describe_e2(command: bytes) -> str:
+    """Decode the public HID-over-SPI output-report header."""
+    if len(command) < 8 or not command.startswith(b"\xe2\x00\x20\x00"):
+        return ""
+
+    report_type = command[4]
+    content_length = int.from_bytes(command[5:7], "little")
+    content_id = command[7]
+    content = command[8 : 8 + content_length]
+    description = OUTPUT_REPORT_TYPES.get(report_type, "reserved")
+    result = (
+        f"{description}, content-id=0x{content_id:02x}, "
+        f"content-length={content_length}"
+    )
+    if report_type == 0x07 and content_id == 0x01 and content:
+        power_states = {0x01: "on", 0x02: "sleep", 0x03: "off"}
+        result += f", set-power={power_states.get(content[0], 'reserved')}"
+    return result
+
 
 def iter_buffers(path: Path):
     direction = None
@@ -159,7 +189,10 @@ def main():
     print("\nOne-time E2 commands (observed only; not replayed):")
     for command, count in tx_commands.items():
         if command.startswith(b"\xe2\x00\x20\x00"):
-            print(f"  count={count} {command.hex(' ')}")
+            print(
+                f"  count={count} {command.hex(' ')}\n"
+                f"    {describe_e2(command)}"
+            )
 
     found = find_report_descriptor(rx_buffers)
     if found is None:
