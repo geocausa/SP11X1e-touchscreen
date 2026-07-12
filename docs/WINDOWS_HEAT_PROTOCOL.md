@@ -98,9 +98,25 @@ e2 00 20 00 04 00 00 06        request report 0x06
 e2 00 20 00 04 00 00 73        request report 0x73
 ```
 
+The trace performs the `EB` header/body read immediately after each `E2`
+request. GPIO51 is not used as a completion gate for these solicited control
+responses; it gates unsolicited input reports.
+
 Other captured writes carry feature-report bodies and must not be replayed
 until their direction, length and state requirements are understood. The
 analysis tool prints them for offline comparison but never accesses hardware.
+
+## Phase 53 hardware result
+
+Sending function 2 by itself after the known UEFI readiness/reset flow does
+not return the report descriptor. A bounded Linux test received a class-3
+service response instead, after which the existing readiness recovery restored
+normal report-`0x40` touch with no transport, FIFO or protocol errors.
+
+This proves that at least part of the earlier Windows feature/control exchange
+is a prerequisite for descriptor access or HEAT mode. Do not replay the
+remaining captured writes as an undifferentiated sequence; decode their HID
+report types and state requirements first.
 
 ## Practical implementation boundary
 

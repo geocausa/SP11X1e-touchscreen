@@ -337,6 +337,7 @@ static int g6ts_reset_controller(struct g6ts *ts)
  */
 static int g6ts_probe_descriptor(struct g6ts *ts)
 {
+	unsigned int attempt;
 	size_t body_len;
 	size_t descriptor_len;
 	u8 cls;
@@ -347,17 +348,23 @@ static int g6ts_probe_descriptor(struct g6ts *ts)
 	if (ret)
 		return ret;
 
-	ret = g6ts_wait_pending(ts, true, 1000);
-	if (ret)
-		return ret;
-
-	ret = g6ts_read_raw(ts, &cls, &body_len);
+	/* Poll only the solicited response; do not resend the E2 command. */
+	for (attempt = 0; attempt < 20; attempt++) {
+		usleep_range(5000, 6000);
+		ret = g6ts_read_raw(ts, &cls, &body_len);
+		if (ret != -ENODATA)
+			break;
+	}
 	if (ret)
 		return ret;
 	g6ts_account_class(ts, cls);
 
-	if (cls != G6TS_CLASS_DESCRIPTOR || body_len < G6TS_DESCRIPTOR_PREFIX)
+	if (cls != G6TS_CLASS_DESCRIPTOR || body_len < G6TS_DESCRIPTOR_PREFIX) {
+		dev_info(&ts->spi->dev,
+			 "descriptor request returned class %u: body=%*ph\n",
+			 cls, (int)ts->last_body_len, ts->last_body);
 		return -EPROTO;
+	}
 
 	descriptor_len = get_unaligned_le16(&ts->body[1]);
 	if (descriptor_len != body_len - G6TS_DESCRIPTOR_PREFIX)
@@ -651,6 +658,12 @@ static const struct of_device_id g6ts_of_match[] = {
 };
 MODULE_DEVICE_TABLE(of, g6ts_of_match);
 
+static const struct spi_device_id g6ts_spi_match[] = {
+	{ "mshw0485-biosref", 0 },
+	{ }
+};
+MODULE_DEVICE_TABLE(spi, g6ts_spi_match);
+
 static struct spi_driver g6ts_driver = {
 	.driver = {
 		.name = G6TS_NAME,
@@ -660,6 +673,7 @@ static struct spi_driver g6ts_driver = {
 	},
 	.probe = g6ts_probe,
 	.remove = g6ts_remove,
+	.id_table = g6ts_spi_match,
 };
 module_spi_driver(g6ts_driver);
 
