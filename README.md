@@ -16,8 +16,10 @@ single-touch input on Ubuntu Concept `7.0.0-32-qcom-x1e`.
 - Live validation completed with no transport, protocol, readiness or GPIO
   errors.
 
-The driver is intentionally single-touch today. Multitouch parsing and Linux
-MT slot reporting are the next development target.
+The working driver is intentionally single-touch. The full Windows
+multitouch/HEAT path uses a different panel personality and Qualcomm GPI DMA;
+it is being developed as an isolated Phase 54 boot path rather than added to
+the known-good FIFO driver.
 
 ## Repository layout
 
@@ -32,6 +34,7 @@ docs/PROTOCOL.md
 docs/TESTING.md
 docs/MULTITOUCH.md
 docs/WINDOWS_HEAT_PROTOCOL.md
+docs/PHASE54_GPI_DMA.md
 tools/analyze_spb_etw_csv.py
 ```
 
@@ -42,7 +45,9 @@ adds the isolated BIOS-reference transfer helper required by this device.
 
 This repository does not contain Microsoft firmware, EFI binaries, firmware
 updates, captures, boot images or initramfs files. The driver does not flash
-the touchscreen and contains no CFU, FRU-unlock or Windows GPI-DMA path.
+the touchscreen and contains no CFU or FRU-unlock path. The separate GPI-DMA
+experiment is documented in
+[docs/PHASE54_GPI_DMA.md](docs/PHASE54_GPI_DMA.md).
 
 Use a separate boot entry and retain a known-good kernel. See
 [docs/BUILD.md](docs/BUILD.md) and [docs/TESTING.md](docs/TESTING.md).

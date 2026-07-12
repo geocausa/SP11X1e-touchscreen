@@ -1,0 +1,9 @@
+#!/bin/sh
+exec tail -n +3 $0
+menuentry 'SP11 touchscreen Phase 54 GPI-DMA HID/HEAT enumeration (Linux 7.0.0-32-qcom-x1e)' {
+	search --no-floppy --fs-uuid --set=root 33e842b7-0434-4749-b03a-299bdcdb8b9f
+	echo 'Loading isolated SP11 Phase 54 GPI-DMA kernel image...'
+	linux /boot/sp11-touch-phase54/vmlinuz-7.0.0-32-qcom-x1e-sp11-phase54-gpi-heat root=UUID=33e842b7-0434-4749-b03a-299bdcdb8b9f ro clk_ignore_unused pd_ignore_unused cma=128M efi=noruntime quiet splash console=tty0 crashkernel=2G-4G:320M,4G-32G:512M,32G-64G:1024M,64G-128G:2048M,128G-:4096M sp11_touch_phase=54
+	echo 'Loading dedicated Phase 54 GPI-DMA initial ramdisk...'
+	initrd /boot/sp11-touch-phase54/initrd.img-7.0.0-32-qcom-x1e-phase54
+}
