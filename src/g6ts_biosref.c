@@ -572,6 +572,17 @@ static const struct of_device_id g6ts_of_match[] = {
 };
 MODULE_DEVICE_TABLE(of, g6ts_of_match);
 
+/*
+ * The SPI core reports OF-instantiated children with a plain
+ * "spi:<compatible-without-vendor>" MODALIAS, so an spi_device_id
+ * table is required for module autoloading to work across reboots.
+ */
+static const struct spi_device_id g6ts_spi_id[] = {
+	{ "mshw0485-biosref" },
+	{ }
+};
+MODULE_DEVICE_TABLE(spi, g6ts_spi_id);
+
 static struct spi_driver g6ts_driver = {
 	.driver = {
 		.name = G6TS_NAME,
@@ -579,6 +590,7 @@ static struct spi_driver g6ts_driver = {
 		.of_match_table = g6ts_of_match,
 		.pm = pm_sleep_ptr(&g6ts_pm_ops),
 	},
+	.id_table = g6ts_spi_id,
 	.probe = g6ts_probe,
 	.remove = g6ts_remove,
 };
