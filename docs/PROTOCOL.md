@@ -43,6 +43,45 @@ E2 00 20 00 01 00 00 00
 The observed class-7 body is 28 bytes. It is retained in full by the driver's
 diagnostic state attribute.
 
+## Readiness descriptor
+
+The class-7 payload is the Microsoft HID-over-SPI device descriptor. Observed
+body, prefix included:
+
+```text
+07 18 00 00 18 00 00 03 cc 05 00 20 00 02 00 20 5e 04 83 0c 04 00 01 00 00 00 00 00
+```
+
+After the three-byte prefix (class 7, length 0x0018) and one alignment byte,
+the little-endian fields line up with the HID-over-SPI device descriptor
+layout, anchored by the Microsoft vendor ID:
+
+| Field             | Value  | Meaning                     |
+| ----------------- | ------ | --------------------------- |
+| wDeviceDescLength | 0x0018 | 24 bytes                    |
+| bcdVersion        | 0x0300 | descriptor version 3.0      |
+| wReportDescLength | 0x05cc | 1484-byte report descriptor |
+| wMaxInputLength   | 0x2000 | tentative                   |
+| wMaxOutputLength  | 0x0200 | tentative                   |
+| wMaxFragmentLength| 0x2000 | tentative                   |
+| wVendorID         | 0x045e | Microsoft                   |
+| wProductID        | 0x0c83 | G6 touch controller         |
+| wVersionID        | 0x0004 |                             |
+| wFlags            | 0x0001 |                             |
+| dwReserved        | 0      |                             |
+
+The three length fields marked tentative depend on where the alignment byte
+sits; the vendor/product anchor is unambiguous. The report descriptor itself
+(1484 bytes, presumably behind a further read command) has not been retrieved
+yet and is the natural entry point for multitouch work.
+
+EFI provenance of the readiness flow: helper RVA `0x5B88` sends the E2
+command and accepts class 7 (the phase-3 static analysis flags it as
+mandatory before input polling), RVA `0x5964` acknowledges class-3 service
+responses by re-running that helper, and RVA `0x6398`
+(`ResetHidSpiDeviceController`) performs the reset-then-readiness pass the
+Surface HID driver executes before starting its polling loop.
+
 ## Single-touch report
 
 The normal response prefix has class 1, copy-length-minus-one value 5 and
