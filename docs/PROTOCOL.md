@@ -11,19 +11,24 @@ drivers and confirmed against live responses from `MSHW0485`.
 - Combined asymmetric transmit/receive commands.
 - UEFI mode-1 EB framing for header and body reads.
 
-Header command:
+UEFI mode-1 framing uses `0xEB` as the QSPI read opcode and `0xE2` as the
+QSPI write opcode. The Phase 54 `spi-hid-core` sources confirm the same
+opcode pair for the Windows-style stack.
+
+Header read command:
 
 ```text
 EB 00 10 00 FF FF FF FF
 ```
 
-Body command:
+Body read command:
 
 ```text
 EB 00 10 04 FF FF FF FF
 ```
 
-Descriptor/readiness command:
+Readiness command (a write of power mode `0x01`, `SPI_HID_POWER_MODE_ACTIVE`,
+to register `0x2000`):
 
 ```text
 E2 00 20 00 01 00 00 00
@@ -34,7 +39,7 @@ E2 00 20 00 01 00 00 00
 1. Establish reset, power and GPIO51 input state.
 2. Power the panel and deassert reset using the recovered delays.
 3. Send the E2 readiness command.
-4. Class 3 is a continuation case and causes another readiness command.
+4. Class 3 is a reset response and causes another readiness command.
 5. Class 7 completes readiness.
 6. Repeat the readiness path after the controller reset used by the Surface
    HID driver.
@@ -77,10 +82,30 @@ yet and is the natural entry point for multitouch work.
 
 EFI provenance of the readiness flow: helper RVA `0x5B88` sends the E2
 command and accepts class 7 (the phase-3 static analysis flags it as
-mandatory before input polling), RVA `0x5964` acknowledges class-3 service
+mandatory before input polling), RVA `0x5964` acknowledges class-3 reset
 responses by re-running that helper, and RVA `0x6398`
 (`ResetHidSpiDeviceController`) performs the reset-then-readiness pass the
 Surface HID driver executes before starting its polling loop.
+
+## Correspondence with the NORMAL-mode stack
+
+The Phase 54 `spi-hid-core` constants map onto the observed traffic:
+
+| Observed here          | spi-hid-core name                | Value |
+| ---------------------- | -------------------------------- | ----- |
+| EB read commands       | `SPI_HID_QSPI_READ_OPCODE`       | 0xEB  |
+| E2 readiness command   | `SPI_HID_QSPI_WRITE_OPCODE`      | 0xE2  |
+| readiness payload byte | `SPI_HID_POWER_MODE_ACTIVE`      | 0x01  |
+| class 3                | `SPI_HID_REPORT_TYPE_RESET_RESP` | 0x03  |
+
+Under this reading the "readiness command" is the standard HID-over-SPI
+SET_POWER(ACTIVE) write, class 3 is the device's reset response, and class 7
+is the device descriptor report. UEFI stops the init there and polls the
+input register in the single-touch personality; the Windows stack continues
+through the report descriptor and output-channel commands, after which the
+panel serves the full multitouch/pen/HEAT report model over GPI DMA. The
+mapping is derived from source correspondence and still needs live
+confirmation on the Phase 54 path.
 
 ## Single-touch report
 
@@ -89,5 +114,5 @@ content ID `0x40`. The five-byte payload contains flags plus little-endian X
 and Y values. Firmware shifts both coordinates right by five. Live corner
 captures establish a resulting range of 0 through 1023 on both axes.
 
-Idle reads are invalid host behavior. They provoke class-3 service responses,
+Idle reads are invalid host behavior. They provoke class-3 reset responses,
 which is why direct GPIO gating is mandatory.
