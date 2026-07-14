@@ -19,3 +19,5 @@ modules.order
 *.cab
 *.cap
 *.payload
+__pycache__/
+*.pyc
