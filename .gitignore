@@ -4,7 +4,6 @@
 *.mod
 *.mod.c
 *.cmd
-/Makefile
 /source
 Module.symvers
 modules.order

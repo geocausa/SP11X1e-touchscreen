@@ -15,8 +15,8 @@
 #include <linux/scatterlist.h>
 #include <linux/slab.h>
 #include <linux/timer.h>
-#include "dmaengine.h"
-#include "virt-dma.h"
+#include "../dmaengine.h"
+#include "../virt-dma.h"
 
 static bool sp11_qspi_trace;
 module_param_named(sp11_qspi_trace, sp11_qspi_trace, bool, 0644);
@@ -1224,6 +1224,21 @@ static void gpi_process_xfer_compl_event(struct gchan *gchan,
 		struct gpi_ere *gpi_ere;
 
 		spin_unlock_irqrestore(&gchan->vc.lock, flags);
+		/*
+		 * QSPI can deliver a late duplicate EOT after the matching
+		 * descriptor has already been retired by its QUP notification.
+		 * There is no work left to complete, so this is expected ring
+		 * housekeeping rather than a channel error.
+		 */
+		if (gchan->protocol == QCOM_GPI_QSPI &&
+		    compl_event->code == MSM_GPI_TCE_EOT) {
+			dev_dbg_ratelimited(gpii->gpi_dev->dev,
+					    "discarding late QSPI EOT side:%s ptr:%pa len:%u\n",
+					    gpi_qspi_side_name(gchan->chid),
+					    &compl_event->ptr,
+					    compl_event->length);
+			return;
+		}
 		dev_err(gpii->gpi_dev->dev, "Event without a pending descriptor!\n");
 		gpi_ere = (struct gpi_ere *)compl_event;
 		dev_err(gpii->gpi_dev->dev,
@@ -1255,11 +1270,11 @@ static void gpi_process_xfer_compl_event(struct gchan *gchan,
 		last_tre -= ch_ring->el_size;
 		last_tre_phys = to_physical(ch_ring, last_tre);
 		if (compl_event->ptr != last_tre_phys) {
-			dev_warn(gpii->gpi_dev->dev,
-				 "SP11 QSPI ignoring non-terminal EOT side:%s ptr:%pa expected:%pa len:%u pending_len:%zu\n",
-				 gpi_qspi_side_name(gchan->chid),
-				 &compl_event->ptr, &last_tre_phys,
-				 compl_event->length, gpi_desc->len);
+			dev_dbg_ratelimited(gpii->gpi_dev->dev,
+					    "SP11 QSPI ignoring non-terminal EOT side:%s ptr:%pa expected:%pa len:%u pending_len:%zu\n",
+					    gpi_qspi_side_name(gchan->chid),
+					    &compl_event->ptr, &last_tre_phys,
+					    compl_event->length, gpi_desc->len);
 			return;
 		}
 	}

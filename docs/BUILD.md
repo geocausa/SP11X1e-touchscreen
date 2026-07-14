@@ -28,6 +28,17 @@ spi-geni-qcom.ko
 g6ts_biosref.ko
 ```
 
+The repository root defaults to the isolated Phase 52 FIFO baseline. To build
+the hardware-validated Phase 55 DMA/multi-touch matched set instead:
+
+```bash
+make phase55 KDIR=/path/to/linux-7.1.1
+```
+
+This produces `gpi.ko`, `spi-geni-qcom.ko`, and `g6ts_biosref.ko` under
+`phase55/modules/`. These three modules must be built from the same source tree
+and used together. The top-level Makefile contains no host-specific paths.
+
 Confirm compatibility before loading:
 
 ```bash

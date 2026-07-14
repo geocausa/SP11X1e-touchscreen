@@ -14,8 +14,13 @@ known-good Phase 52 FIFO/single-touch path.
 - A 68-column by 46-row sensor grid extracted from section `0x0100`.
 - Up to ten Linux type-B multi-touch slots.
 - Two-finger pinch and zoom on real hardware.
+- Three-finger desktop window gestures on real hardware.
+- Adaptive per-frame background measurement, conservative palm filtering,
+  coordinate smoothing, and one-frame dropout protection.
 - Bounded recovery after the panel emits a class-3 reset.
 - High-volume GPI tracing disabled by default.
+- Known duplicate QSPI completion notices handled quietly rather than flooding
+  the kernel log.
 
 ## Hardware validation
 
@@ -29,6 +34,11 @@ experimental kernel `7.1.1-sp11-gpicmp1+`.
 - A deliberate full recovery completed on its first attempt with no transport
   error.
 - Two simultaneous fingers, pinch, and zoom were confirmed in the desktop.
+- A separate polished-build run processed 2,791 Heat frames: 2,485 contact
+  frames and 306 idle frames, with zero decode or recovery errors. One-, two-,
+  and three-finger gestures were confirmed and all contacts released cleanly.
+- All 1,381 saved Windows Heat frames passed offline regression without a
+  known-good fingertip being rejected by the palm boundary.
 
 ## Contents
 
@@ -65,11 +75,11 @@ UEFI/PRE-OS FIFO transport. Keep a separate known-good kernel/GRUB entry.
 
 - Contact extraction is a simple connected-component tracker, not Microsoft's
   complete `TouchPenProcessor0C83.dll` algorithm.
-- Palm rejection, pen extraction, pressure, contact shape, and merged-finger
-  separation are not implemented.
-- Threshold and axis calibration are currently fixed for the tested OLED
-  panel.
-- Suspend/resume code is implemented but has not completed a long-duration
-  soak test.
-- The source still exposes laboratory diagnostics and is not ready for
-  upstream review.
+- Pen support is deliberately out of scope; the driver is finger-only.
+- Pressure, contact shape, and merged-finger separation are not implemented.
+- The baseline is adaptive, but edge calibration remains at the validated
+  0..32767 mapping until repeatable corner-tap measurements are available.
+- Suspend/resume callbacks are deliberately absent while platform suspend is
+  disabled because of prior whole-device crashes.
+- The unsafe captured Windows output-replay hook has been removed. Some safe
+  laboratory diagnostics remain, so the source is not yet upstream-ready.

@@ -15,20 +15,27 @@ multi-touch slots. See [PHASE55_DMA_MULTITOUCH.md](PHASE55_DMA_MULTITOUCH.md).
 5. Confirm two-finger input, pinch, and zoom on hardware.
 6. Preserve the Phase 52 FIFO/single-touch path as a separate fallback.
 7. Recover automatically after a class-3 panel reset.
+8. Confirm three simultaneous fingers through a desktop window gesture.
+9. Adapt the detection baseline independently on every Heat frame.
+10. Add conservative broad-contact palm filtering, coordinate smoothing, and
+    one-frame contact-dropout protection.
 
 ## Remaining work
 
-1. Replace fixed thresholding with adaptive noise and edge compensation.
+1. Add measured edge compensation after a repeatable corner-tap calibration.
 2. Split nearby or merged fingers reliably.
-3. Add palm rejection, contact shape, pressure, and confidence reporting.
-4. Decode the pen path without regressing finger input.
-5. Validate rotation, suspend/resume, long-duration use, and multiple panels.
-6. Rebase the controller and DMA changes onto newer kernel releases.
-7. Refactor laboratory diagnostics into an upstream-reviewable architecture.
+3. Add contact shape, pressure, and confidence reporting where the Heat data
+   supports them.
+4. Validate rotation, long-duration use, and multiple panels.
+5. Rebase the controller and DMA changes onto newer kernel releases.
+6. Refactor the remaining laboratory diagnostics into an upstream-reviewable
+   architecture.
 
 ## Non-goals
 
 - No touchscreen firmware flashing.
 - No calibration-storage unlock.
-- No claim of pen support until it is independently decoded and validated.
+- No pen support; this driver is intentionally finger-only.
+- No suspend/resume callbacks while platform suspend remains unsafe on the
+  tested machine.
 - No assumption that Windows GPI-DMA framing matches the UEFI FIFO path.

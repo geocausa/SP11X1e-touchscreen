@@ -22,13 +22,16 @@ Phase 55 QSPI/GPI-DMA multi-touch experiment.
 Phase 55 implements the panel's raw-heatmap personality with a matched GENI
 QSPI and GPI-DMA stack. On a Surface Pro 11 OLED it has produced working
 multi-touch, including confirmed two-finger pinch and zoom. Cold startup and
-class-3 panel-reset recovery are automatic and bounded. See
+class-3 panel-reset recovery are automatic and bounded. Finger tracking has
+also been validated with the desktop's three-finger window gesture. See
 [phase55/README.md](phase55/README.md) and
 [docs/PHASE55_DMA_MULTITOUCH.md](docs/PHASE55_DMA_MULTITOUCH.md).
 
-It is not yet a production or upstream-ready driver. Palm rejection, pen,
-pressure, merged-contact separation, generalized calibration, and broader
-kernel compatibility remain open.
+It is not yet a production or upstream-ready driver. It now includes adaptive
+per-frame baseline measurement, conservative broad-contact palm filtering,
+jitter smoothing, and one-frame dropout protection. Pressure, merged-contact
+separation, measured edge calibration, and broader kernel compatibility remain
+open. Pen support is deliberately out of scope.
 
 ## Repository layout
 
@@ -62,6 +65,9 @@ experiments are isolated under `phase54/` and `phase55/`.
 
 Use a separate boot entry and retain a known-good kernel. See
 [docs/BUILD.md](docs/BUILD.md) and [docs/TESTING.md](docs/TESTING.md).
+The Phase 55 client deliberately has no suspend/resume callbacks because
+platform suspend is disabled on the tested system after earlier whole-device
+crashes.
 
 ## Tested hardware
 

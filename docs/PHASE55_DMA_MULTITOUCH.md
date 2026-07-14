@@ -19,10 +19,32 @@ replacement:
 6. Form eight-neighbour connected components of at least two samples.
 7. Map weighted centroids to Linux coordinates from 0 through 32767.
 8. Assign the ten strongest components to Linux multi-touch slots.
+9. Reject only components broader than the conservative palm boundary.
+10. Smooth small coordinate changes and bridge a single missing frame without
+    delaying deliberate movement or release beyond one scan.
 
 The `0xff00` section is retained as metadata but is not needed for the current
 finger-centroid implementation. The 333-byte trailer outside the Heat
 container is not interpreted.
+
+The palm boundary was checked against 1,381 saved Windows Heat frames. Every
+frame decoded successfully; all 1,119 fingertip frames remained accepted, all
+262 idle frames remained idle, and no known-good contact was rejected. The
+largest saved fingertip occupied 12 samples in a 4 by 4 box, while the driver
+rejects only components above 48 samples or spanning more than 12 rows or
+columns.
+
+## Finger-only and power-management scope
+
+Pen extraction is deliberately not implemented. The Linux input device reports
+finger contacts only. The client also contains no suspend/resume callbacks:
+platform suspend is disabled on the tested machine because earlier system-level
+suspend attempts crashed the tablet. Automatic cold startup and bounded panel
+reset recovery remain fully enabled.
+
+The removed `dma_windows_output_sequence` experiment is not part of startup or
+recovery and is no longer exposed through sysfs. It previously reproduced an
+unsafe laboratory sequence and once caused a hard freeze.
 
 ## Reset recovery
 

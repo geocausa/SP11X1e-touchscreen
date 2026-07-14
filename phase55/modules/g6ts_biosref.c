@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: GPL-2.0
 /*
- * Microsoft Surface G6 Touch (MSHW0485), SP11 DMA laboratory driver.
+ * Microsoft Surface G6 Touch (MSHW0485), SP11 DMA multi-touch driver.
  *
- * This disposable 7.1.1 variant intentionally never executes the UEFI/PRE-OS
+ * This finger-only 7.1.1 variant intentionally never executes the UEFI/PRE-OS
  * FIFO protocol. Probe powers and resets the panel, then schedules the proven
  * GPI-DMA enumeration sequence. Class-3 panel resets use the same bounded
- * power-cycle and re-enumeration path.
+ * power-cycle and re-enumeration path. Suspend/resume callbacks are omitted
+ * while platform suspend remains unsafe on the tested system.
  */
 
 #include <linux/acpi.h>
@@ -20,7 +21,6 @@
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/mutex.h>
-#include <linux/pm.h>
 #include <linux/slab.h>
 #include <linux/spi/spi.h>
 #include <linux/unaligned.h>
@@ -44,8 +44,13 @@
 #define G6TS_HEAT_SECTION		0x0100
 #define G6TS_HEAT_THRESHOLD		8U
 #define G6TS_HEAT_MIN_PIXELS		2U
+#define G6TS_HEAT_PALM_PIXELS		48U
+#define G6TS_HEAT_PALM_SPAN		12U
 #define G6TS_MAX_CONTACTS		10U
 #define G6TS_LOGICAL_MAX		32767U
+#define G6TS_JITTER_DEADZONE		32U
+#define G6TS_SMOOTHING_LIMIT		256U
+#define G6TS_CONTACT_HOLD_FRAMES	1U
 
 static const u8 g6ts_header_cmd[8] = {
 	0xeb, 0x00, 0x10, 0x00, 0xff, 0xff, 0xff, 0xff,
@@ -69,23 +74,6 @@ static const u8 g6ts_mode_handshake[] = {
 	0xbc, 0xe6, 0x4a, 0x2e, 0x86, 0x78, 0x00,
 };
 
-/*
- * Two 63-byte report-09 payloads captured from the Windows HidWriteReport
- * path.  The deep ETL contains each complete 0x48-byte padded transaction,
- * confirming the final seven content bytes and pad byte are zero.  The ETL
- * profile uses 0x1a03; a later KD session uses the alternate 0x1403 profile.
- */
-static const u8 g6ts_output09_a1[63] = {
-	[0] = 0x8e, [1] = 0xa1, [2] = 0x01,
-	[4] = 0x90, [5] = 0x01,
-	[40] = 0x1a, [41] = 0x03,
-};
-
-static const u8 g6ts_output09_a5[63] = {
-	[0] = 0x8e, [1] = 0xa5, [3] = 0x02,
-	[39] = 0x1a, [40] = 0x03, [46] = 0x40,
-};
-
 struct g6ts_contact {
 	u64 weighted_x;
 	u64 weighted_y;
@@ -93,6 +81,10 @@ struct g6ts_contact {
 	u16 pixels;
 	u16 x;
 	u16 y;
+	u8 min_col;
+	u8 max_col;
+	u8 min_row;
+	u8 max_row;
 };
 
 struct g6ts {
@@ -112,6 +104,10 @@ struct g6ts {
 	struct g6ts_contact contacts[G6TS_MAX_CONTACTS];
 	struct input_mt_pos contact_positions[G6TS_MAX_CONTACTS];
 	int contact_slots[G6TS_MAX_CONTACTS];
+	u16 slot_x[G6TS_MAX_CONTACTS];
+	u16 slot_y[G6TS_MAX_CONTACTS];
+	u8 slot_missed[G6TS_MAX_CONTACTS];
+	bool slot_active[G6TS_MAX_CONTACTS];
 	struct delayed_work recovery_work;
 	u8 last_header[HIDSPI_INPUT_HEADER_SIZE];
 	u8 last_body[G6TS_DIAG_BODY];
@@ -142,7 +138,6 @@ struct g6ts {
 	u64 descriptor_runs;
 	u64 report_descriptor_runs;
 	u64 mode_sequence_runs;
-	u64 windows_output_runs;
 	u64 next_report_runs;
 	u64 interleaved_data_count;
 	u64 touch_report_count;
@@ -150,6 +145,8 @@ struct g6ts {
 	u64 heatmap_decode_errors;
 	u64 heatmap_contact_frames;
 	u64 heatmap_idle_frames;
+	u64 heatmap_palm_rejections;
+	u64 heatmap_held_frames;
 	u64 recovery_requests;
 	u64 recovery_successes;
 	u64 recovery_failures;
@@ -157,6 +154,7 @@ struct g6ts {
 	u8 last_interleaved_id;
 	u8 last_heat_baseline;
 	u8 last_contact_count;
+	u8 max_contact_pixels;
 	u8 recovery_fail_streak;
 	bool reset_seen;
 	bool descriptor_seen;
@@ -165,7 +163,6 @@ struct g6ts {
 	bool mode_enabled;
 	bool fatal_transport_error;
 	bool stopping;
-	bool suspended;
 };
 
 static int g6ts_acpi_method(struct device *dev, const char *method)
@@ -204,7 +201,7 @@ static void g6ts_power_off(struct g6ts *ts)
 {
 	if (ts->power_gpio && ts->reset_gpio) {
 		gpiod_set_value_cansleep(ts->reset_gpio, 0);
-		msleep(10);
+		usleep_range(10000, 12000);
 		gpiod_set_value_cansleep(ts->power_gpio, 0);
 		return;
 	}
@@ -457,7 +454,10 @@ static unsigned int g6ts_find_contacts(struct g6ts *ts)
 	ts->last_heat_baseline = baseline;
 
 	for (start = 0; start < G6TS_HEAT_SAMPLES; start++) {
-		struct g6ts_contact contact = { };
+		struct g6ts_contact contact = {
+			.min_col = G6TS_HEAT_COLS - 1,
+			.min_row = G6TS_HEAT_ROWS - 1,
+		};
 		unsigned int head = 0, tail = 0;
 
 		if (ts->heat_seen[start] ||
@@ -477,6 +477,10 @@ static unsigned int g6ts_find_contacts(struct g6ts *ts)
 			contact.strength += strength;
 			contact.weighted_x += (u64)col * strength;
 			contact.weighted_y += (u64)row * strength;
+			contact.min_col = min_t(u8, contact.min_col, col);
+			contact.max_col = max_t(u8, contact.max_col, col);
+			contact.min_row = min_t(u8, contact.min_row, row);
+			contact.max_row = max_t(u8, contact.max_row, row);
 
 			for (dr = -1; dr <= 1; dr++) {
 				for (dc = -1; dc <= 1; dc++) {
@@ -501,8 +505,18 @@ static unsigned int g6ts_find_contacts(struct g6ts *ts)
 			}
 		}
 
+		ts->max_contact_pixels = max_t(unsigned int,
+					       ts->max_contact_pixels,
+					       min_t(unsigned int, contact.pixels,
+						     U8_MAX));
 		if (contact.pixels < G6TS_HEAT_MIN_PIXELS || !contact.strength)
 			continue;
+		if (contact.pixels > G6TS_HEAT_PALM_PIXELS ||
+		    contact.max_col - contact.min_col + 1 > G6TS_HEAT_PALM_SPAN ||
+		    contact.max_row - contact.min_row + 1 > G6TS_HEAT_PALM_SPAN) {
+			ts->heatmap_palm_rejections++;
+			continue;
+		}
 		contact.x = div_u64(contact.weighted_x * G6TS_LOGICAL_MAX,
 				    (u64)contact.strength * (G6TS_HEAT_COLS - 1));
 		contact.y = div_u64(contact.weighted_y * G6TS_LOGICAL_MAX,
@@ -513,10 +527,24 @@ static unsigned int g6ts_find_contacts(struct g6ts *ts)
 	return contact_count;
 }
 
+static u16 g6ts_filter_coordinate(u16 previous, u16 sample)
+{
+	unsigned int delta = previous > sample ? previous - sample :
+						 sample - previous;
+
+	if (delta <= G6TS_JITTER_DEADZONE)
+		return previous;
+	if (delta <= G6TS_SMOOTHING_LIMIT)
+		return ((u32)previous + 3U * sample + 2U) / 4U;
+	return sample;
+}
+
 static int g6ts_report_heat_contacts(struct g6ts *ts, const u8 *content,
 				      size_t content_len)
 {
+	unsigned long current_slots = 0;
 	unsigned int count, i;
+	bool held = false;
 	int ret;
 
 	ret = g6ts_extract_heatmap(ts, content, content_len);
@@ -534,15 +562,46 @@ static int g6ts_report_heat_contacts(struct g6ts *ts, const u8 *content,
 		return ret;
 
 	for (i = 0; i < count; i++) {
-		input_mt_slot(ts->input, ts->contact_slots[i]);
+		int slot = ts->contact_slots[i];
+		u16 x = ts->contact_positions[i].x;
+		u16 y = ts->contact_positions[i].y;
+
+		if (slot < 0 || slot >= G6TS_MAX_CONTACTS)
+			return -ERANGE;
+		if (ts->slot_active[slot]) {
+			x = g6ts_filter_coordinate(ts->slot_x[slot], x);
+			y = g6ts_filter_coordinate(ts->slot_y[slot], y);
+		}
+		ts->slot_x[slot] = x;
+		ts->slot_y[slot] = y;
+		ts->slot_missed[slot] = 0;
+		ts->slot_active[slot] = true;
+		current_slots |= BIT(slot);
+
+		input_mt_slot(ts->input, slot);
 		input_mt_report_slot_state(ts->input, MT_TOOL_FINGER, true);
-		input_report_abs(ts->input, ABS_MT_POSITION_X,
-				 ts->contact_positions[i].x);
-		input_report_abs(ts->input, ABS_MT_POSITION_Y,
-				 ts->contact_positions[i].y);
+		input_report_abs(ts->input, ABS_MT_POSITION_X, x);
+		input_report_abs(ts->input, ABS_MT_POSITION_Y, y);
+	}
+	for (i = 0; i < G6TS_MAX_CONTACTS; i++) {
+		if (!ts->slot_active[i] || (current_slots & BIT(i)))
+			continue;
+		if (ts->slot_missed[i] < G6TS_CONTACT_HOLD_FRAMES) {
+			ts->slot_missed[i]++;
+			input_mt_slot(ts->input, i);
+			input_mt_report_slot_state(ts->input, MT_TOOL_FINGER, true);
+			input_report_abs(ts->input, ABS_MT_POSITION_X, ts->slot_x[i]);
+			input_report_abs(ts->input, ABS_MT_POSITION_Y, ts->slot_y[i]);
+			held = true;
+		} else {
+			ts->slot_active[i] = false;
+			ts->slot_missed[i] = 0;
+		}
 	}
 	input_mt_sync_frame(ts->input);
 	input_sync(ts->input);
+	if (held)
+		ts->heatmap_held_frames++;
 	ts->last_contact_count = count;
 	if (count)
 		ts->heatmap_contact_frames++;
@@ -550,6 +609,15 @@ static int g6ts_report_heat_contacts(struct g6ts *ts, const u8 *content,
 		ts->heatmap_idle_frames++;
 
 	return 0;
+}
+
+static void g6ts_release_contacts(struct g6ts *ts)
+{
+	input_mt_sync_frame(ts->input);
+	input_sync(ts->input);
+	memset(ts->slot_active, 0, sizeof(ts->slot_active));
+	memset(ts->slot_missed, 0, sizeof(ts->slot_missed));
+	ts->last_contact_count = 0;
 }
 
 static void g6ts_handle_data_report(struct g6ts *ts)
@@ -696,11 +764,8 @@ static irqreturn_t g6ts_interrupt_thread(int irq, void *data)
 		if (ts->last_class == RESET_RESPONSE) {
 			ts->post_mode_reset_seen = true;
 			ts->mode_enabled = false;
-			input_mt_sync_frame(ts->input);
-			input_sync(ts->input);
-			ts->last_contact_count = 0;
-			if (!READ_ONCE(ts->stopping) &&
-			    !READ_ONCE(ts->suspended)) {
+			g6ts_release_contacts(ts);
+			if (!READ_ONCE(ts->stopping)) {
 				ts->recovery_requests++;
 				schedule_delayed_work(&ts->recovery_work,
 					msecs_to_jiffies(G6TS_RECOVERY_DELAY_MS));
@@ -798,10 +863,10 @@ static ssize_t state_show(struct device *dev,
 
 	return sysfs_emit(buf,
 		"mode=dma-only-lab initial_bus_io=automatic automatic_reset_recovery=1 current_pending=%d probe_pending=%d fatal_transport_error=%u interrupt_irq=%d interrupt_edges=%lld handled_edges=%lld\n"
-		"manual_read_runs=%llu descriptor_runs=%llu report_descriptor_runs=%llu mode_sequence_runs=%llu windows_output_runs=%llu next_report_runs=%llu dma_pairs=%llu dma_outputs=%llu responses=%llu reset_seen=%u descriptor_seen=%u report_descriptor_seen=%u\n"
+		"manual_read_runs=%llu descriptor_runs=%llu report_descriptor_runs=%llu mode_sequence_runs=%llu next_report_runs=%llu dma_pairs=%llu dma_outputs=%llu responses=%llu reset_seen=%u descriptor_seen=%u report_descriptor_seen=%u\n"
 		"expected_report_descriptor_len=%u report_descriptor_len=%zu\n"
 		"mode_stage=%u mode_value=%#02x mode_enabled=%u post_mode_reset_seen=%u captured_report_len=%zu interleaved_data=%llu touch_reports=%llu heatmap_reports=%llu last_interleaved_id=%#02x last_interleaved_len=%u\n"
-		"heat_decode_errors=%llu contact_frames=%llu idle_frames=%llu last_contacts=%u heat_baseline=%#02x\n"
+		"heat_decode_errors=%llu contact_frames=%llu idle_frames=%llu last_contacts=%u heat_baseline=%#02x palm_rejections=%llu held_frames=%llu max_contact_pixels=%u\n"
 		"recovery_requests=%llu recovery_successes=%llu recovery_failures=%llu recovery_fail_streak=%u\n"
 		"last_ret=%d header_ret=%d body_ret=%d output_ret=%d pending_before=%d pending_after=%d\n"
 		"last_header=%*ph body_total_len=%zu class=%u content_len=%u content_id=%u last_body=%*ph\n",
@@ -810,7 +875,7 @@ static ssize_t state_show(struct device *dev,
 		ts->handled_interrupt_edges,
 		ts->manual_read_runs, ts->descriptor_runs,
 		ts->report_descriptor_runs, ts->mode_sequence_runs,
-		ts->windows_output_runs, ts->next_report_runs, ts->dma_pair_count,
+		ts->next_report_runs, ts->dma_pair_count,
 		ts->dma_output_count, ts->response_count, ts->reset_seen,
 		ts->descriptor_seen, ts->report_descriptor_seen,
 		ts->expected_report_descriptor_len, ts->report_descriptor_len,
@@ -821,7 +886,8 @@ static ssize_t state_show(struct device *dev,
 		ts->last_interleaved_id, ts->last_interleaved_len,
 		ts->heatmap_decode_errors, ts->heatmap_contact_frames,
 		ts->heatmap_idle_frames, ts->last_contact_count,
-		ts->last_heat_baseline,
+		ts->last_heat_baseline, ts->heatmap_palm_rejections,
+		ts->heatmap_held_frames, ts->max_contact_pixels,
 		ts->recovery_requests, ts->recovery_successes,
 		ts->recovery_failures, ts->recovery_fail_streak,
 		ts->last_ret, ts->last_header_ret,
@@ -1167,15 +1233,13 @@ static void g6ts_recovery_work(struct work_struct *work)
 	int ret;
 
 	mutex_lock(&ts->io_lock);
-	if (ts->stopping || ts->suspended) {
+	if (ts->stopping) {
 		mutex_unlock(&ts->io_lock);
 		return;
 	}
 
 	ts->mode_enabled = false;
-	input_mt_sync_frame(ts->input);
-	input_sync(ts->input);
-	ts->last_contact_count = 0;
+	g6ts_release_contacts(ts);
 	ret = g6ts_full_reinitialize_locked(ts);
 	if (!ret) {
 		ts->recovery_successes++;
@@ -1291,232 +1355,6 @@ out:
 	return count;
 }
 static DEVICE_ATTR_WO(dma_mode_sequence);
-
-static int g6ts_dma_report09_output(struct g6ts *ts, const u8 *content,
-				    const char *stage)
-{
-	int ret;
-
-	ts->last_output_ret = g6ts_dma_hidspi_output(ts, OUTPUT_REPORT, 0x09,
-						    content, 63);
-	ret = ts->last_output_ret;
-	if (ret) {
-		ts->fatal_transport_error = true;
-		ts->last_ret = ret;
-		return ret;
-	}
-
-	dev_info(&ts->spi->dev, "DMA-LAB Windows sequence sent %s\n", stage);
-	usleep_range(1000, 2000);
-	return 0;
-}
-
-/*
- * Exact ordering recovered from the Windows KD trace:
- *
- *   report09-A1, report09-A5, SetFeature05, report09-A1, report09-A5
- *
- * Report-09 acknowledgements are asynchronous.  The feature exchange and
- * capture loop drain them while searching for their own expected response.
- */
-static ssize_t dma_windows_output_sequence_store(struct device *dev,
-					  struct device_attribute *attr,
-					  const char *buf, size_t count)
-{
-	struct g6ts *ts = spi_get_drvdata(to_spi_device(dev));
-	unsigned int response_index;
-	bool cold_transition;
-	bool descriptor_queued = false;
-	bool recovery;
-	bool run;
-	int ret;
-
-	ret = kstrtobool(buf, &run);
-	if (ret)
-		return ret;
-	if (!run)
-		return -EINVAL;
-
-	mutex_lock(&ts->io_lock);
-	if (!ts->report_descriptor_seen ||
-	    ts->windows_output_runs >= G6TS_MODE_ATTEMPT_LIMIT ||
-	    (ts->windows_output_runs && !ts->post_mode_reset_seen) ||
-	    ts->fatal_transport_error) {
-		ts->last_ret = -EAGAIN;
-		goto out;
-	}
-
-	cold_transition = ts->mode_sequence_runs && !ts->windows_output_runs &&
-			  ts->mode_enabled && !ts->post_mode_reset_seen;
-	recovery = ts->post_mode_reset_seen || cold_transition;
-	ts->windows_output_runs++;
-	ts->mode_enabled = false;
-
-	/*
-	 * In the KD trace DEVICE_DESCRIPTOR is queued while heatmap streaming is
-	 * still active.  RESET is consumed first; the descriptor reply remains
-	 * queued and is consumed only after A1.  This overlap is stateful and must
-	 * not be flattened into two synchronous transactions.
-	 */
-	if (cold_transition) {
-		ts->mode_stage = 0;
-		ts->last_output_ret = g6ts_dma_output(ts,
-						      g6ts_device_descriptor_cmd,
-						      sizeof(g6ts_device_descriptor_cmd));
-		ret = ts->last_output_ret;
-		if (ret) {
-			ts->fatal_transport_error = true;
-			ts->last_ret = ret;
-			goto log;
-		}
-		descriptor_queued = true;
-
-		for (response_index = 0;
-		     response_index < G6TS_FEATURE_RESPONSE_LIMIT;
-		     response_index++) {
-			ret = g6ts_wait_pending(ts, 1000);
-			if (ret) {
-				ts->last_ret = ret;
-				goto log;
-			}
-			ret = g6ts_dma_read_response(ts);
-			if (ret)
-				goto log;
-			if (ts->last_class == RESET_RESPONSE) {
-				ts->post_mode_reset_seen = true;
-				break;
-			}
-			if (ts->last_class == DEVICE_DESCRIPTOR_RESPONSE &&
-			    ts->last_content_id == 0 &&
-			    ts->last_content_len == HIDSPI_DEVICE_DESCRIPTOR_SIZE) {
-				/* Cold Linux state can return the descriptor before RESET. */
-				descriptor_queued = false;
-				continue;
-			}
-			if (ts->last_class == DATA) {
-				ts->interleaved_data_count++;
-				ts->last_interleaved_id = ts->last_content_id;
-				ts->last_interleaved_len = ts->last_content_len;
-				continue;
-			}
-			ts->last_ret = -EPROTO;
-			goto log;
-		}
-		if (response_index == G6TS_FEATURE_RESPONSE_LIMIT) {
-			ts->last_ret = -EOVERFLOW;
-			goto log;
-		}
-	}
-
-	ts->post_mode_reset_seen = false;
-
-	/*
-	 * Windows recovery deliberately has two transactions in flight: it sends
-	 * DEVICE_DESCRIPTOR, sends A1, and only then consumes the descriptor
-	 * response.  Preserve that ordering rather than serialising the request.
-	 */
-	if (recovery && !descriptor_queued) {
-		ts->mode_stage = 1;
-		ts->last_output_ret = g6ts_dma_output(ts,
-						      g6ts_device_descriptor_cmd,
-						      sizeof(g6ts_device_descriptor_cmd));
-		ret = ts->last_output_ret;
-		if (ret) {
-			ts->fatal_transport_error = true;
-			ts->last_ret = ret;
-			goto log;
-		}
-	}
-
-	ts->mode_stage = 1;
-	ret = g6ts_dma_report09_output(ts, g6ts_output09_a1, "report09-A1-pre");
-	if (ret)
-		goto log;
-	if (recovery) {
-		ret = g6ts_wait_pending(ts, 1000);
-		if (ret) {
-			ts->last_ret = ret;
-			goto log;
-		}
-		ret = g6ts_dma_read_response(ts);
-		if (ret || g6ts_expect_response(ts, DEVICE_DESCRIPTOR_RESPONSE,
-						0, HIDSPI_DEVICE_DESCRIPTOR_SIZE))
-			goto log;
-	}
-
-	ts->mode_stage = 2;
-	ret = g6ts_dma_report09_output(ts, g6ts_output09_a5, "report09-A5-pre");
-	if (ret)
-		goto log;
-
-	ts->mode_stage = 3;
-	ret = g6ts_dma_feature_exchange(ts, SET_FEATURE, 0x05,
-					g6ts_mode_enable,
-					sizeof(g6ts_mode_enable), "windows-set-05");
-	if (ret || g6ts_expect_response(ts, SET_FEATURE_RESPONSE, 0x05, 0))
-		goto log;
-
-	/* The KD trace sends A1 while the following vendor packet is pending. */
-	ret = g6ts_wait_pending(ts, 1000);
-	if (ret) {
-		ts->last_ret = ret;
-		goto log;
-	}
-
-	ts->mode_stage = 4;
-	ret = g6ts_dma_report09_output(ts, g6ts_output09_a1, "report09-A1-post");
-	if (ret)
-		goto log;
-
-	/* Windows consumes one vendor DATA packet here before issuing A5. */
-	ret = g6ts_wait_pending(ts, 1000);
-	if (ret) {
-		ts->last_ret = ret;
-		goto log;
-	}
-	ret = g6ts_dma_read_response(ts);
-	if (ret)
-		goto log;
-	if (ts->last_class == RESET_RESPONSE) {
-		ts->post_mode_reset_seen = true;
-		ts->last_ret = -EAGAIN;
-		goto log;
-	}
-	if (ts->last_class != DATA) {
-		ts->last_ret = -EPROTO;
-		goto log;
-	}
-	ts->interleaved_data_count++;
-	ts->last_interleaved_id = ts->last_content_id;
-	ts->last_interleaved_len = ts->last_content_len;
-	dev_info(&ts->spi->dev,
-		 "DMA-LAB Windows sequence drained post-A1 DATA id=%#02x len=%u\n",
-		 ts->last_content_id, ts->last_content_len);
-
-	/* Windows sends A5 only after the following input interrupt is asserted. */
-	ret = g6ts_wait_pending(ts, 1000);
-	if (ret) {
-		ts->last_ret = ret;
-		goto log;
-	}
-
-	ts->mode_stage = 5;
-	ret = g6ts_dma_report09_output(ts, g6ts_output09_a5, "report09-A5-post");
-	if (ret)
-		goto log;
-
-	ts->mode_enabled = true;
-	ts->last_ret = 0;
-log:
-	dev_info(&ts->spi->dev,
-		 "DMA-LAB Windows-output-sequence stage=%u ret=%d enabled=%u fatal=%u\n",
-		 ts->mode_stage, ts->last_ret, ts->mode_enabled,
-		 ts->fatal_transport_error);
-out:
-	mutex_unlock(&ts->io_lock);
-	return count;
-}
-static DEVICE_ATTR_WO(dma_windows_output_sequence);
 
 static ssize_t dma_next_report_store(struct device *dev,
 				     struct device_attribute *attr,
@@ -1742,13 +1580,9 @@ static int g6ts_probe(struct spi_device *spi)
 	ret = device_create_file(&spi->dev, &dev_attr_dma_recover);
 	if (ret)
 		goto err_mode_sequence;
-	ret = device_create_file(&spi->dev,
-				 &dev_attr_dma_windows_output_sequence);
-	if (ret)
-		goto err_recover;
 	ret = device_create_file(&spi->dev, &dev_attr_dma_next_report);
 	if (ret)
-		goto err_windows_output_sequence;
+		goto err_recover;
 	ret = device_create_bin_file(&spi->dev, &bin_attr_captured_report);
 	if (ret)
 		goto err_next_report;
@@ -1763,9 +1597,6 @@ static int g6ts_probe(struct spi_device *spi)
 
 err_next_report:
 	device_remove_file(&spi->dev, &dev_attr_dma_next_report);
-err_windows_output_sequence:
-	device_remove_file(&spi->dev,
-			   &dev_attr_dma_windows_output_sequence);
 err_recover:
 	device_remove_file(&spi->dev, &dev_attr_dma_recover);
 err_mode_sequence:
@@ -1792,10 +1623,11 @@ static void g6ts_remove(struct spi_device *spi)
 	WRITE_ONCE(ts->stopping, true);
 	WRITE_ONCE(ts->mode_enabled, false);
 	cancel_delayed_work_sync(&ts->recovery_work);
+	mutex_lock(&ts->io_lock);
+	g6ts_release_contacts(ts);
+	mutex_unlock(&ts->io_lock);
 	device_remove_bin_file(&spi->dev, &bin_attr_captured_report);
 	device_remove_file(&spi->dev, &dev_attr_dma_next_report);
-	device_remove_file(&spi->dev,
-			   &dev_attr_dma_windows_output_sequence);
 	device_remove_file(&spi->dev, &dev_attr_dma_recover);
 	device_remove_file(&spi->dev, &dev_attr_dma_mode_sequence);
 	device_remove_file(&spi->dev, &dev_attr_report_descriptor);
@@ -1805,35 +1637,6 @@ static void g6ts_remove(struct spi_device *spi)
 	device_remove_file(&spi->dev, &dev_attr_state);
 	g6ts_power_off(ts);
 }
-
-static int g6ts_suspend(struct device *dev)
-{
-	struct g6ts *ts = spi_get_drvdata(to_spi_device(dev));
-
-	WRITE_ONCE(ts->suspended, true);
-	WRITE_ONCE(ts->mode_enabled, false);
-	cancel_delayed_work_sync(&ts->recovery_work);
-	mutex_lock(&ts->io_lock);
-	input_mt_sync_frame(ts->input);
-	input_sync(ts->input);
-	ts->last_contact_count = 0;
-	g6ts_power_off(ts);
-	mutex_unlock(&ts->io_lock);
-	return 0;
-}
-
-static int g6ts_resume(struct device *dev)
-{
-	struct g6ts *ts = spi_get_drvdata(to_spi_device(dev));
-
-	WRITE_ONCE(ts->suspended, false);
-	mutex_lock(&ts->io_lock);
-	ts->recovery_requests++;
-	mutex_unlock(&ts->io_lock);
-	schedule_delayed_work(&ts->recovery_work, 0);
-	return 0;
-}
-static DEFINE_SIMPLE_DEV_PM_OPS(g6ts_pm_ops, g6ts_suspend, g6ts_resume);
 
 static const struct acpi_device_id g6ts_acpi_match[] = {
 	{ "MSHW0485", 0 },
@@ -1858,7 +1661,6 @@ static struct spi_driver g6ts_driver = {
 		.name = G6TS_NAME,
 		.acpi_match_table = ACPI_PTR(g6ts_acpi_match),
 		.of_match_table = g6ts_of_match,
-		.pm = pm_sleep_ptr(&g6ts_pm_ops),
 	},
 	.id_table = g6ts_spi_id,
 	.probe = g6ts_probe,
@@ -1866,6 +1668,6 @@ static struct spi_driver g6ts_driver = {
 };
 module_spi_driver(g6ts_driver);
 
-MODULE_DESCRIPTION("Surface G6 Touch DMA-only laboratory driver");
+MODULE_DESCRIPTION("Surface G6 Touch DMA multi-touch driver");
 MODULE_AUTHOR("SP11 reverse-engineering project");
 MODULE_LICENSE("GPL");
