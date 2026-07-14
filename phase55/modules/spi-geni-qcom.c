@@ -662,10 +662,9 @@ static int spi_geni_sp11_qspi_submit_read_pair(struct spi_controller *spi,
 	}
 	spi_geni_sp11_qspi_sync_pair_for_cpu(spi, tx_xfer, rx_xfer);
 
-	dev_info_ratelimited(mas->dev,
-			     "SP11 QSPI pair complete tx:%u rx:%u data:%*ph\n",
-			     tx_xfer->len, rx_xfer->len,
-			     min_t(unsigned int, rx_xfer->len, 16), rx_xfer->rx_buf);
+	dev_dbg(mas->dev, "SP11 QSPI pair complete tx:%u rx:%u data:%*ph\n",
+		tx_xfer->len, rx_xfer->len,
+		min_t(unsigned int, rx_xfer->len, 16), rx_xfer->rx_buf);
 
 	spi_geni_sp11_qspi_restore_rest(mas);
 	if (msg->status == -EINPROGRESS)
@@ -1302,7 +1301,7 @@ static int setup_se_xfer(struct spi_transfer *xfer,
 			m_params |= M_CMD_LANE_QUAD << M_CMD_TX_LANES_SHFT;
 		if (xfer->rx_nbits == SPI_NBITS_QUAD)
 			m_params |= M_CMD_LANE_QUAD << M_CMD_RX_LANES_SHFT;
-		dev_info_ratelimited(mas->dev,
+		dev_dbg(mas->dev,
 			"SP11 QSPI xfer mode=%d cmd=%#x params=%#x len=%u tx=%u rx=%u tx_len=%#x rx_len=%#x\n",
 			mas->cur_xfer_mode, m_cmd, m_params, xfer->len,
 			!!xfer->tx_buf, !!xfer->rx_buf,

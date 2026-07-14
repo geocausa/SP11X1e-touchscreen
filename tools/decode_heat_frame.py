@@ -14,6 +14,11 @@ import struct
 GRID_ROWS = 46
 GRID_COLS = 68
 GRID_SAMPLES = GRID_ROWS * GRID_COLS
+HEAT_THRESHOLD = 8
+MIN_CONTACT_PIXELS = 2
+PALM_MAX_PIXELS = 48
+PALM_MAX_SPAN = 12
+MAX_CONTACTS = 10
 
 
 @dataclass
@@ -103,6 +108,10 @@ def extract_heatmap(section: Section) -> bytes:
             raise ValueError(
                 f"heat block overruns grid: offset={destination}, count={count}"
             )
+        if any(written[destination : destination + count]):
+            raise ValueError(
+                f"heat block overlaps prior data: offset={destination}, count={count}"
+            )
         output[destination : destination + count] = section.data[position : position + count]
         written[destination : destination + count] = b"\x01" * count
         position += count
@@ -111,6 +120,13 @@ def extract_heatmap(section: Section) -> bytes:
         missing = written.count(0)
         raise ValueError(f"heat section leaves {missing} grid samples unwritten")
     return bytes(output)
+
+
+def modal_baseline(grid: bytes) -> tuple[int, int]:
+    """Match the kernel's lowest-value tie break for the modal baseline."""
+    histogram = Counter(grid)
+    baseline = min(histogram, key=lambda value: (-histogram[value], value))
+    return baseline, histogram[baseline]
 
 
 def connected_components(grid: bytes, baseline: int, threshold: int) -> list[dict[str, float]]:
@@ -164,6 +180,29 @@ def connected_components(grid: bytes, baseline: int, threshold: int) -> list[dic
     return components
 
 
+def accepted_contacts(
+    grid: bytes, baseline: int, threshold: int = HEAT_THRESHOLD
+) -> tuple[list[dict[str, float]], int]:
+    """Apply the same minimum-size, palm, and ten-contact bounds as the driver."""
+    accepted: list[dict[str, float]] = []
+    palm_rejections = 0
+    for component in connected_components(grid, baseline, threshold):
+        pixels = int(component["pixels"])
+        row_span = int(component["row_max"] - component["row_min"] + 1)
+        col_span = int(component["col_max"] - component["col_min"] + 1)
+        if pixels < MIN_CONTACT_PIXELS:
+            continue
+        if (
+            pixels > PALM_MAX_PIXELS
+            or row_span > PALM_MAX_SPAN
+            or col_span > PALM_MAX_SPAN
+        ):
+            palm_rejections += 1
+            continue
+        accepted.append(component)
+    return accepted[:MAX_CONTACTS], palm_rejections
+
+
 def decode(path: Path, thresholds: list[int]) -> None:
     report = extract_report(path.read_bytes())
     scan_time, container_length, sections, trailer = parse_sections(report)
@@ -182,7 +221,7 @@ def decode(path: Path, thresholds: list[int]) -> None:
     if heat_section is None:
         raise ValueError("report has no 0x0100 heat section")
     grid = extract_heatmap(heat_section)
-    baseline, baseline_count = Counter(grid).most_common(1)[0]
+    baseline, baseline_count = modal_baseline(grid)
     print(
         f"grid={GRID_COLS}x{GRID_ROWS} baseline={baseline:#04x} "
         f"baseline_samples={baseline_count}/{GRID_SAMPLES} min={min(grid):#04x} max={max(grid):#04x}"
@@ -191,8 +230,12 @@ def decode(path: Path, thresholds: list[int]) -> None:
     for threshold in thresholds:
         components = connected_components(grid, baseline, threshold)
         useful = [component for component in components if component["pixels"] >= 2]
-        print(f"threshold={threshold} components={len(components)} useful={len(useful)}")
-        for index, component in enumerate(useful[:10]):
+        accepted, palm_rejections = accepted_contacts(grid, baseline, threshold)
+        print(
+            f"threshold={threshold} components={len(components)} useful={len(useful)} "
+            f"accepted={len(accepted)} palm_rejections={palm_rejections}"
+        )
+        for index, component in enumerate(accepted):
             print(
                 "  "
                 f"#{index} pixels={int(component['pixels'])} strength={int(component['strength'])} "

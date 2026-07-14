@@ -1,0 +1,21 @@
+name: checks
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  offline-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Compile Python tools
+        run: python -m compileall -q tools tests
+      - name: Run offline Heat tests
+        run: python -m unittest discover -s tests -v

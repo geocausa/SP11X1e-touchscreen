@@ -26,7 +26,7 @@
 #include <linux/unaligned.h>
 #include <linux/workqueue.h>
 
-#define G6TS_NAME			"g6ts-dma-lab"
+#define G6TS_NAME			"g6ts-dma"
 #define G6TS_SPI_HZ			40000000U
 #define G6TS_MAX_BODY			8192U
 #define G6TS_DIAG_BODY			128U
@@ -51,6 +51,11 @@
 #define G6TS_JITTER_DEADZONE		32U
 #define G6TS_SMOOTHING_LIMIT		256U
 #define G6TS_CONTACT_HOLD_FRAMES	1U
+
+static bool enable_lab_controls;
+module_param_named(lab_controls, enable_lab_controls, bool, 0400);
+MODULE_PARM_DESC(lab_controls,
+		 "Expose unsafe manual DMA experiment controls (default: false)");
 
 static const u8 g6ts_header_cmd[8] = {
 	0xeb, 0x00, 0x10, 0x00, 0xff, 0xff, 0xff, 0xff,
@@ -271,9 +276,9 @@ static int g6ts_dma_hidspi_output(struct g6ts *ts, u8 report_type,
 		memcpy(&packet[8], content, content_len);
 	packet_len = round_up(8 + content_len, 4);
 
-	dev_info(&ts->spi->dev,
-		 "DMA-LAB HIDSPI output type=%u id=%#02x content_len=%zu wire=%*ph\n",
-		 report_type, content_id, content_len, (int)packet_len, packet);
+	dev_dbg(&ts->spi->dev,
+		"G6TS DMA output type=%u id=%#02x content_len=%zu wire=%*ph\n",
+		report_type, content_id, content_len, (int)packet_len, packet);
 	return g6ts_dma_output(ts, packet, packet_len);
 }
 
@@ -646,11 +651,16 @@ static void g6ts_handle_data_report(struct g6ts *ts)
 
 	if (ts->last_content_id == G6TS_HEATMAP_REPORT_ID &&
 	    ts->last_content_len + 1 <= G6TS_MAX_BODY) {
+		int ret;
+
 		ts->heatmap_report_count++;
-		if (g6ts_report_heat_contacts(ts, payload,
-					      ts->last_content_len))
+		ret = g6ts_report_heat_contacts(ts, payload, ts->last_content_len);
+		if (ret) {
 			ts->heatmap_decode_errors++;
-		if (!ts->captured_report_len) {
+			g6ts_release_contacts(ts);
+			dev_warn_ratelimited(&ts->spi->dev, "malformed Heat frame: %d\n", ret);
+		}
+		if (enable_lab_controls && !ts->captured_report_len) {
 			ts->captured_report[0] = ts->last_content_id;
 			memcpy(&ts->captured_report[1], payload,
 			       ts->last_content_len);
@@ -812,11 +822,11 @@ static int g6ts_dma_feature_exchange(struct g6ts *ts, u8 report_type,
 		}
 
 		ret = g6ts_dma_read_response(ts);
-		dev_info(&ts->spi->dev,
-			 "DMA-LAB mode stage=%s response=%u ret=%d class=%u id=%#02x content_len=%u body=%*ph\n",
-			 stage, response_index, ret, ts->last_class,
-			 ts->last_content_id, ts->last_content_len,
-			 (int)ts->last_body_len, ts->last_body);
+		dev_dbg(&ts->spi->dev,
+			"G6TS DMA mode stage=%s response=%u ret=%d class=%u id=%#02x content_len=%u body=%*ph\n",
+			stage, response_index, ret, ts->last_class,
+			ts->last_content_id, ts->last_content_len,
+			(int)ts->last_body_len, ts->last_body);
 		if (ret)
 			return ret;
 
@@ -833,17 +843,17 @@ static int g6ts_dma_feature_exchange(struct g6ts *ts, u8 report_type,
 			ts->interleaved_data_count++;
 			ts->last_interleaved_id = ts->last_content_id;
 			ts->last_interleaved_len = ts->last_content_len;
-			dev_info(&ts->spi->dev,
-				 "DMA-LAB mode stage=%s skipping interleaved DATA id=%#02x len=%u count=%llu\n",
-				 stage, ts->last_content_id, ts->last_content_len,
-				 ts->interleaved_data_count);
+			dev_dbg(&ts->spi->dev,
+				"G6TS DMA mode stage=%s skipping interleaved DATA id=%#02x len=%u count=%llu\n",
+				stage, ts->last_content_id, ts->last_content_len,
+				ts->interleaved_data_count);
 			continue;
 		}
 		if (ts->last_class == OUTPUT_REPORT_RESPONSE &&
 		    ts->last_content_id == 0x09) {
-			dev_info(&ts->spi->dev,
-				 "DMA-LAB mode stage=%s skipping report-09 output acknowledgement\n",
-				 stage);
+			dev_dbg(&ts->spi->dev,
+				"G6TS DMA mode stage=%s skipping report-09 output acknowledgment\n",
+				stage);
 			continue;
 		}
 
@@ -862,7 +872,7 @@ static ssize_t state_show(struct device *dev,
 	int pending = g6ts_pending(ts);
 
 	return sysfs_emit(buf,
-		"mode=dma-only-lab initial_bus_io=automatic automatic_reset_recovery=1 current_pending=%d probe_pending=%d fatal_transport_error=%u interrupt_irq=%d interrupt_edges=%lld handled_edges=%lld\n"
+		"mode=dma-multitouch initial_bus_io=automatic automatic_reset_recovery=1 lab_controls=%u current_pending=%d probe_pending=%d fatal_transport_error=%u interrupt_irq=%d interrupt_edges=%lld handled_edges=%lld\n"
 		"manual_read_runs=%llu descriptor_runs=%llu report_descriptor_runs=%llu mode_sequence_runs=%llu next_report_runs=%llu dma_pairs=%llu dma_outputs=%llu responses=%llu reset_seen=%u descriptor_seen=%u report_descriptor_seen=%u\n"
 		"expected_report_descriptor_len=%u report_descriptor_len=%zu\n"
 		"mode_stage=%u mode_value=%#02x mode_enabled=%u post_mode_reset_seen=%u captured_report_len=%zu interleaved_data=%llu touch_reports=%llu heatmap_reports=%llu last_interleaved_id=%#02x last_interleaved_len=%u\n"
@@ -870,7 +880,8 @@ static ssize_t state_show(struct device *dev,
 		"recovery_requests=%llu recovery_successes=%llu recovery_failures=%llu recovery_fail_streak=%u\n"
 		"last_ret=%d header_ret=%d body_ret=%d output_ret=%d pending_before=%d pending_after=%d\n"
 		"last_header=%*ph body_total_len=%zu class=%u content_len=%u content_id=%u last_body=%*ph\n",
-		pending, ts->probe_pending, ts->fatal_transport_error,
+		enable_lab_controls, pending, ts->probe_pending,
+		ts->fatal_transport_error,
 		ts->interrupt_irq, atomic64_read(&ts->interrupt_edges),
 		ts->handled_interrupt_edges,
 		ts->manual_read_runs, ts->descriptor_runs,
@@ -920,12 +931,12 @@ static ssize_t dma_read_store(struct device *dev,
 	}
 	ts->manual_read_runs++;
 	ret = g6ts_dma_read_response(ts);
-	dev_info(&ts->spi->dev,
-		 "DMA-LAB reset-read ret=%d pending=%d/%d header=%*ph class=%u len=%zu body=%*ph\n",
-		 ret, ts->pending_before, ts->pending_after,
-		 (int)sizeof(ts->last_header), ts->last_header,
-		 ts->last_class, ts->last_body_total_len,
-		 (int)ts->last_body_len, ts->last_body);
+	dev_dbg(&ts->spi->dev,
+		"G6TS DMA reset-read ret=%d pending=%d/%d header=%*ph class=%u len=%zu body=%*ph\n",
+		ret, ts->pending_before, ts->pending_after,
+		(int)sizeof(ts->last_header), ts->last_header,
+		ts->last_class, ts->last_body_total_len,
+		(int)ts->last_body_len, ts->last_body);
 out:
 	mutex_unlock(&ts->io_lock);
 	return count;
@@ -975,11 +986,11 @@ static ssize_t dma_device_descriptor_store(struct device *dev,
 	}
 	ret = g6ts_dma_read_response(ts);
 log:
-	dev_info(&ts->spi->dev,
-		 "DMA-LAB device-descriptor ret=%d output=%d header=%*ph class=%u content_len=%u body=%*ph\n",
-		 ret, ts->last_output_ret, (int)sizeof(ts->last_header),
-		 ts->last_header, ts->last_class, ts->last_content_len,
-		 (int)ts->last_body_len, ts->last_body);
+	dev_dbg(&ts->spi->dev,
+		"G6TS DMA device-descriptor ret=%d output=%d header=%*ph class=%u content_len=%u body=%*ph\n",
+		ret, ts->last_output_ret, (int)sizeof(ts->last_header),
+		ts->last_header, ts->last_class, ts->last_content_len,
+		(int)ts->last_body_len, ts->last_body);
 out:
 	mutex_unlock(&ts->io_lock);
 	return count;
@@ -1032,11 +1043,11 @@ static ssize_t dma_report_descriptor_store(struct device *dev,
 		ts->last_ret = ret;
 	}
 log:
-	dev_info(&ts->spi->dev,
-		 "DMA-LAB report-descriptor ret=%d output=%d class=%u content_len=%u expected=%u stored=%zu\n",
-		 ret, ts->last_output_ret, ts->last_class,
-		 ts->last_content_len, ts->expected_report_descriptor_len,
-		 ts->report_descriptor_len);
+	dev_dbg(&ts->spi->dev,
+		"G6TS DMA report-descriptor ret=%d output=%d class=%u content_len=%u expected=%u stored=%zu\n",
+		ret, ts->last_output_ret, ts->last_class,
+		ts->last_content_len, ts->expected_report_descriptor_len,
+		ts->report_descriptor_len);
 out:
 	mutex_unlock(&ts->io_lock);
 	return count;
@@ -1251,7 +1262,7 @@ static void g6ts_recovery_work(struct work_struct *work)
 			ts->recovery_fail_streak < G6TS_RECOVERY_LIMIT;
 	}
 	dev_info(&ts->spi->dev,
-		 "DMA-LAB full recovery ret=%d success=%llu failures=%llu retry=%u\n",
+		 "G6TS DMA recovery ret=%d success=%llu failures=%llu retry=%u\n",
 		 ret, ts->recovery_successes, ts->recovery_failures, retry);
 	mutex_unlock(&ts->io_lock);
 
@@ -1346,10 +1357,10 @@ static ssize_t dma_mode_sequence_store(struct device *dev,
 	ts->mode_enabled = true;
 	ts->last_ret = 0;
 log:
-	dev_info(&ts->spi->dev,
-		 "DMA-LAB mode-sequence stage=%u ret=%d prior_mode=%#02x enabled=%u fatal=%u\n",
-		 ts->mode_stage, ts->last_ret, ts->mode_value,
-		 ts->mode_enabled, ts->fatal_transport_error);
+	dev_dbg(&ts->spi->dev,
+		"G6TS DMA mode-sequence stage=%u ret=%d prior_mode=%#02x enabled=%u fatal=%u\n",
+		ts->mode_stage, ts->last_ret, ts->mode_value,
+		ts->mode_enabled, ts->fatal_transport_error);
 out:
 	mutex_unlock(&ts->io_lock);
 	return count;
@@ -1408,23 +1419,23 @@ static ssize_t dma_next_report_store(struct device *dev,
 			ts->interleaved_data_count++;
 			ts->last_interleaved_id = ts->last_content_id;
 			ts->last_interleaved_len = ts->last_content_len;
-			dev_info(&ts->spi->dev,
-				 "DMA-LAB capture skipping DATA id=%#02x len=%u count=%llu\n",
-				 ts->last_content_id, ts->last_content_len,
-				 ts->interleaved_data_count);
+			dev_dbg(&ts->spi->dev,
+				"G6TS DMA capture skipping DATA id=%#02x len=%u count=%llu\n",
+				ts->last_content_id, ts->last_content_len,
+				ts->interleaved_data_count);
 			continue;
 		}
 		if (ts->last_class == OUTPUT_REPORT_RESPONSE &&
 		    ts->last_content_id == 0x09) {
-			dev_info(&ts->spi->dev,
-				 "DMA-LAB capture skipping report-09 output acknowledgement\n");
+			dev_dbg(&ts->spi->dev,
+				"G6TS DMA capture skipping report-09 output acknowledgment\n");
 			continue;
 		}
 		if (ts->last_class == RESET_RESPONSE) {
 			ts->post_mode_reset_seen = true;
 			ts->mode_enabled = false;
-			dev_info(&ts->spi->dev,
-				 "DMA-LAB capture saw post-mode reset; mode sequence must be retried\n");
+			dev_dbg(&ts->spi->dev,
+				"G6TS DMA capture saw post-mode reset; mode sequence must be retried\n");
 			ret = -EAGAIN;
 			ts->last_ret = ret;
 			break;
@@ -1439,10 +1450,10 @@ static ssize_t dma_next_report_store(struct device *dev,
 		ts->last_ret = ret;
 	}
 
-	dev_info(&ts->spi->dev,
-		 "DMA-LAB next-report ret=%d class=%u id=%#02x content_len=%u captured=%zu\n",
-		 ret, ts->last_class, ts->last_content_id,
-		 ts->last_content_len, ts->captured_report_len);
+	dev_dbg(&ts->spi->dev,
+		"G6TS DMA next-report ret=%d class=%u id=%#02x content_len=%u captured=%zu\n",
+		ret, ts->last_class, ts->last_content_id,
+		ts->last_content_len, ts->captured_report_len);
 out:
 	mutex_unlock(&ts->io_lock);
 	return count;
@@ -1479,10 +1490,12 @@ static int g6ts_probe(struct spi_device *spi)
 					      GFP_KERNEL);
 	if (!ts->report_descriptor)
 		return -ENOMEM;
-	ts->captured_report = devm_kmalloc(&spi->dev, G6TS_MAX_BODY,
-					   GFP_KERNEL);
-	if (!ts->captured_report)
-		return -ENOMEM;
+	if (enable_lab_controls) {
+		ts->captured_report = devm_kmalloc(&spi->dev, G6TS_MAX_BODY,
+						   GFP_KERNEL);
+		if (!ts->captured_report)
+			return -ENOMEM;
+	}
 
 	ts->spi = spi;
 	ts->interrupt_irq = -1;
@@ -1562,6 +1575,8 @@ static int g6ts_probe(struct spi_device *spi)
 	ret = device_create_file(&spi->dev, &dev_attr_state);
 	if (ret)
 		goto err_power;
+	if (!enable_lab_controls)
+		goto start;
 	ret = device_create_file(&spi->dev, &dev_attr_dma_read);
 	if (ret)
 		goto err_state;
@@ -1587,6 +1602,7 @@ static int g6ts_probe(struct spi_device *spi)
 	if (ret)
 		goto err_next_report;
 
+start:
 	ts->recovery_requests++;
 	schedule_delayed_work(&ts->recovery_work,
 		msecs_to_jiffies(G6TS_RECOVERY_DELAY_MS));
@@ -1626,14 +1642,16 @@ static void g6ts_remove(struct spi_device *spi)
 	mutex_lock(&ts->io_lock);
 	g6ts_release_contacts(ts);
 	mutex_unlock(&ts->io_lock);
-	device_remove_bin_file(&spi->dev, &bin_attr_captured_report);
-	device_remove_file(&spi->dev, &dev_attr_dma_next_report);
-	device_remove_file(&spi->dev, &dev_attr_dma_recover);
-	device_remove_file(&spi->dev, &dev_attr_dma_mode_sequence);
-	device_remove_file(&spi->dev, &dev_attr_report_descriptor);
-	device_remove_file(&spi->dev, &dev_attr_dma_report_descriptor);
-	device_remove_file(&spi->dev, &dev_attr_dma_device_descriptor);
-	device_remove_file(&spi->dev, &dev_attr_dma_read);
+	if (enable_lab_controls) {
+		device_remove_bin_file(&spi->dev, &bin_attr_captured_report);
+		device_remove_file(&spi->dev, &dev_attr_dma_next_report);
+		device_remove_file(&spi->dev, &dev_attr_dma_recover);
+		device_remove_file(&spi->dev, &dev_attr_dma_mode_sequence);
+		device_remove_file(&spi->dev, &dev_attr_report_descriptor);
+		device_remove_file(&spi->dev, &dev_attr_dma_report_descriptor);
+		device_remove_file(&spi->dev, &dev_attr_dma_device_descriptor);
+		device_remove_file(&spi->dev, &dev_attr_dma_read);
+	}
 	device_remove_file(&spi->dev, &dev_attr_state);
 	g6ts_power_off(ts);
 }

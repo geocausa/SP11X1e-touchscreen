@@ -22,6 +22,16 @@ ready_gpio_timeouts=0
 gpio_errors=0
 ```
 
+For Phase 55 DMA multi-touch, the production-default state begins with:
+
+```text
+mode=dma-multitouch ... lab_controls=0 ... fatal_transport_error=0
+```
+
+Manual DMA experiment files are intentionally absent when `lab_controls=0`.
+Successful QSPI frame transfers should not appear at informational log level;
+startup, recovery summaries, warnings, and errors remain visible.
+
 ## Coordinate check
 
 Tap the corners in this order:

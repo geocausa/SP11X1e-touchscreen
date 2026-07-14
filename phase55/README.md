@@ -21,6 +21,12 @@ known-good Phase 52 FIFO/single-touch path.
 - High-volume GPI tracing disabled by default.
 - Known duplicate QSPI completion notices handled quietly rather than flooding
   the kernel log.
+- Successful QSPI transactions use disabled-by-default dynamic debug rather
+  than rate-limited informational logging.
+- Manual DMA laboratory controls are hidden by default. They require the
+  explicit boot/module option `g6ts_biosref.lab_controls=1`.
+- A malformed Heat frame releases Linux contacts instead of leaving a stale
+  touch active.
 
 ## Hardware validation
 
@@ -62,6 +68,10 @@ make -j"$(nproc)" KDIR=/path/to/linux-7.1.1
 modinfo gpi.ko spi-geni-qcom.ko g6ts_biosref.ko | grep vermagic
 ```
 
+The wrapper refuses a kernel release other than the exact validated
+`7.1.1-sp11-gpicmp1+`. `ALLOW_UNTESTED_KERNEL=1` exists only for deliberate
+source-rebase work; it does not make a mismatched module safe to load.
+
 The tested source is based on internal DMA-engine and GENI structures. A later
 kernel such as 7.2 requires a source-level rebase and hardware validation; a
 matching version string alone is not sufficient.
@@ -81,5 +91,7 @@ UEFI/PRE-OS FIFO transport. Keep a separate known-good kernel/GRUB entry.
   0..32767 mapping until repeatable corner-tap measurements are available.
 - Suspend/resume callbacks are deliberately absent while platform suspend is
   disabled because of prior whole-device crashes.
-- The unsafe captured Windows output-replay hook has been removed. Some safe
-  laboratory diagnostics remain, so the source is not yet upstream-ready.
+- The unsafe captured Windows output-replay hook has been removed. Manual
+  laboratory diagnostics remain compiled for reproducibility but are
+  inaccessible unless explicitly enabled at module load. The architecture is
+  still not upstream-ready.

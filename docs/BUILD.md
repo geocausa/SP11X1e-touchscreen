@@ -39,11 +39,24 @@ This produces `gpi.ko`, `spi-geni-qcom.ko`, and `g6ts_biosref.ko` under
 `phase55/modules/`. These three modules must be built from the same source tree
 and used together. The top-level Makefile contains no host-specific paths.
 
+The Phase 55 wrapper checks `include/config/kernel.release` and accepts only
+the hardware-validated `7.1.1-sp11-gpicmp1+` target by default. A newer kernel
+requires reviewing the GPI and GENI internals and then using
+`ALLOW_UNTESTED_KERNEL=1` for the initial porting build. That override is not a
+compatibility claim and the result must not replace a known-good boot entry.
+
 Confirm compatibility before loading:
 
 ```bash
 modinfo -F vermagic spi-geni-qcom.ko
 modinfo -F vermagic g6ts_biosref.ko
+```
+
+Run the hardware-independent checks with:
+
+```bash
+make test
+python3 -m compileall -q tools tests
 ```
 
 ## Device tree

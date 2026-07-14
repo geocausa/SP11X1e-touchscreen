@@ -27,11 +27,18 @@ also been validated with the desktop's three-finger window gesture. See
 [phase55/README.md](phase55/README.md) and
 [docs/PHASE55_DMA_MULTITOUCH.md](docs/PHASE55_DMA_MULTITOUCH.md).
 
-It is not yet a production or upstream-ready driver. It now includes adaptive
-per-frame baseline measurement, conservative broad-contact palm filtering,
-jitter smoothing, and one-frame dropout protection. Pressure, merged-contact
-separation, measured edge calibration, and broader kernel compatibility remain
-open. Pen support is deliberately out of scope.
+The subsequent offline hardening pass makes successful DMA transfers quiet,
+hides manual laboratory controls unless explicitly enabled at module load,
+rejects malformed overlapping Heat blocks in the analysis tools, adds
+synthetic parser/contact tests, and regression-checks the complete 1,381-frame
+Windows corpus. See
+[docs/PHASE56_OFFLINE_HARDENING.md](docs/PHASE56_OFFLINE_HARDENING.md).
+
+It is not yet a production- or upstream-ready driver. It now includes
+adaptive per-frame baseline measurement, conservative broad-contact palm
+filtering, jitter smoothing, and one-frame dropout protection. Pressure,
+merged-contact separation, measured edge calibration, and broader kernel
+compatibility remain open. Pen support is deliberately out of scope.
 
 ## Repository layout
 
@@ -51,6 +58,8 @@ docs/PHASE55_DMA_MULTITOUCH.md
 phase55/
 tools/analyze_spb_etw_csv.py
 tools/decode_heat_frame.py
+tools/regress_heat_frames.py
+tests/test_heat_decoder.py
 ```
 
 `spi-geni-qcom.c` is based on the exact Ubuntu Concept controller source and
