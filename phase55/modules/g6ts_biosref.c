@@ -43,14 +43,15 @@
 #define G6TS_HEAT_SAMPLES		(G6TS_HEAT_ROWS * G6TS_HEAT_COLS)
 #define G6TS_HEAT_SECTION		0x0100
 #define G6TS_HEAT_THRESHOLD		8U
-#define G6TS_HEAT_MIN_PIXELS		2U
+#define G6TS_HEAT_MIN_PIXELS		5U
+#define G6TS_HEAT_MIN_STRENGTH		120U
 #define G6TS_HEAT_PALM_PIXELS		48U
 #define G6TS_HEAT_PALM_SPAN		12U
 #define G6TS_MAX_CONTACTS		10U
 #define G6TS_LOGICAL_MAX		32767U
 #define G6TS_JITTER_DEADZONE		32U
 #define G6TS_SMOOTHING_LIMIT		256U
-#define G6TS_CONTACT_HOLD_FRAMES	1U
+#define G6TS_CONTACT_HOLD_FRAMES	6U
 
 static bool enable_lab_controls;
 module_param_named(lab_controls, enable_lab_controls, bool, 0400);
@@ -161,6 +162,7 @@ struct g6ts {
 	u8 last_contact_count;
 	u8 max_contact_pixels;
 	u8 recovery_fail_streak;
+	bool heat_debug;
 	bool reset_seen;
 	bool descriptor_seen;
 	bool report_descriptor_seen;
@@ -514,7 +516,8 @@ static unsigned int g6ts_find_contacts(struct g6ts *ts)
 					       ts->max_contact_pixels,
 					       min_t(unsigned int, contact.pixels,
 						     U8_MAX));
-		if (contact.pixels < G6TS_HEAT_MIN_PIXELS || !contact.strength)
+		if (contact.pixels < G6TS_HEAT_MIN_PIXELS ||
+		    contact.strength < G6TS_HEAT_MIN_STRENGTH)
 			continue;
 		if (contact.pixels > G6TS_HEAT_PALM_PIXELS ||
 		    contact.max_col - contact.min_col + 1 > G6TS_HEAT_PALM_SPAN ||
@@ -526,6 +529,13 @@ static unsigned int g6ts_find_contacts(struct g6ts *ts)
 				    (u64)contact.strength * (G6TS_HEAT_COLS - 1));
 		contact.y = div_u64(contact.weighted_y * G6TS_LOGICAL_MAX,
 				    (u64)contact.strength * (G6TS_HEAT_ROWS - 1));
+		if (ts->heat_debug)
+			dev_info(&ts->spi->dev,
+				 "blob: col=%u..%u row=%u..%u px=%u str=%u -> x=%u y=%u\n",
+				 contact.min_col, contact.max_col,
+				 contact.min_row, contact.max_row,
+				 contact.pixels, contact.strength,
+				 contact.x, contact.y);
 		g6ts_store_contact(ts, &contact, &contact_count);
 	}
 
@@ -908,6 +918,21 @@ static ssize_t state_show(struct device *dev,
 		ts->last_content_id, (int)ts->last_body_len, ts->last_body);
 }
 static DEVICE_ATTR_RO(state);
+
+static ssize_t heat_debug_store(struct device *dev,
+				struct device_attribute *attr,
+				const char *buf, size_t count)
+{
+	struct g6ts *ts = spi_get_drvdata(to_spi_device(dev));
+	bool v;
+	int ret = kstrtobool(buf, &v);
+
+	if (ret)
+		return ret;
+	ts->heat_debug = v;
+	return count;
+}
+static DEVICE_ATTR_WO(heat_debug);
 
 /* First clean-boot experiment: consume only the spontaneous reset response. */
 static ssize_t dma_read_store(struct device *dev,
@@ -1575,6 +1600,7 @@ static int g6ts_probe(struct spi_device *spi)
 	ret = device_create_file(&spi->dev, &dev_attr_state);
 	if (ret)
 		goto err_power;
+	(void)device_create_file(&spi->dev, &dev_attr_heat_debug);
 	if (!enable_lab_controls)
 		goto start;
 	ret = device_create_file(&spi->dev, &dev_attr_dma_read);
@@ -1652,6 +1678,7 @@ static void g6ts_remove(struct spi_device *spi)
 		device_remove_file(&spi->dev, &dev_attr_dma_device_descriptor);
 		device_remove_file(&spi->dev, &dev_attr_dma_read);
 	}
+	device_remove_file(&spi->dev, &dev_attr_heat_debug);
 	device_remove_file(&spi->dev, &dev_attr_state);
 	g6ts_power_off(ts);
 }
