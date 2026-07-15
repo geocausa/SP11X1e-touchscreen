@@ -15,8 +15,9 @@ known-good Phase 52 FIFO/single-touch path.
 - Up to ten Linux type-B multi-touch slots.
 - Two-finger pinch and zoom on real hardware.
 - Three-finger desktop window gestures on real hardware.
-- Adaptive per-frame background measurement, conservative palm filtering,
-  coordinate smoothing, and one-frame dropout protection.
+- Windows-derived fixed-threshold candidate extraction, conservative palm
+  filtering, predicted global tracking, coordinate smoothing, and bounded
+  dropout protection.
 - Bounded recovery after the panel emits a class-3 reset.
 - High-volume GPI tracing disabled by default.
 - Known duplicate QSPI completion notices handled quietly rather than flooding
@@ -83,12 +84,14 @@ UEFI/PRE-OS FIFO transport. Keep a separate known-good kernel/GRUB entry.
 
 ## Known limitations
 
-- Contact extraction is a simple connected-component tracker, not Microsoft's
-  complete `TouchPenProcessor0C83.dll` algorithm.
+- Candidate extraction and the core predicted assignment structure are ported
+  from `TouchPenProcessor0C83.dll`, but its full runtime tuning and classifier
+  tables are not yet recovered.
 - Pen support is deliberately out of scope; the driver is finger-only.
 - Pressure, contact shape, and merged-finger separation are not implemented.
-- The baseline is adaptive, but edge calibration remains at the validated
-  0..32767 mapping until repeatable corner-tap measurements are available.
+- Heat-byte calibration remains identity and edge calibration remains at the
+  validated 0..32767 mapping until repeatable labelled measurements are
+  available.
 - Suspend/resume callbacks are deliberately absent while platform suspend is
   disabled because of prior whole-device crashes.
 - The unsafe captured Windows output-replay hook has been removed. Manual

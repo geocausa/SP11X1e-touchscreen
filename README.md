@@ -3,7 +3,7 @@
 Experimental Linux support for the `MSHW0485` G6 touchscreen in the OLED
 Microsoft Surface Pro 11. The repository preserves two isolated paths: the
 working UEFI-derived FIFO/single-touch baseline and the hardware-validated
-Phase 55 QSPI/GPI-DMA multi-touch experiment.
+QSPI/GPI-DMA multi-touch experiment.
 
 ## Stable baseline: Phase 52
 
@@ -34,11 +34,19 @@ synthetic parser/contact tests, and regression-checks the complete 1,381-frame
 Windows corpus. See
 [docs/PHASE56_OFFLINE_HARDENING.md](docs/PHASE56_OFFLINE_HARDENING.md).
 
-It is not yet a production- or upstream-ready driver. It now includes
-adaptive per-frame baseline measurement, conservative broad-contact palm
-filtering, jitter smoothing, and one-frame dropout protection. Pressure,
-merged-contact separation, measured edge calibration, and broader kernel
-compatibility remain open. Pen support is deliberately out of scope.
+Phase 57 replaces the earlier guessed adaptive detector with the recovered
+Windows fixed-threshold, four-connected candidate extractor. Phase 58 adds
+predicted-position global assignment, finite match gating, explicit track
+lifecycle state, and the recovered exponential smoothing form. See
+[docs/WINDOWS_TOUCH_DETECTOR_RE.md](docs/WINDOWS_TOUCH_DETECTOR_RE.md),
+[docs/WINDOWS_TOUCH_TRACKER_RE.md](docs/WINDOWS_TOUCH_TRACKER_RE.md), and
+[docs/PHASE58_TRACKING_PIPELINE.md](docs/PHASE58_TRACKING_PIPELINE.md).
+
+It is not yet production- or upstream-ready. Conservative broad-contact palm
+filtering remains, but a Windows-equivalent NSR classifier needs its runtime
+tuning table and labelled palm captures. Measured edge calibration, pressure,
+merged-contact separation, suspend/resume, and broader kernel compatibility
+remain open. Pen support is deliberately out of scope.
 
 ## Repository layout
 
@@ -55,11 +63,17 @@ docs/MULTITOUCH.md
 docs/WINDOWS_HEAT_PROTOCOL.md
 docs/PHASE54_GPI_DMA.md
 docs/PHASE55_DMA_MULTITOUCH.md
+docs/WINDOWS_TOUCH_DETECTOR_RE.md
+docs/WINDOWS_TOUCH_TRACKER_RE.md
+docs/PHASE58_TRACKING_PIPELINE.md
 phase55/
 tools/analyze_spb_etw_csv.py
 tools/decode_heat_frame.py
 tools/regress_heat_frames.py
+tools/track_heat_contacts.py
 tests/test_heat_decoder.py
+tests/test_contact_tracker.py
+packaging/initramfs-tools/hooks/sp11-g6ts
 ```
 
 `spi-geni-qcom.c` is based on the exact Ubuntu Concept controller source and

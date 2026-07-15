@@ -152,6 +152,10 @@ class HeatDecoderTests(unittest.TestCase):
             "G6TS_HEAT_PALM_PIXELS": 48,
             "G6TS_HEAT_PALM_SPAN": 12,
             "G6TS_MAX_CONTACTS": 10,
+            "G6TS_TRACK_MATCH_MAX": 4096,
+            "G6TS_CONTACT_HOLD_FRAMES": 6,
+            "G6TS_SMOOTH_STATIONARY_MAX": 64,
+            "G6TS_SMOOTH_SLOW_MAX": 256,
         }
         for name, value in expected.items():
             match = re.search(rf"^#define {name}\s+(\d+)U$", source, re.MULTILINE)

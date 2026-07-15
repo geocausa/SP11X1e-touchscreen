@@ -19,6 +19,7 @@
 #include <linux/interrupt.h>
 #include <linux/jiffies.h>
 #include <linux/kernel.h>
+#include <linux/math.h>
 #include <linux/module.h>
 #include <linux/mutex.h>
 #include <linux/slab.h>
@@ -59,9 +60,13 @@
 #define G6TS_HEAT_PALM_SPAN		12U
 #define G6TS_MAX_CONTACTS		10U
 #define G6TS_LOGICAL_MAX		32767U
-#define G6TS_JITTER_DEADZONE		32U
-#define G6TS_SMOOTHING_LIMIT		256U
+#define G6TS_TRACK_MATCH_MAX		4096U
 #define G6TS_CONTACT_HOLD_FRAMES	6U
+#define G6TS_SMOOTH_STATIONARY_MAX	64U
+#define G6TS_SMOOTH_SLOW_MAX		256U
+#define G6TS_ASSIGN_MAX			(G6TS_MAX_CONTACTS * 2U)
+#define G6TS_ASSIGN_UNMATCHED_COST	1000000
+#define G6TS_ASSIGN_INVALID_COST	3000000
 
 static bool enable_lab_controls;
 module_param_named(lab_controls, enable_lab_controls, bool, 0400);
@@ -104,6 +109,29 @@ struct g6ts_contact {
 	u8 max_row;
 };
 
+struct g6ts_track {
+	u16 raw_x;
+	u16 raw_y;
+	u16 output_x;
+	u16 output_y;
+	s16 velocity_x;
+	s16 velocity_y;
+	u16 age;
+	u8 missed;
+	bool active;
+};
+
+struct g6ts_assignment_workspace {
+	int cost[G6TS_ASSIGN_MAX][G6TS_ASSIGN_MAX];
+	int u[G6TS_ASSIGN_MAX + 1];
+	int v[G6TS_ASSIGN_MAX + 1];
+	int p[G6TS_ASSIGN_MAX + 1];
+	int way[G6TS_ASSIGN_MAX + 1];
+	int minv[G6TS_ASSIGN_MAX + 1];
+	bool used[G6TS_ASSIGN_MAX + 1];
+	int active_slots[G6TS_MAX_CONTACTS];
+};
+
 struct g6ts {
 	struct spi_device *spi;
 	struct input_dev *input;
@@ -119,12 +147,8 @@ struct g6ts {
 	u16 heat_queue[G6TS_HEAT_SAMPLES];
 	u16 heat_histogram[256];
 	struct g6ts_contact contacts[G6TS_MAX_CONTACTS];
-	struct input_mt_pos contact_positions[G6TS_MAX_CONTACTS];
-	int contact_slots[G6TS_MAX_CONTACTS];
-	u16 slot_x[G6TS_MAX_CONTACTS];
-	u16 slot_y[G6TS_MAX_CONTACTS];
-	u8 slot_missed[G6TS_MAX_CONTACTS];
-	bool slot_active[G6TS_MAX_CONTACTS];
+	struct g6ts_track tracks[G6TS_MAX_CONTACTS];
+	struct g6ts_assignment_workspace assignment;
 	struct delayed_work recovery_work;
 	u8 last_header[HIDSPI_INPUT_HEADER_SIZE];
 	u8 last_body[G6TS_DIAG_BODY];
@@ -166,6 +190,10 @@ struct g6ts {
 	u64 heatmap_small_strong_contacts;
 	u64 heatmap_weak_rejections;
 	u64 heatmap_held_frames;
+	u64 tracker_matches;
+	u64 tracker_new_tracks;
+	u64 tracker_releases;
+	u64 tracker_dropped_contacts;
 	u64 recovery_requests;
 	u64 recovery_successes;
 	u64 recovery_failures;
@@ -566,17 +594,175 @@ static u16 g6ts_filter_coordinate(u16 previous, u16 sample)
 	unsigned int delta = previous > sample ? previous - sample :
 						 sample - previous;
 
-	if (delta <= G6TS_JITTER_DEADZONE)
-		return previous;
-	if (delta <= G6TS_SMOOTHING_LIMIT)
-		return ((u32)previous + 3U * sample + 2U) / 4U;
+	/*
+	 * TouchPenProcessor uses output = alpha * previous +
+	 * (1 - alpha) * sample.  The project-tuning table selecting alpha is
+	 * not recovered, so these two bands are explicit SP11 fits: suppress
+	 * stationary sensor jitter, reduce lag for slow motion, and pass fast
+	 * motion through unchanged.
+	 */
+	if (delta <= G6TS_SMOOTH_STATIONARY_MAX)
+		return (3U * previous + sample + 2U) / 4U;
+	if (delta <= G6TS_SMOOTH_SLOW_MAX)
+		return (previous + 3U * sample + 2U) / 4U;
 	return sample;
+}
+
+static unsigned int g6ts_track_distance(const struct g6ts_track *track,
+					const struct g6ts_contact *contact)
+{
+	s32 predicted_x = clamp_t(s32, (s32)track->raw_x + track->velocity_x,
+				    0, G6TS_LOGICAL_MAX);
+	s32 predicted_y = clamp_t(s32, (s32)track->raw_y + track->velocity_y,
+				    0, G6TS_LOGICAL_MAX);
+	s32 dx = predicted_x - contact->x;
+	s32 dy = predicted_y - contact->y;
+	u64 squared = (s64)dx * dx + (s64)dy * dy;
+
+	if (squared > (u64)G6TS_TRACK_MATCH_MAX * G6TS_TRACK_MATCH_MAX)
+		return G6TS_ASSIGN_INVALID_COST;
+	return int_sqrt64(squared);
+}
+
+/*
+ * Windows builds a predicted-position Euclidean cost matrix and solves a
+ * global assignment.  Use a square matrix with explicit dummy rows/columns
+ * so a gated-out pairing loses to closing one track and opening another.
+ */
+static void g6ts_assign_tracks(struct g6ts *ts, unsigned int count,
+			       int contact_slots[G6TS_MAX_CONTACTS])
+{
+	struct g6ts_assignment_workspace *work = &ts->assignment;
+	unsigned int active_count = 0;
+	unsigned int n, row, col, i, j;
+
+	memset(work, 0, sizeof(*work));
+
+	for (i = 0; i < G6TS_MAX_CONTACTS; i++) {
+		contact_slots[i] = -1;
+		if (ts->tracks[i].active)
+			work->active_slots[active_count++] = i;
+	}
+	if (!active_count || !count)
+		return;
+
+	n = active_count + count;
+	for (row = 0; row < n; row++) {
+		for (col = 0; col < n; col++) {
+			if (row < active_count && col < count)
+				work->cost[row][col] = g6ts_track_distance(
+					&ts->tracks[work->active_slots[row]],
+					&ts->contacts[col]);
+			else if (row < active_count || col < count)
+				work->cost[row][col] = G6TS_ASSIGN_UNMATCHED_COST;
+			else
+				work->cost[row][col] = 0;
+		}
+	}
+
+	/* Hungarian minimum-cost assignment, using one-based work arrays. */
+	for (i = 1; i <= n; i++) {
+		int j0 = 0;
+
+		work->p[0] = i;
+		for (j = 0; j <= n; j++) {
+			work->minv[j] = INT_MAX;
+			work->used[j] = false;
+		}
+		do {
+			int i0, delta = INT_MAX, j1 = 0;
+
+			work->used[j0] = true;
+			i0 = work->p[j0];
+			for (j = 1; j <= n; j++) {
+				int reduced_cost;
+
+				if (work->used[j])
+					continue;
+				reduced_cost = work->cost[i0 - 1][j - 1] -
+					       work->u[i0] - work->v[j];
+				if (reduced_cost < work->minv[j]) {
+					work->minv[j] = reduced_cost;
+					work->way[j] = j0;
+				}
+				if (work->minv[j] < delta) {
+					delta = work->minv[j];
+					j1 = j;
+				}
+			}
+			for (j = 0; j <= n; j++) {
+				if (work->used[j]) {
+					work->u[work->p[j]] += delta;
+					work->v[j] -= delta;
+				} else if (j) {
+					work->minv[j] -= delta;
+				}
+			}
+			j0 = j1;
+		} while (work->p[j0]);
+
+		do {
+			int j1 = work->way[j0];
+
+			work->p[j0] = work->p[j1];
+			j0 = j1;
+		} while (j0);
+	}
+
+	for (j = 1; j <= n; j++) {
+		row = work->p[j] - 1;
+		col = j - 1;
+		if (row < active_count && col < count &&
+		    work->cost[row][col] <= G6TS_TRACK_MATCH_MAX)
+			contact_slots[col] = work->active_slots[row];
+	}
+}
+
+static void g6ts_update_track(struct g6ts_track *track,
+			      const struct g6ts_contact *contact)
+{
+	u16 old_x = track->raw_x;
+	u16 old_y = track->raw_y;
+
+	track->raw_x = contact->x;
+	track->raw_y = contact->y;
+	track->velocity_x = (s32)contact->x - old_x;
+	track->velocity_y = (s32)contact->y - old_y;
+	track->output_x = g6ts_filter_coordinate(track->output_x, contact->x);
+	track->output_y = g6ts_filter_coordinate(track->output_y, contact->y);
+	if (track->age < U16_MAX)
+		track->age++;
+	track->missed = 0;
+}
+
+static int g6ts_new_track(struct g6ts *ts,
+			  const struct g6ts_contact *contact)
+{
+	unsigned int slot;
+
+	for (slot = 0; slot < G6TS_MAX_CONTACTS; slot++) {
+		struct g6ts_track *track = &ts->tracks[slot];
+
+		if (track->active)
+			continue;
+		memset(track, 0, sizeof(*track));
+		track->raw_x = contact->x;
+		track->raw_y = contact->y;
+		track->output_x = contact->x;
+		track->output_y = contact->y;
+		track->age = 1;
+		track->active = true;
+		ts->tracker_new_tracks++;
+		return slot;
+	}
+	return -ENOSPC;
 }
 
 static int g6ts_report_heat_contacts(struct g6ts *ts, const u8 *content,
 				      size_t content_len)
 {
 	unsigned long current_slots = 0;
+	int contact_slots[G6TS_MAX_CONTACTS];
 	unsigned int count, i;
 	bool held = false;
 	int ret;
@@ -585,52 +771,54 @@ static int g6ts_report_heat_contacts(struct g6ts *ts, const u8 *content,
 	if (ret)
 		return ret;
 	count = g6ts_find_contacts(ts);
+	g6ts_assign_tracks(ts, count, contact_slots);
 
 	for (i = 0; i < count; i++) {
-		ts->contact_positions[i].x = ts->contacts[i].x;
-		ts->contact_positions[i].y = ts->contacts[i].y;
-	}
-	ret = input_mt_assign_slots(ts->input, ts->contact_slots,
-				    ts->contact_positions, count, 0);
-	if (ret)
-		return ret;
+		int slot = contact_slots[i];
 
-	for (i = 0; i < count; i++) {
-		int slot = ts->contact_slots[i];
-		u16 x = ts->contact_positions[i].x;
-		u16 y = ts->contact_positions[i].y;
-
-		if (slot < 0 || slot >= G6TS_MAX_CONTACTS)
-			return -ERANGE;
-		if (ts->slot_active[slot]) {
-			x = g6ts_filter_coordinate(ts->slot_x[slot], x);
-			y = g6ts_filter_coordinate(ts->slot_y[slot], y);
-		}
-		ts->slot_x[slot] = x;
-		ts->slot_y[slot] = y;
-		ts->slot_missed[slot] = 0;
-		ts->slot_active[slot] = true;
-		current_slots |= BIT(slot);
-
-		input_mt_slot(ts->input, slot);
-		input_mt_report_slot_state(ts->input, MT_TOOL_FINGER, true);
-		input_report_abs(ts->input, ABS_MT_POSITION_X, x);
-		input_report_abs(ts->input, ABS_MT_POSITION_Y, y);
-	}
-	for (i = 0; i < G6TS_MAX_CONTACTS; i++) {
-		if (!ts->slot_active[i] || (current_slots & BIT(i)))
+		if (slot < 0)
 			continue;
-		if (ts->slot_missed[i] < G6TS_CONTACT_HOLD_FRAMES) {
-			ts->slot_missed[i]++;
-			input_mt_slot(ts->input, i);
-			input_mt_report_slot_state(ts->input, MT_TOOL_FINGER, true);
-			input_report_abs(ts->input, ABS_MT_POSITION_X, ts->slot_x[i]);
-			input_report_abs(ts->input, ABS_MT_POSITION_Y, ts->slot_y[i]);
+		g6ts_update_track(&ts->tracks[slot], &ts->contacts[i]);
+		ts->tracker_matches++;
+		current_slots |= BIT(slot);
+	}
+	/* Age unmatched old tracks before allocating unmatched new blobs. */
+	for (i = 0; i < G6TS_MAX_CONTACTS; i++) {
+		struct g6ts_track *track = &ts->tracks[i];
+
+		if (!track->active || (current_slots & BIT(i)))
+			continue;
+		if (track->missed < G6TS_CONTACT_HOLD_FRAMES) {
+			track->missed++;
+			track->velocity_x /= 2;
+			track->velocity_y /= 2;
 			held = true;
 		} else {
-			ts->slot_active[i] = false;
-			ts->slot_missed[i] = 0;
+			memset(track, 0, sizeof(*track));
+			ts->tracker_releases++;
 		}
+	}
+	for (i = 0; i < count; i++) {
+		int slot;
+
+		if (contact_slots[i] >= 0)
+			continue;
+		slot = g6ts_new_track(ts, &ts->contacts[i]);
+		if (slot < 0) {
+			ts->tracker_dropped_contacts++;
+			continue;
+		}
+		current_slots |= BIT(slot);
+	}
+	for (i = 0; i < G6TS_MAX_CONTACTS; i++) {
+		struct g6ts_track *track = &ts->tracks[i];
+
+		if (!track->active)
+			continue;
+		input_mt_slot(ts->input, i);
+		input_mt_report_slot_state(ts->input, MT_TOOL_FINGER, true);
+		input_report_abs(ts->input, ABS_MT_POSITION_X, track->output_x);
+		input_report_abs(ts->input, ABS_MT_POSITION_Y, track->output_y);
 	}
 	input_mt_sync_frame(ts->input);
 	input_sync(ts->input);
@@ -649,8 +837,7 @@ static void g6ts_release_contacts(struct g6ts *ts)
 {
 	input_mt_sync_frame(ts->input);
 	input_sync(ts->input);
-	memset(ts->slot_active, 0, sizeof(ts->slot_active));
-	memset(ts->slot_missed, 0, sizeof(ts->slot_missed));
+	memset(ts->tracks, 0, sizeof(ts->tracks));
 	ts->last_contact_count = 0;
 }
 
@@ -906,6 +1093,7 @@ static ssize_t state_show(struct device *dev,
 		"expected_report_descriptor_len=%u report_descriptor_len=%zu\n"
 		"mode_stage=%u mode_value=%#02x mode_enabled=%u post_mode_reset_seen=%u captured_report_len=%zu interleaved_data=%llu touch_reports=%llu heatmap_reports=%llu last_interleaved_id=%#02x last_interleaved_len=%u\n"
 		"heat_decode_errors=%llu contact_frames=%llu idle_frames=%llu last_contacts=%u heat_baseline=%#02x active_max=%u strong_max=%u palm_rejections=%llu small_strong=%llu weak_rejections=%llu held_frames=%llu max_contact_pixels=%u\n"
+		"tracker_match_gate=%u tracker_hold_frames=%u tracker_matches=%llu tracker_new=%llu tracker_releases=%llu tracker_dropped=%llu\n"
 		"recovery_requests=%llu recovery_successes=%llu recovery_failures=%llu recovery_fail_streak=%u\n"
 		"last_ret=%d header_ret=%d body_ret=%d output_ret=%d pending_before=%d pending_after=%d\n"
 		"last_header=%*ph body_total_len=%zu class=%u content_len=%u content_id=%u last_body=%*ph\n",
@@ -931,6 +1119,9 @@ static ssize_t state_show(struct device *dev,
 		ts->heatmap_small_strong_contacts,
 		ts->heatmap_weak_rejections,
 		ts->heatmap_held_frames, ts->max_contact_pixels,
+		G6TS_TRACK_MATCH_MAX, G6TS_CONTACT_HOLD_FRAMES,
+		ts->tracker_matches, ts->tracker_new_tracks,
+		ts->tracker_releases, ts->tracker_dropped_contacts,
 		ts->recovery_requests, ts->recovery_successes,
 		ts->recovery_failures, ts->recovery_fail_streak,
 		ts->last_ret, ts->last_header_ret,
