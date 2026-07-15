@@ -26,6 +26,12 @@ from tools.decode_heat_frame import (
     parse_sections,
     parse_metadata_records,
 )
+from tools.track_heat_contacts import (
+    TRACK_CONFIRM_NORMAL,
+    TRACK_CONFIRM_SPLIT,
+    TRACK_CONFIRM_WEAK,
+    TRACK_SPLIT_RADIUS,
+)
 
 
 def make_grid(points=(), baseline=0xB5):
@@ -219,6 +225,10 @@ class HeatDecoderTests(unittest.TestCase):
             "G6TS_MAX_CONTACTS": 10,
             "G6TS_TRACK_MATCH_MAX": 4096,
             "G6TS_CONTACT_HOLD_FRAMES": 6,
+            "G6TS_TRACK_CONFIRM_NORMAL": TRACK_CONFIRM_NORMAL,
+            "G6TS_TRACK_CONFIRM_WEAK": TRACK_CONFIRM_WEAK,
+            "G6TS_TRACK_CONFIRM_SPLIT": TRACK_CONFIRM_SPLIT,
+            "G6TS_TRACK_SPLIT_RADIUS": TRACK_SPLIT_RADIUS,
             "G6TS_SMOOTH_STATIONARY_MAX": 64,
             "G6TS_SMOOTH_SLOW_MAX": 256,
         }

@@ -25,6 +25,10 @@ MAX_CONTACTS = 10
 # ample margin for faster live motion while rejecting unrelated blobs.
 TRACK_MATCH_MAX = 4096
 TRACK_HOLD_FRAMES = 6
+TRACK_CONFIRM_NORMAL = 3
+TRACK_CONFIRM_WEAK = 5
+TRACK_CONFIRM_SPLIT = 8
+TRACK_SPLIT_RADIUS = 2048
 ASSIGN_UNMATCHED_COST = 1_000_000
 ASSIGN_INVALID_COST = 3_000_000
 
@@ -72,6 +76,9 @@ class Track:
     velocity_y: int = 0
     age: int = 1
     missed: int = 0
+    evidence: int = 1
+    required_evidence: int = TRACK_CONFIRM_NORMAL
+    confirmed: bool = False
     state: TrackState = TrackState.ACTIVE
     pixels: int = 0
     strength: int = 0
@@ -250,11 +257,28 @@ class ContactTracker:
         max_contacts: int = MAX_CONTACTS,
         match_gate: int = TRACK_MATCH_MAX,
         hold_frames: int = TRACK_HOLD_FRAMES,
+        confirm_frames: int = TRACK_CONFIRM_NORMAL,
     ) -> None:
         self.max_contacts = max_contacts
         self.match_gate = match_gate
         self.hold_frames = hold_frames
+        self.confirm_frames = confirm_frames
         self.tracks: dict[int, Track] = {}
+
+    def _confirmation_requirement(self, sample: Measurement) -> int:
+        required = self.confirm_frames
+        if sample.pixels < 3:
+            required = max(required, TRACK_CONFIRM_WEAK)
+
+        for track in self.tracks.values():
+            if not track.confirmed or track.state is not TrackState.ACTIVE:
+                continue
+            if hypot(track.raw_x - sample.x, track.raw_y - sample.y) > TRACK_SPLIT_RADIUS:
+                continue
+            required = max(required, TRACK_CONFIRM_WEAK)
+            if sample.strength * 2 <= track.strength or sample.pixels * 2 <= track.pixels:
+                required = max(required, TRACK_CONFIRM_SPLIT)
+        return required
 
     def reset(self) -> None:
         self.tracks.clear()
@@ -282,6 +306,10 @@ class ContactTracker:
             track.output_x = _smooth(track.output_x, sample.x)
             track.output_y = _smooth(track.output_y, sample.y)
             track.age += 1
+            if not track.confirmed:
+                track.evidence += 1
+                if track.evidence >= track.required_evidence:
+                    track.confirmed = True
             track.missed = 0
             track.state = TrackState.ACTIVE
             track.pixels = sample.pixels
@@ -298,9 +326,8 @@ class ContactTracker:
                 del self.tracks[slot]
                 continue
             track.state = TrackState.COASTING
-            # Keep the last reported point during a gap.  Windows has optional
-            # forward prediction, but its runtime activation policy is not yet
-            # recovered; emitting extrapolated input would risk cursor drift.
+            # Keep the last point for reassociation only.  A coasting track is
+            # not an observed contact and must not be emitted as input.
             track.velocity_x //= 2
             track.velocity_y //= 2
 
@@ -317,6 +344,7 @@ class ContactTracker:
                 output_y=sample.y,
                 pixels=sample.pixels,
                 strength=sample.strength,
+                required_evidence=self._confirmation_requirement(sample),
             )
 
         return [
@@ -331,4 +359,5 @@ class ContactTracker:
                 held=track.state is TrackState.COASTING,
             )
             for track in sorted(self.tracks.values(), key=lambda item: item.slot)
+            if track.state is TrackState.ACTIVE and track.confirmed
         ]

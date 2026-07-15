@@ -98,7 +98,9 @@ placing the Microsoft DLL or extracted matrices in the repository.
 The ten feature meanings, score architecture, and project-0x0c83 model data are
 now known, but two proof obligations remain:
 
-- recover the four output-class labels and their temporal transition rules;
+- recover the four output-class labels and complete the remaining temporal
+  predicates; the transition score/history table and output lifecycle gate
+  are now recovered and documented in `WINDOWS_TOUCH_TRACKER_RE.md`;
 - validate those labels against synchronized fingertip, palm, edge-grip, and
   merged-finger frames.
 
