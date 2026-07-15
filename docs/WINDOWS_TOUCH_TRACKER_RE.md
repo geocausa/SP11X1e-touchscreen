@@ -48,9 +48,46 @@ substantial margin while still separating unrelated blobs.
 ## Lifecycle and smoothing
 
 The Windows code maintains history, active/pre-active/closing state, missing
-track handling, and optional forward prediction.  Track updates preserve the
-new-minus-old displacement and a ten-entry history.  The exact runtime state
-transition thresholds have not yet been recovered.
+track handling, and optional forward prediction. Track updates preserve the
+new-minus-old displacement and a ten-entry class history.
+
+Further analysis of `FUN_180043b10`, `FUN_180041150`, `FUN_180044db0`,
+`FUN_180045038`, `FUN_180048e70`, and `FUN_180049458` recovered the following
+additional facts:
+
+- the lifecycle status is an integer at track `+0x3c`, with values zero
+  through four used by the state setter;
+- only lifecycle states one and two are eligible for final finger output;
+- a separate output-eligibility flag and allowed-class test must also pass;
+- one output transition requires more than one historical sample;
+- classification history is stored in a ten-entry ring;
+- class changes use transition-specific score and history requirements rather
+  than one universal debounce period.
+
+The project-0x0c83 transition blocks start at classifier configuration
+`+0x8d8`, use a `0x30` byte stride, and are selected by
+`new_class + old_class * 4`. The byte at block `+0x4f` is the minimum history
+used by the recovered score-history loop. Its 4 by 4 values are:
+
+```text
+old 0: 0, 5, 2, 1
+old 1: 8, 0, 4, 30
+old 2: 2, 5, 0, 4
+old 3: 1, 5, 3, 0
+```
+
+The associated signed score thresholds are respectively:
+
+```text
+old 0:    0, -500, -25, -45
+old 1:   -2,    0, -25, -20
+old 2:  -25, -500,   0, -15
+old 3:  -25,  -40, -25,   0
+```
+
+The four human-facing class labels are not yet proven. These values therefore
+describe the recovered temporal mechanism but are not sufficient, on their
+own, to drive the exact Microsoft statistical model in Linux.
 
 The recovered smoothing form is an exponential blend:
 
@@ -63,6 +100,24 @@ offline reference uses named, conservative fitted bands so the formula can be
 tested without presenting guessed values as proprietary facts.  Missing
 contacts are held at the last output point; optional Windows forward
 extrapolation is deliberately disabled until its activation policy is known.
+
+## Linux lifecycle equivalent
+
+The Phase 63 Linux client implements the recovered control-flow boundary
+without copying the embedded Microsoft model matrices. New tracks remain
+tentative and are never reported while tentative or coasting. Observable
+component quality selects one of three evidence windows:
+
+- three frames for a normal independent candidate;
+- five frames for a small candidate or a new candidate near an established
+  finger;
+- eight frames for a substantially weaker or smaller nearby candidate, which
+  is the characteristic transient split seen in the live one-finger trace.
+
+The three/five/eight policy is an independently expressed SP11 safety policy,
+not a claim that a particular Linux quality category equals one of the four
+unlabelled Microsoft classes. Once confirmed, a track remains confirmed until
+it closes, preventing normal shape jitter from making a real finger flicker.
 
 ## Calibration and palm classification boundary
 

@@ -65,6 +65,18 @@ from the dedicated Phase 62 checkpoint entry on the experimental
 58 controller and GPI modules; only the touchscreen client changed. See
 [docs/PHASE62_DEPLOYMENT.md](docs/PHASE62_DEPLOYMENT.md).
 
+Phase 63 removes the laboratory-only raw command surface from the client,
+adopts standard touchscreen properties and strict IRQ/PM error handling, and
+adds a Windows-informed tentative-track output gate. Reverse engineering now
+proves the five-state lifecycle, ten-entry class history, final output gate,
+and transition-specific history windows. Linux uses independently written
+three-, five-, and eight-frame quality bands to suppress the transient nearby
+split candidate observed in the live one-finger trace. See
+[docs/PHASE63_WINDOWS_LIFECYCLE.md](docs/PHASE63_WINDOWS_LIFECYCLE.md).
+The client-only build passed a short live one-finger/multitouch validation and
+is preserved in its own `sp11-phase63` GRUB entry; Phase 62 and the safe 7.1.3
+entry remain available for rollback.
+
 It is not yet production- or upstream-ready. Conservative broad-contact palm
 filtering remains while later shape classification still needs more recovery
 and labelled palm captures. Measured edge calibration, pressure, merged-contact
@@ -94,6 +106,7 @@ docs/PHASE60_CLASSIFIER_BOUNDARY.md
 docs/PHASE61_OFFLINE_GEOMETRY.md
 docs/PHASE62_PSDB_MODEL_EXTRACTOR.md
 docs/PHASE62_DEPLOYMENT.md
+docs/PHASE63_WINDOWS_LIFECYCLE.md
 phase55/
 tools/analyze_spb_etw_csv.py
 tools/decode_heat_frame.py
@@ -118,9 +131,9 @@ experiments are isolated under `phase54/` and `phase55/`.
 
 Use a separate boot entry and retain a known-good kernel. See
 [docs/BUILD.md](docs/BUILD.md) and [docs/TESTING.md](docs/TESTING.md).
-The Phase 55 client deliberately has no suspend/resume callbacks because
-platform suspend is disabled on the tested system after earlier whole-device
-crashes.
+The client now has conventional suspend/resume callbacks, but platform suspend
+remains unvalidated and disabled on the tested system after earlier
+whole-device crashes.
 
 ## Tested hardware
 
