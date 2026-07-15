@@ -59,6 +59,12 @@ ten inputs, class labels, and labelled captures are available. See
 [docs/PHASE61_OFFLINE_GEOMETRY.md](docs/PHASE61_OFFLINE_GEOMETRY.md), and
 [docs/PHASE62_PSDB_MODEL_EXTRACTOR.md](docs/PHASE62_PSDB_MODEL_EXTRACTOR.md).
 
+The Phase 59 client was subsequently built, installed, and cold-boot validated
+from the dedicated Phase 62 checkpoint entry on the experimental
+`7.1.1-sp11-gpicmp1+` kernel. The validated boot used the already proven Phase
+58 controller and GPI modules; only the touchscreen client changed. See
+[docs/PHASE62_DEPLOYMENT.md](docs/PHASE62_DEPLOYMENT.md).
+
 It is not yet production- or upstream-ready. Conservative broad-contact palm
 filtering remains while later shape classification still needs more recovery
 and labelled palm captures. Measured edge calibration, pressure, merged-contact
@@ -87,6 +93,7 @@ docs/PHASE59_NSR_METADATA.md
 docs/PHASE60_CLASSIFIER_BOUNDARY.md
 docs/PHASE61_OFFLINE_GEOMETRY.md
 docs/PHASE62_PSDB_MODEL_EXTRACTOR.md
+docs/PHASE62_DEPLOYMENT.md
 phase55/
 tools/analyze_spb_etw_csv.py
 tools/decode_heat_frame.py
