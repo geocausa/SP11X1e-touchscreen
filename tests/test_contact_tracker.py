@@ -56,10 +56,7 @@ class ContactTrackerTests(unittest.TestCase):
         third = tracker.update([point(20200, 4000), point(2200, 4000)])
 
         self.assertEqual(first, [])
-        self.assertEqual(
-            [(item.slot, item.raw_x) for item in second],
-            [(0, 2100), (1, 20100)],
-        )
+        self.assertEqual(second, [])
         self.assertEqual(
             [(item.slot, item.raw_x) for item in third],
             [(0, 2200), (1, 20200)],
@@ -75,6 +72,8 @@ class ContactTrackerTests(unittest.TestCase):
     def test_far_jump_does_not_emit_retained_old_track(self):
         tracker = ContactTracker(match_gate=1000, hold_frames=2)
         tracker.update([point(1000, 1000)])
+        result = tracker.update([point(10000, 10000)])
+        self.assertEqual(result, [])
         result = tracker.update([point(10000, 10000)])
         self.assertEqual(result, [])
         result = tracker.update([point(10000, 10000)])
@@ -116,14 +115,6 @@ class ContactTrackerTests(unittest.TestCase):
         self.assertEqual(tracker.update([point(12000, 8000)]), [])
         self.assertEqual(tracker.update([]), [])
 
-    def test_classifier_approved_touch_is_emitted_on_second_frame(self):
-        tracker = ContactTracker()
-
-        self.assertEqual(tracker.update([point(12000, 8000)]), [])
-        reported = tracker.update([point(12000, 8000)])
-        self.assertEqual(len(reported), 1)
-        self.assertEqual(reported[0].raw_x, 12000)
-
     def test_nearby_weak_split_requires_long_history(self):
         tracker = ContactTracker()
         primary = point(12000, 8000)
@@ -145,7 +136,9 @@ class ContactTrackerTests(unittest.TestCase):
         second = point(22000, 16000)
 
         tracker.update([primary])
-        self.assertEqual(len(tracker.update([primary])), 1)
+        tracker.update([primary])
+        tracker.update([primary])
+        self.assertEqual(len(tracker.update([primary, second])), 1)
         self.assertEqual(len(tracker.update([primary, second])), 1)
         self.assertEqual(len(tracker.update([primary, second])), 2)
 

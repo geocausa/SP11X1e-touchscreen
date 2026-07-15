@@ -95,6 +95,15 @@ touches after two frames while retaining the longer weak/split anti-ghost
 windows. See
 [docs/PHASE65_KEYBOARD_LATENCY.md](docs/PHASE65_KEYBOARD_LATENCY.md).
 
+Phase 66 identifies repeated class-3 panel resets and full power-cycle
+recovery—not classifier execution—as the cause of the remaining keyboard
+pauses. It reconstructs the full volatile Windows collection setup, learns
+the versioned report-09 profile through feature `0x73`, validates every stage,
+and requires a real Heat frame before recovery succeeds. The unsuccessful
+two-frame latency experiment is reverted to the safer three-frame normal
+confirmation gate. See
+[docs/PHASE66_WINDOWS_RECOVERY.md](docs/PHASE66_WINDOWS_RECOVERY.md).
+
 It is not yet ready for a mainline submission. Labelled palm and physical-edge
 captures, measured edge calibration, pressure, merged-contact separation,
 suspend/resume hardware validation, and broader kernel compatibility remain
@@ -126,6 +135,7 @@ docs/PHASE62_DEPLOYMENT.md
 docs/PHASE63_WINDOWS_LIFECYCLE.md
 docs/PHASE64_FIXED_POINT_CLASSIFIER.md
 docs/PHASE65_KEYBOARD_LATENCY.md
+docs/PHASE66_WINDOWS_RECOVERY.md
 phase55/
 tools/analyze_spb_etw_csv.py
 tools/decode_heat_frame.py
