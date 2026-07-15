@@ -48,6 +48,12 @@ cutoff of 655. The full Windows corpus reaches only 2, so this fidelity port
 does not reject any established contact. See
 [docs/PHASE59_NSR_METADATA.md](docs/PHASE59_NSR_METADATA.md).
 
+The next Windows stage is now bounded as a ten-feature, four-score statistical
+shape classifier with temporal class processing. Its architecture and embedded
+table layout are documented, but filtering is intentionally deferred until
+class labels and labelled captures are available. See
+[docs/PHASE60_CLASSIFIER_BOUNDARY.md](docs/PHASE60_CLASSIFIER_BOUNDARY.md).
+
 It is not yet production- or upstream-ready. Conservative broad-contact palm
 filtering remains while later shape classification still needs more recovery
 and labelled palm captures. Measured edge calibration, pressure, merged-contact
@@ -73,6 +79,7 @@ docs/WINDOWS_TOUCH_DETECTOR_RE.md
 docs/WINDOWS_TOUCH_TRACKER_RE.md
 docs/PHASE58_TRACKING_PIPELINE.md
 docs/PHASE59_NSR_METADATA.md
+docs/PHASE60_CLASSIFIER_BOUNDARY.md
 phase55/
 tools/analyze_spb_etw_csv.py
 tools/decode_heat_frame.py

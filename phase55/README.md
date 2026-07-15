@@ -90,8 +90,9 @@ UEFI/PRE-OS FIFO transport. Keep a separate known-good kernel/GRUB entry.
 ## Known limitations
 
 - Candidate extraction and the core predicted assignment structure are ported
-  from `TouchPenProcessor0C83.dll`, but its full runtime tuning and classifier
-  tables are not yet recovered.
+  from `TouchPenProcessor0C83.dll`. The later four-score shape classifier's
+  architecture and tables are located, but its class labels and temporal
+  transitions are not yet proven well enough to filter live contacts.
 - Pen support is deliberately out of scope; the driver is finger-only.
 - Pressure, contact shape, and merged-finger separation are not implemented.
 - Heat-byte calibration remains identity and edge calibration remains at the
