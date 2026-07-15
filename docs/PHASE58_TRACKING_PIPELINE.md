@@ -70,3 +70,31 @@ this out-of-tree client. `packaging/initramfs-tools/hooks/sp11-g6ts` provides
 the required deterministic hook. Install it only while constructing the
 dedicated experimental image, then remove it so unrelated initramfs updates do
 not acquire the experimental client.
+
+## Live hardware validation
+
+The dedicated Phase 58 initramfs booted on the Surface Pro 11 OLED with live
+module source version `66C48BCC0A852E875E38873`. Startup enumeration and its
+single automatic panel recovery completed successfully.
+
+A 45-second raw Linux input capture exercised one-, two-, and three-finger
+motion:
+
+```text
+input records: 16060
+synchronized input frames: 1984
+maximum simultaneous contacts: 3
+frames with 0/1/2/3 contacts: 11 / 789 / 431 / 753
+tracker matches: 5369
+new tracks: 57
+dropped contacts: 0
+heat decode errors: 0
+SPI errors: 0
+SPI timeouts: 0
+recovery failures: 0
+```
+
+The capture ended during a gesture, so its binary stream contained one active
+slot at EOF. After all fingers were lifted, the driver reached
+`last_contacts=0` and remained there during a five-second untouched check.
+This rules out a stuck contact at the new lifecycle boundary.
