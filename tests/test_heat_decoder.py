@@ -11,6 +11,10 @@ from tools.decode_heat_frame import (
     GRID_COLS,
     GRID_ROWS,
     GRID_SAMPLES,
+    HEAT_THRESHOLD,
+    MIN_CONTACT_PIXELS,
+    WINDOWS_SIGNAL_ZERO,
+    WINDOWS_STRONG_MAX,
     accepted_contacts,
     extract_heatmap,
     extract_report,
@@ -92,6 +96,29 @@ class HeatDecoderTests(unittest.TestCase):
         self.assertEqual(palms, 0)
         self.assertGreater(contacts[0]["strength"], contacts[1]["strength"])
 
+    def test_windows_detector_uses_four_connectivity(self):
+        grid = make_grid([(10, 10, 0x80), (11, 11, 0x80)])
+        contacts, palms = accepted_contacts(grid, 0xB5)
+        self.assertEqual(len(contacts), 2)
+        self.assertEqual(palms, 0)
+
+    def test_strong_two_cell_candidate_survives(self):
+        strong, _ = accepted_contacts(
+            make_grid([(10, 10, WINDOWS_STRONG_MAX), (10, 11, WINDOWS_STRONG_MAX)]),
+            0xB5,
+        )
+        weak, _ = accepted_contacts(
+            make_grid(
+                [
+                    (10, 10, WINDOWS_STRONG_MAX + 1),
+                    (10, 11, WINDOWS_STRONG_MAX + 1),
+                ]
+            ),
+            0xB5,
+        )
+        self.assertEqual(len(strong), 1)
+        self.assertEqual(weak, [])
+
     def test_broad_component_is_rejected_as_palm(self):
         points = [(20, column, 0x80) for column in range(13)]
         contacts, palms = accepted_contacts(make_grid(points), 0xB5)
@@ -118,8 +145,10 @@ class HeatDecoderTests(unittest.TestCase):
         expected = {
             "G6TS_HEAT_ROWS": GRID_ROWS,
             "G6TS_HEAT_COLS": GRID_COLS,
-            "G6TS_HEAT_THRESHOLD": 8,
-            "G6TS_HEAT_MIN_PIXELS": 2,
+            "G6TS_HEAT_SIGNAL_ZERO": WINDOWS_SIGNAL_ZERO,
+            "G6TS_HEAT_THRESHOLD": HEAT_THRESHOLD,
+            "G6TS_HEAT_STRONG_MAX": WINDOWS_STRONG_MAX,
+            "G6TS_HEAT_MIN_PIXELS": MIN_CONTACT_PIXELS,
             "G6TS_HEAT_PALM_PIXELS": 48,
             "G6TS_HEAT_PALM_SPAN": 12,
             "G6TS_MAX_CONTACTS": 10,

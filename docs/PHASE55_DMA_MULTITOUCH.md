@@ -8,31 +8,33 @@ full-frame parsing, blob detection, tracking, palm rejection, and conversion
 to finger and pen input.
 
 Linux receives the same report `0x12` container through the Phase 55 QSPI/GPI
-DMA transport. The current implementation performs the smallest useful open
-replacement:
+DMA transport. Phase 57 ports the DLL's first candidate-extraction stage and
+uses explicit Linux fallbacks for its later proprietary tracker. The Ghidra
+evidence and remaining boundary are recorded in
+[WINDOWS_TOUCH_DETECTOR_RE.md](WINDOWS_TOUCH_DETECTOR_RE.md).
 
 1. Parse the Heat container and length-prefixed sections.
 2. Select section `0x0100`, mode 1, header value 8.
 3. Reassemble exactly 3,128 samples into a 68 by 46 grid.
-4. Find the modal per-frame baseline, normally `0xb4` or `0xb5`.
-5. Mark samples at least eight levels below the baseline.
-6. Form eight-neighbour connected components of at least two samples.
+4. Keep the modal level (`0xb4` or `0xb5`) for diagnostics only.
+5. Apply the Windows-derived absolute active ceiling of raw byte 171.
+6. Form four-neighbour components; accept at least three samples, or a one- or
+   two-sample component whose peak is at most raw byte 162.
 7. Map weighted centroids to Linux coordinates from 0 through 32767.
 8. Assign the ten strongest components to Linux multi-touch slots.
 9. Reject only components broader than the conservative palm boundary.
-10. Smooth small coordinate changes and bridge a single missing frame without
-    delaying deliberate movement or release beyond one scan.
+10. Smooth small coordinate changes and bridge up to six missing frames as the
+    current bounded stand-in for Windows track lifecycle handling.
 
 The `0xff00` section is retained as metadata but is not needed for the current
 finger-centroid implementation. The 333-byte trailer outside the Heat
 container is not interpreted.
 
-The palm boundary was checked against 1,381 saved Windows Heat frames. Every
-frame decoded successfully; all 1,119 fingertip frames remained accepted, all
-262 idle frames remained idle, and no known-good contact was rejected. The
-largest saved fingertip occupied 12 samples in a 4 by 4 box, while the driver
-rejects only components above 48 samples or spanning more than 12 rows or
-columns.
+The candidate policy was checked against 1,381 saved Windows Heat frames. Every
+frame decoded successfully; 1,113 frames contained an accepted contact, 268
+were idle, and none crossed the conservative palm boundary. The largest
+accepted fingertip occupied 11 samples, while the driver rejects only
+components above 48 samples or spanning more than 12 rows or columns.
 
 ## Finger-only and power-management scope
 

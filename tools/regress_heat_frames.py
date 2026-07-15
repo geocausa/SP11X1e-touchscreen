@@ -18,7 +18,10 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from tools.decode_heat_frame import (
+    MIN_CONTACT_PIXELS,
+    WINDOWS_STRONG_MAX,
     accepted_contacts,
+    connected_components,
     extract_heatmap,
     extract_report,
     modal_baseline,
@@ -51,6 +54,8 @@ def main() -> int:
     contact_frames = 0
     idle_frames = 0
     palm_rejections = 0
+    small_strong_contacts = 0
+    weak_rejections = 0
     errors: list[tuple[Path, str]] = []
     baselines: Counter[int] = Counter()
     contact_counts: Counter[int] = Counter()
@@ -68,6 +73,7 @@ def main() -> int:
                 raise ValueError(f"expected one heat section, found {len(heat_sections)}")
             grid = extract_heatmap(heat_sections[0])
             baseline, _ = modal_baseline(grid)
+            components = connected_components(grid, baseline)
             contacts, rejected = accepted_contacts(grid, baseline)
         except (OSError, ValueError) as error:
             errors.append((path, str(error)))
@@ -75,6 +81,13 @@ def main() -> int:
 
         baselines[baseline] += 1
         palm_rejections += rejected
+        for component in components:
+            if int(component["pixels"]) >= MIN_CONTACT_PIXELS:
+                continue
+            if int(component["peak_value"]) <= WINDOWS_STRONG_MAX:
+                small_strong_contacts += 1
+            else:
+                weak_rejections += 1
         contact_counts[len(contacts)] += 1
         if contacts:
             contact_frames += 1
@@ -88,7 +101,8 @@ def main() -> int:
     print(f"frames={frame_count} decoded={frame_count - len(errors)} errors={len(errors)}")
     print(
         f"contact_frames={contact_frames} idle_frames={idle_frames} "
-        f"palm_rejections={palm_rejections} max_contact_pixels={largest_pixels}"
+        f"palm_rejections={palm_rejections} small_strong={small_strong_contacts} "
+        f"weak_rejections={weak_rejections} max_contact_pixels={largest_pixels}"
     )
     print(
         "baselines="
