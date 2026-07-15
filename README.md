@@ -42,11 +42,17 @@ lifecycle state, and the recovered exponential smoothing form. See
 [docs/WINDOWS_TOUCH_TRACKER_RE.md](docs/WINDOWS_TOUCH_TRACKER_RE.md), and
 [docs/PHASE58_TRACKING_PIPELINE.md](docs/PHASE58_TRACKING_PIPELINE.md).
 
+Phase 59 adds the exact project-0x0c83 firmware NSR-bin gate: bounded parsing
+of metadata record `0x04`, its 46-row to 16-bin mapping, and Windows' strict
+cutoff of 655. The full Windows corpus reaches only 2, so this fidelity port
+does not reject any established contact. See
+[docs/PHASE59_NSR_METADATA.md](docs/PHASE59_NSR_METADATA.md).
+
 It is not yet production- or upstream-ready. Conservative broad-contact palm
-filtering remains, but a Windows-equivalent NSR classifier needs its runtime
-tuning table and labelled palm captures. Measured edge calibration, pressure,
-merged-contact separation, suspend/resume, and broader kernel compatibility
-remain open. Pen support is deliberately out of scope.
+filtering remains while later shape classification still needs more recovery
+and labelled palm captures. Measured edge calibration, pressure, merged-contact
+separation, suspend/resume, and broader kernel compatibility remain open. Pen
+support is deliberately out of scope.
 
 ## Repository layout
 
@@ -66,6 +72,7 @@ docs/PHASE55_DMA_MULTITOUCH.md
 docs/WINDOWS_TOUCH_DETECTOR_RE.md
 docs/WINDOWS_TOUCH_TRACKER_RE.md
 docs/PHASE58_TRACKING_PIPELINE.md
+docs/PHASE59_NSR_METADATA.md
 phase55/
 tools/analyze_spb_etw_csv.py
 tools/decode_heat_frame.py

@@ -66,16 +66,38 @@ be compared without rebuilding.
 ## Metadata section
 
 Section `0xff00` is a nested TLV stream, not a ready-made contact list. The
-record format observed in all 1,381 captured frames is:
+Windows dispatcher starts at byte seven of the section, so the outer header's
+`header_value` byte is also the first nested record type. The record format
+observed in all 1,381 captured frames is:
 
 ```text
 u8 type; u8 flags; u16 payload_length; u8 payload[payload_length];
 ```
 
 The stable record types are `0x00`, `0x03`, `0x04`, `0x07`, `0x0b`, `0x32`,
-and `0xff`. Windows parses these records before detection, but the handler
-table and the exact detector fields populated by each record are not yet fully
-named. Phase 57 does not invent semantics for them.
+and `0xff`. `FUN_180068670` dispatches them through the handler table built by
+`FUN_180067128`.
+
+The semantics of type `0x04` are now exact. `FUN_180069690` reads a count byte
+and up to sixteen little-endian `u16` values at payload offsets `4 + i * 4`.
+Those firmware-provided values are copied into the detector frame fields later
+read by `FUN_18003c048`. That filter:
+
+1. rounds the candidate's preserved raw sensor-row coordinate;
+2. maps the 46 rows through the project-0x0c83 46-to-16 lookup table;
+3. rejects only when the selected firmware value is strictly greater than the
+   embedded profile cutoff of 655.
+
+The exact row mapping is `0..15, 0..15, 2..15`. All 23 embedded project
+profiles contain the same cutoff. Every captured SP11 frame has 16 values,
+and the entire corpus contains only values 0, 1, and 2. This classifier is
+therefore a behavioral no-op for the available captures, but Linux now parses,
+validates, applies, and reports it for Windows fidelity and future evidence.
+Malformed or duplicate type-`0x04` records fail the frame safely; a missing
+record leaves the optional filter disabled.
+
+The remaining metadata record semantics are not yet fully named. Linux does
+not invent behavior for those records.
 
 ## Deliberate remaining fallbacks
 
@@ -83,8 +105,8 @@ This is a faithful port of the first candidate-extraction stage, not a source-
 equivalent replacement for the whole proprietary library. Windows still has:
 
 - track lifecycle, matching, and motion prediction;
-- weak-blob/NSR classification after initial candidate creation;
 - edge compensation and configuration-dependent coordinate transforms;
+- later shape/covariance classification and merged-contact handling;
 - pen-driven palm rejection.
 
 Linux currently uses `input_mt_assign_slots`, bounded coordinate smoothing,
@@ -102,6 +124,7 @@ captured Windows corpus at
 frames=1381 decoded=1381 errors=0
 contact_frames=1113 idle_frames=268 palm_rejections=0
 small_strong=0 weak_rejections=6
+nsr_metadata_frames=1381 nsr_rejections=0 nsr_cutoff=655 nsr_value_max=2
 contacts_per_frame=0:268,1:1113
 ```
 

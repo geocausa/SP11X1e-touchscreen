@@ -14,12 +14,16 @@ from tools.decode_heat_frame import (
     HEAT_THRESHOLD,
     MIN_CONTACT_PIXELS,
     WINDOWS_SIGNAL_ZERO,
+    WINDOWS_NSR_CUTOFF,
+    WINDOWS_NSR_ROW_TO_BIN,
     WINDOWS_STRONG_MAX,
     accepted_contacts,
     extract_heatmap,
+    extract_nsr_bins,
     extract_report,
     modal_baseline,
     parse_sections,
+    parse_metadata_records,
 )
 
 
@@ -52,6 +56,19 @@ def make_report(grid, trailer=b""):
     )
 
 
+def make_metadata_section(nsr_bins):
+    payload = bytes([len(nsr_bins), 0, 0, 0]) + b"".join(
+        struct.pack("<Hxx", value) for value in nsr_bins
+    )
+    records = (
+        struct.pack("<BBH", 0x00, 0x04, 0)
+        + struct.pack("<BBH", 0x04, 0x04, len(payload))
+        + payload
+    )
+    length = 7 + len(records)
+    return struct.pack("<IHBB", length, 0xFF00, 0, records[0]) + records[1:]
+
+
 class HeatDecoderTests(unittest.TestCase):
     def test_raw_and_class1_report_envelopes(self):
         report = make_report(make_grid())
@@ -81,6 +98,33 @@ class HeatDecoderTests(unittest.TestCase):
     def test_modal_baseline_uses_kernel_tie_break(self):
         baseline, count = modal_baseline(bytes([0xB5, 0xB4, 0xB5, 0xB4]))
         self.assertEqual((baseline, count), (0xB4, 2))
+
+    def test_metadata_type04_nsr_bins(self):
+        values = tuple(range(16))
+        section = parse_sections(self._report_with_section(make_metadata_section(values)))[2][0]
+        records = parse_metadata_records(section)
+        self.assertEqual([record.kind for record in records], [0x00, 0x04])
+        self.assertEqual(extract_nsr_bins(section), values)
+
+    def test_metadata_rejects_truncated_type04(self):
+        payload = b"\x02\x00\x00\x00\x01\x00\x00\x00"
+        records = struct.pack("<BBH", 0x04, 0x04, len(payload)) + payload
+        section = struct.pack("<IHBB", 7 + len(records), 0xFF00, 0, records[0]) + records[1:]
+        parsed = parse_sections(self._report_with_section(section))[2][0]
+        with self.assertRaisesRegex(ValueError, "truncated"):
+            extract_nsr_bins(parsed)
+
+    def test_windows_nsr_cutoff_is_strict_and_row_mapped(self):
+        grid = make_grid([(16, 12, 0x80), (16, 13, 0x80), (17, 12, 0x80)])
+        sensor_row = 16
+        selected_bin = WINDOWS_NSR_ROW_TO_BIN[sensor_row]
+        bins = [0] * 16
+        bins[selected_bin] = WINDOWS_NSR_CUTOFF
+        accepted, _ = accepted_contacts(grid, 0xB5, nsr_bins=tuple(bins))
+        self.assertEqual(len(accepted), 1)
+        bins[selected_bin] += 1
+        rejected, _ = accepted_contacts(grid, 0xB5, nsr_bins=tuple(bins))
+        self.assertEqual(rejected, [])
 
     def test_two_finger_components(self):
         grid = make_grid(
@@ -151,6 +195,8 @@ class HeatDecoderTests(unittest.TestCase):
             "G6TS_HEAT_MIN_PIXELS": MIN_CONTACT_PIXELS,
             "G6TS_HEAT_PALM_PIXELS": 48,
             "G6TS_HEAT_PALM_SPAN": 12,
+            "G6TS_NSR_BINS": 16,
+            "G6TS_NSR_CUTOFF": WINDOWS_NSR_CUTOFF,
             "G6TS_MAX_CONTACTS": 10,
             "G6TS_TRACK_MATCH_MAX": 4096,
             "G6TS_CONTACT_HOLD_FRAMES": 6,
@@ -161,6 +207,15 @@ class HeatDecoderTests(unittest.TestCase):
             match = re.search(rf"^#define {name}\s+(\d+)U$", source, re.MULTILINE)
             self.assertIsNotNone(match, name)
             self.assertEqual(int(match.group(1)), value, name)
+
+        mapping = re.search(
+            r"g6ts_nsr_row_to_bin\[G6TS_HEAT_ROWS\]\s*=\s*\{([^}]*)\}",
+            source,
+            re.DOTALL,
+        )
+        self.assertIsNotNone(mapping)
+        kernel_mapping = tuple(int(value) for value in re.findall(r"\d+", mapping.group(1)))
+        self.assertEqual(kernel_mapping, WINDOWS_NSR_ROW_TO_BIN)
 
     @staticmethod
     def _report_with_section(section):

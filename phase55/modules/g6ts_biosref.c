@@ -43,6 +43,9 @@
 #define G6TS_HEAT_COLS			68U
 #define G6TS_HEAT_SAMPLES		(G6TS_HEAT_ROWS * G6TS_HEAT_COLS)
 #define G6TS_HEAT_SECTION		0x0100
+#define G6TS_METADATA_SECTION		0xff00
+#define G6TS_NSR_BINS			16U
+#define G6TS_NSR_CUTOFF			655U
 /*
  * TouchPenProcessor0C83.dll converts a calibrated byte through a linear
  * lookup whose zero crossing is approximately 180.  The SP11 configuration
@@ -93,6 +96,13 @@ static const u8 g6ts_report_descriptor_cmd[8] = {
 static const u8 g6ts_mode_enable[] = { 0x01 };
 static const u8 g6ts_mode_handshake[] = {
 	0xbc, 0xe6, 0x4a, 0x2e, 0x86, 0x78, 0x00,
+};
+
+/* TouchPenProcessor project-0x0c83 sensor-row to NSR-bin mapping. */
+static const u8 g6ts_nsr_row_to_bin[G6TS_HEAT_ROWS] = {
+	0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
+	0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
+	2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
 };
 
 struct g6ts_contact {
@@ -146,6 +156,7 @@ struct g6ts {
 	u8 heat_seen[G6TS_HEAT_SAMPLES];
 	u16 heat_queue[G6TS_HEAT_SAMPLES];
 	u16 heat_histogram[256];
+	u16 nsr_bins[G6TS_NSR_BINS];
 	struct g6ts_contact contacts[G6TS_MAX_CONTACTS];
 	struct g6ts_track tracks[G6TS_MAX_CONTACTS];
 	struct g6ts_assignment_workspace assignment;
@@ -189,6 +200,7 @@ struct g6ts {
 	u64 heatmap_palm_rejections;
 	u64 heatmap_small_strong_contacts;
 	u64 heatmap_weak_rejections;
+	u64 heatmap_nsr_rejections;
 	u64 heatmap_held_frames;
 	u64 tracker_matches;
 	u64 tracker_new_tracks;
@@ -202,8 +214,11 @@ struct g6ts {
 	u8 last_heat_baseline;
 	u8 last_contact_count;
 	u8 max_contact_pixels;
+	u8 nsr_bin_count;
+	u16 last_nsr_max;
 	u8 recovery_fail_streak;
 	bool heat_debug;
+	bool nsr_valid;
 	bool reset_seen;
 	bool descriptor_seen;
 	bool report_descriptor_seen;
@@ -380,6 +395,49 @@ static void g6ts_clear_last_response(struct g6ts *ts)
 	ts->last_ret = -EINPROGRESS;
 }
 
+static int g6ts_extract_nsr_metadata(struct g6ts *ts, const u8 *section,
+				     size_t section_len)
+{
+	size_t position = 7;
+
+	/* Windows starts its nested metadata dispatcher at section byte seven. */
+	while (position < section_len) {
+		size_t payload_len, record_end;
+		const u8 *record;
+		unsigned int count, i;
+
+		if (section_len - position < 4)
+			return -EPROTO;
+		record = section + position;
+		payload_len = get_unaligned_le16(record + 2);
+		if (payload_len > section_len - position - 4)
+			return -EPROTO;
+		record_end = position + 4 + payload_len;
+
+		if (record[0] == 0x04) {
+			if (ts->nsr_valid || payload_len < 4)
+				return -EPROTO;
+			count = record[4];
+			if (count > G6TS_NSR_BINS ||
+			    count > (payload_len - 4) / 4)
+				return -EPROTO;
+			memset(ts->nsr_bins, 0, sizeof(ts->nsr_bins));
+			ts->last_nsr_max = 0;
+			for (i = 0; i < count; i++) {
+				u16 value = get_unaligned_le16(record + 8 + i * 4);
+
+				ts->nsr_bins[i] = value;
+				ts->last_nsr_max = max(ts->last_nsr_max, value);
+			}
+			ts->nsr_bin_count = count;
+			ts->nsr_valid = true;
+		}
+		position = record_end;
+	}
+
+	return 0;
+}
+
 static int g6ts_extract_heatmap(struct g6ts *ts, const u8 *content,
 				 size_t content_len)
 {
@@ -399,6 +457,9 @@ static int g6ts_extract_heatmap(struct g6ts *ts, const u8 *content,
 		return -EPROTO;
 	container_end = 2 + container_len;
 	offset = 9;
+	ts->nsr_valid = false;
+	ts->nsr_bin_count = 0;
+	ts->last_nsr_max = 0;
 
 	while (offset < container_end) {
 		const u8 *section = content + offset;
@@ -415,6 +476,15 @@ static int g6ts_extract_heatmap(struct g6ts *ts, const u8 *content,
 		section_end = offset + section_len;
 		section_type = get_unaligned_le16(section + 4);
 
+		if (section_type == G6TS_METADATA_SECTION) {
+			int ret = g6ts_extract_nsr_metadata(ts, section,
+							    section_len);
+
+			if (ret)
+				return ret;
+			offset = section_end;
+			continue;
+		}
 		if (section_type != G6TS_HEAT_SECTION) {
 			offset = section_end;
 			continue;
@@ -564,6 +634,21 @@ static unsigned int g6ts_find_contacts(struct g6ts *ts)
 				continue;
 			}
 			ts->heatmap_small_strong_contacts++;
+		}
+		if (ts->nsr_valid) {
+			unsigned int sensor_row = div_u64(contact.weighted_y +
+							     contact.strength / 2,
+							     contact.strength);
+
+			if (sensor_row < ARRAY_SIZE(g6ts_nsr_row_to_bin)) {
+				u8 bin = g6ts_nsr_row_to_bin[sensor_row];
+
+				if (bin < ts->nsr_bin_count &&
+				    ts->nsr_bins[bin] > G6TS_NSR_CUTOFF) {
+					ts->heatmap_nsr_rejections++;
+					continue;
+				}
+			}
 		}
 		if (contact.pixels > G6TS_HEAT_PALM_PIXELS ||
 		    contact.max_col - contact.min_col + 1 > G6TS_HEAT_PALM_SPAN ||
@@ -1093,6 +1178,7 @@ static ssize_t state_show(struct device *dev,
 		"expected_report_descriptor_len=%u report_descriptor_len=%zu\n"
 		"mode_stage=%u mode_value=%#02x mode_enabled=%u post_mode_reset_seen=%u captured_report_len=%zu interleaved_data=%llu touch_reports=%llu heatmap_reports=%llu last_interleaved_id=%#02x last_interleaved_len=%u\n"
 		"heat_decode_errors=%llu contact_frames=%llu idle_frames=%llu last_contacts=%u heat_baseline=%#02x active_max=%u strong_max=%u palm_rejections=%llu small_strong=%llu weak_rejections=%llu held_frames=%llu max_contact_pixels=%u\n"
+		"nsr_valid=%u nsr_bins=%u nsr_max=%u nsr_cutoff=%u nsr_rejections=%llu\n"
 		"tracker_match_gate=%u tracker_hold_frames=%u tracker_matches=%llu tracker_new=%llu tracker_releases=%llu tracker_dropped=%llu\n"
 		"recovery_requests=%llu recovery_successes=%llu recovery_failures=%llu recovery_fail_streak=%u\n"
 		"last_ret=%d header_ret=%d body_ret=%d output_ret=%d pending_before=%d pending_after=%d\n"
@@ -1119,6 +1205,8 @@ static ssize_t state_show(struct device *dev,
 		ts->heatmap_small_strong_contacts,
 		ts->heatmap_weak_rejections,
 		ts->heatmap_held_frames, ts->max_contact_pixels,
+		ts->nsr_valid, ts->nsr_bin_count, ts->last_nsr_max,
+		G6TS_NSR_CUTOFF, ts->heatmap_nsr_rejections,
 		G6TS_TRACK_MATCH_MAX, G6TS_CONTACT_HOLD_FRAMES,
 		ts->tracker_matches, ts->tracker_new_tracks,
 		ts->tracker_releases, ts->tracker_dropped_contacts,

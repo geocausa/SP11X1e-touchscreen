@@ -22,6 +22,14 @@ MIN_CONTACT_PIXELS = 3
 PALM_MAX_PIXELS = 48
 PALM_MAX_SPAN = 12
 MAX_CONTACTS = 10
+WINDOWS_NSR_CUTOFF = 655
+WINDOWS_NSR_BINS = 16
+# Project 0x0C83 table at TouchPenProcessor configuration +0x0D90.
+WINDOWS_NSR_ROW_TO_BIN = (
+    0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
+    0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
+    2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
+)
 
 
 @dataclass
@@ -31,6 +39,14 @@ class Section:
     kind: int
     mode: int
     header_value: int
+    data: bytes
+
+
+@dataclass
+class MetadataRecord:
+    offset: int
+    kind: int
+    flags: int
     data: bytes
 
 
@@ -125,6 +141,63 @@ def extract_heatmap(section: Section) -> bytes:
     return bytes(output)
 
 
+def parse_metadata_records(section: Section) -> list[MetadataRecord]:
+    """Parse the exact nested stream passed to Windows' metadata dispatcher.
+
+    The dispatcher starts at byte seven of section 0xff00, so the section's
+    header-value byte is the first record type. Each record is a four-byte
+    little-endian header followed by its payload.
+    """
+    if section.kind != 0xFF00:
+        raise ValueError(f"expected section 0xff00, got {section.kind:#06x}")
+
+    records: list[MetadataRecord] = []
+    position = 7
+    while position < section.length:
+        if position + 4 > section.length:
+            raise ValueError(f"truncated metadata header at {position:#x}")
+        length = u16(section.data, position + 2)
+        end = position + 4 + length
+        if end > section.length:
+            raise ValueError(
+                f"metadata record overruns section: offset={position:#x}, "
+                f"length={length}, section={section.length}"
+            )
+        records.append(
+            MetadataRecord(
+                offset=position,
+                kind=section.data[position],
+                flags=section.data[position + 1],
+                data=section.data[position + 4 : end],
+            )
+        )
+        position = end
+    return records
+
+
+def extract_nsr_bins(section: Section) -> tuple[int, ...] | None:
+    """Return firmware TLV 0x04's per-row-group NSR values, if present."""
+    matches = [record for record in parse_metadata_records(section) if record.kind == 0x04]
+    if not matches:
+        return None
+    if len(matches) != 1:
+        raise ValueError(f"expected at most one metadata type 0x04, found {len(matches)}")
+
+    payload = matches[0].data
+    if len(payload) < 4:
+        raise ValueError("metadata type 0x04 has no count header")
+    count = payload[0]
+    if count > WINDOWS_NSR_BINS:
+        raise ValueError(f"metadata type 0x04 has invalid bin count {count}")
+    required = 4 + count * 4
+    if len(payload) < required:
+        raise ValueError(
+            f"metadata type 0x04 is truncated: count={count}, "
+            f"payload={len(payload)}, required={required}"
+        )
+    return tuple(u16(payload, 4 + index * 4) for index in range(count))
+
+
 def modal_baseline(grid: bytes) -> tuple[int, int]:
     """Match the kernel's lowest-value tie break for the modal baseline."""
     histogram = Counter(grid)
@@ -193,7 +266,10 @@ def connected_components(
 
 
 def accepted_contacts(
-    grid: bytes, baseline: int, threshold: int = HEAT_THRESHOLD
+    grid: bytes,
+    baseline: int,
+    threshold: int = HEAT_THRESHOLD,
+    nsr_bins: tuple[int, ...] | None = None,
 ) -> tuple[list[dict[str, float]], int]:
     """Apply the same minimum-size, palm, and ten-contact bounds as the driver."""
     accepted: list[dict[str, float]] = []
@@ -205,6 +281,12 @@ def accepted_contacts(
         peak_value = int(component["peak_value"])
         if pixels < MIN_CONTACT_PIXELS and peak_value > WINDOWS_STRONG_MAX:
             continue
+        if nsr_bins is not None:
+            sensor_row = int(component["row"] + 0.5)
+            if 0 <= sensor_row < len(WINDOWS_NSR_ROW_TO_BIN):
+                nsr_bin = WINDOWS_NSR_ROW_TO_BIN[sensor_row]
+                if nsr_bin < len(nsr_bins) and nsr_bins[nsr_bin] > WINDOWS_NSR_CUTOFF:
+                    continue
         if (
             pixels > PALM_MAX_PIXELS
             or row_span > PALM_MAX_SPAN
@@ -230,6 +312,9 @@ def decode(path: Path, thresholds: list[int]) -> None:
             f"kind={section.kind:#06x} mode={section.mode} header={section.header_value}"
         )
 
+    metadata_section = next((section for section in sections if section.kind == 0xFF00), None)
+    nsr_bins = extract_nsr_bins(metadata_section) if metadata_section is not None else None
+
     heat_section = next((section for section in sections if section.kind == 0x0100), None)
     if heat_section is None:
         raise ValueError("report has no 0x0100 heat section")
@@ -243,12 +328,19 @@ def decode(path: Path, thresholds: list[int]) -> None:
     for threshold in thresholds:
         components = connected_components(grid, baseline, threshold)
         useful = [component for component in components if component["pixels"] >= 2]
-        accepted, palm_rejections = accepted_contacts(grid, baseline, threshold)
+        accepted, palm_rejections = accepted_contacts(
+            grid, baseline, threshold, nsr_bins=nsr_bins
+        )
         print(
             f"threshold={threshold} active_max={WINDOWS_SIGNAL_ZERO - threshold} "
             f"components={len(components)} useful={len(useful)} "
             f"accepted={len(accepted)} palm_rejections={palm_rejections}"
         )
+        if nsr_bins is not None:
+            print(
+                f"  nsr_bins={','.join(str(value) for value in nsr_bins)} "
+                f"cutoff={WINDOWS_NSR_CUTOFF}"
+            )
         for index, component in enumerate(accepted):
             print(
                 "  "

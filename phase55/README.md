@@ -16,8 +16,8 @@ known-good Phase 52 FIFO/single-touch path.
 - Two-finger pinch and zoom on real hardware.
 - Three-finger desktop window gestures on real hardware.
 - Windows-derived fixed-threshold candidate extraction, conservative palm
-  filtering, predicted global tracking, coordinate smoothing, and bounded
-  dropout protection.
+  filtering, firmware NSR-bin gating, predicted global tracking, coordinate
+  smoothing, and bounded dropout protection.
 - Bounded recovery after the panel emits a class-3 reset.
 - High-volume GPI tracing disabled by default.
 - Known duplicate QSPI completion notices handled quietly rather than flooding
@@ -46,6 +46,9 @@ experimental kernel `7.1.1-sp11-gpicmp1+`.
   and three-finger gestures were confirmed and all contacts released cleanly.
 - All 1,381 saved Windows Heat frames passed offline regression without a
   known-good fingertip being rejected by the palm boundary.
+- All frames supplied a valid 16-bin NSR metadata record. Its maximum value was
+  2 against Windows' strict cutoff of 655, producing zero NSR rejections and no
+  change to the established corpus contacts.
 
 ## Contents
 
@@ -54,6 +57,8 @@ experimental kernel `7.1.1-sp11-gpicmp1+`.
 - `modules/g6ts_biosref.c`: HID-over-SPI client and heatmap contact tracker.
 - `dts/x1-microsoft-denali.dtsi`: exact tested Surface device-tree source.
 - `../tools/decode_heat_frame.py`: offline report-`0x12` decoder.
+- `../docs/PHASE59_NSR_METADATA.md`: exact section-`0xff00` type-`0x04` format,
+  Windows call path, row mapping, cutoff, and corpus evidence.
 
 The three modules are a matched set. Do not combine a Phase 55 module with a
 stock or Phase 54 controller/DMA module.
