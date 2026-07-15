@@ -3,7 +3,7 @@
 Experimental Linux support for the `MSHW0485` G6 touchscreen in the OLED
 Microsoft Surface Pro 11. The repository preserves two isolated paths: the
 working UEFI-derived FIFO/single-touch baseline and the hardware-validated
-Phase 55 QSPI/GPI-DMA multi-touch experiment.
+QSPI/GPI-DMA multi-touch experiment.
 
 ## Stable baseline: Phase 52
 
@@ -34,11 +34,42 @@ synthetic parser/contact tests, and regression-checks the complete 1,381-frame
 Windows corpus. See
 [docs/PHASE56_OFFLINE_HARDENING.md](docs/PHASE56_OFFLINE_HARDENING.md).
 
-It is not yet a production- or upstream-ready driver. It now includes
-adaptive per-frame baseline measurement, conservative broad-contact palm
-filtering, jitter smoothing, and one-frame dropout protection. Pressure,
-merged-contact separation, measured edge calibration, and broader kernel
-compatibility remain open. Pen support is deliberately out of scope.
+Phase 57 replaces the earlier guessed adaptive detector with the recovered
+Windows fixed-threshold, four-connected candidate extractor. Phase 58 adds
+predicted-position global assignment, finite match gating, explicit track
+lifecycle state, and the recovered exponential smoothing form. See
+[docs/WINDOWS_TOUCH_DETECTOR_RE.md](docs/WINDOWS_TOUCH_DETECTOR_RE.md),
+[docs/WINDOWS_TOUCH_TRACKER_RE.md](docs/WINDOWS_TOUCH_TRACKER_RE.md), and
+[docs/PHASE58_TRACKING_PIPELINE.md](docs/PHASE58_TRACKING_PIPELINE.md).
+
+Phase 59 adds the exact project-0x0c83 firmware NSR-bin gate: bounded parsing
+of metadata record `0x04`, its 46-row to 16-bin mapping, and Windows' strict
+cutoff of 655. The full Windows corpus reaches only 2, so this fidelity port
+does not reject any established contact. See
+[docs/PHASE59_NSR_METADATA.md](docs/PHASE59_NSR_METADATA.md).
+
+The next Windows stage is now bounded as a ten-feature, four-score statistical
+shape classifier with temporal class processing. Its architecture and decoded
+subsection layout are documented. Phase 61 adds the recovered covariance-axis
+and normalized-spread features to the offline tracer. Phase 62 proves the PSDB
+pointer path and adds a bounded extractor/scorer for a locally supplied DLL,
+without committing Microsoft data. Live filtering remains deferred until all
+ten inputs, class labels, and labelled captures are available. See
+[docs/PHASE60_CLASSIFIER_BOUNDARY.md](docs/PHASE60_CLASSIFIER_BOUNDARY.md) and
+[docs/PHASE61_OFFLINE_GEOMETRY.md](docs/PHASE61_OFFLINE_GEOMETRY.md), and
+[docs/PHASE62_PSDB_MODEL_EXTRACTOR.md](docs/PHASE62_PSDB_MODEL_EXTRACTOR.md).
+
+The Phase 59 client was subsequently built, installed, and cold-boot validated
+from the dedicated Phase 62 checkpoint entry on the experimental
+`7.1.1-sp11-gpicmp1+` kernel. The validated boot used the already proven Phase
+58 controller and GPI modules; only the touchscreen client changed. See
+[docs/PHASE62_DEPLOYMENT.md](docs/PHASE62_DEPLOYMENT.md).
+
+It is not yet production- or upstream-ready. Conservative broad-contact palm
+filtering remains while later shape classification still needs more recovery
+and labelled palm captures. Measured edge calibration, pressure, merged-contact
+separation, suspend/resume, and broader kernel compatibility remain open. Pen
+support is deliberately out of scope.
 
 ## Repository layout
 
@@ -55,11 +86,24 @@ docs/MULTITOUCH.md
 docs/WINDOWS_HEAT_PROTOCOL.md
 docs/PHASE54_GPI_DMA.md
 docs/PHASE55_DMA_MULTITOUCH.md
+docs/WINDOWS_TOUCH_DETECTOR_RE.md
+docs/WINDOWS_TOUCH_TRACKER_RE.md
+docs/PHASE58_TRACKING_PIPELINE.md
+docs/PHASE59_NSR_METADATA.md
+docs/PHASE60_CLASSIFIER_BOUNDARY.md
+docs/PHASE61_OFFLINE_GEOMETRY.md
+docs/PHASE62_PSDB_MODEL_EXTRACTOR.md
+docs/PHASE62_DEPLOYMENT.md
 phase55/
 tools/analyze_spb_etw_csv.py
 tools/decode_heat_frame.py
+tools/extract_windows_classifier.py
 tools/regress_heat_frames.py
+tools/track_heat_contacts.py
 tests/test_heat_decoder.py
+tests/test_contact_tracker.py
+tests/test_windows_classifier.py
+packaging/initramfs-tools/hooks/sp11-g6ts
 ```
 
 `spi-geni-qcom.c` is based on the exact Ubuntu Concept controller source and

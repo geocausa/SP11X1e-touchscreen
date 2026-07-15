@@ -15,8 +15,9 @@ known-good Phase 52 FIFO/single-touch path.
 - Up to ten Linux type-B multi-touch slots.
 - Two-finger pinch and zoom on real hardware.
 - Three-finger desktop window gestures on real hardware.
-- Adaptive per-frame background measurement, conservative palm filtering,
-  coordinate smoothing, and one-frame dropout protection.
+- Windows-derived fixed-threshold candidate extraction, conservative palm
+  filtering, firmware NSR-bin gating, predicted global tracking, coordinate
+  smoothing, and bounded dropout protection.
 - Bounded recovery after the panel emits a class-3 reset.
 - High-volume GPI tracing disabled by default.
 - Known duplicate QSPI completion notices handled quietly rather than flooding
@@ -45,6 +46,9 @@ experimental kernel `7.1.1-sp11-gpicmp1+`.
   and three-finger gestures were confirmed and all contacts released cleanly.
 - All 1,381 saved Windows Heat frames passed offline regression without a
   known-good fingertip being rejected by the palm boundary.
+- All frames supplied a valid 16-bin NSR metadata record. Its maximum value was
+  2 against Windows' strict cutoff of 655, producing zero NSR rejections and no
+  change to the established corpus contacts.
 
 ## Contents
 
@@ -53,6 +57,8 @@ experimental kernel `7.1.1-sp11-gpicmp1+`.
 - `modules/g6ts_biosref.c`: HID-over-SPI client and heatmap contact tracker.
 - `dts/x1-microsoft-denali.dtsi`: exact tested Surface device-tree source.
 - `../tools/decode_heat_frame.py`: offline report-`0x12` decoder.
+- `../docs/PHASE59_NSR_METADATA.md`: exact section-`0xff00` type-`0x04` format,
+  Windows call path, row mapping, cutoff, and corpus evidence.
 
 The three modules are a matched set. Do not combine a Phase 55 module with a
 stock or Phase 54 controller/DMA module.
@@ -83,12 +89,15 @@ UEFI/PRE-OS FIFO transport. Keep a separate known-good kernel/GRUB entry.
 
 ## Known limitations
 
-- Contact extraction is a simple connected-component tracker, not Microsoft's
-  complete `TouchPenProcessor0C83.dll` algorithm.
+- Candidate extraction and the core predicted assignment structure are ported
+  from `TouchPenProcessor0C83.dll`. The later four-score shape classifier's
+  architecture and tables are located, but its class labels and temporal
+  transitions are not yet proven well enough to filter live contacts.
 - Pen support is deliberately out of scope; the driver is finger-only.
 - Pressure, contact shape, and merged-finger separation are not implemented.
-- The baseline is adaptive, but edge calibration remains at the validated
-  0..32767 mapping until repeatable corner-tap measurements are available.
+- Heat-byte calibration remains identity and edge calibration remains at the
+  validated 0..32767 mapping until repeatable labelled measurements are
+  available.
 - Suspend/resume callbacks are deliberately absent while platform suspend is
   disabled because of prior whole-device crashes.
 - The unsafe captured Windows output-replay hook has been removed. Manual

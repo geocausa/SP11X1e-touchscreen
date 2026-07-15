@@ -19,10 +19,12 @@ if __package__ in (None, ""):
 
 from tools.decode_heat_frame import (
     MIN_CONTACT_PIXELS,
+    WINDOWS_NSR_CUTOFF,
     WINDOWS_STRONG_MAX,
     accepted_contacts,
     connected_components,
     extract_heatmap,
+    extract_nsr_bins,
     extract_report,
     modal_baseline,
     parse_sections,
@@ -56,12 +58,18 @@ def main() -> int:
     palm_rejections = 0
     small_strong_contacts = 0
     weak_rejections = 0
+    nsr_metadata_frames = 0
+    nsr_rejections = 0
+    nsr_value_max = 0
+    nsr_values: Counter[int] = Counter()
     errors: list[tuple[Path, str]] = []
     baselines: Counter[int] = Counter()
     contact_counts: Counter[int] = Counter()
     largest_pixels = 0
     x_values: list[float] = []
     y_values: list[float] = []
+    axis_ratios: list[float] = []
+    normalized_spreads: list[float] = []
 
     for path in iter_frames(args.paths):
         frame_count += 1
@@ -71,16 +79,33 @@ def main() -> int:
             heat_sections = [section for section in sections if section.kind == 0x0100]
             if len(heat_sections) != 1:
                 raise ValueError(f"expected one heat section, found {len(heat_sections)}")
+            metadata_sections = [
+                section for section in sections if section.kind == 0xFF00
+            ]
+            if len(metadata_sections) > 1:
+                raise ValueError(
+                    f"expected at most one metadata section, found {len(metadata_sections)}"
+                )
+            nsr_bins = (
+                extract_nsr_bins(metadata_sections[0]) if metadata_sections else None
+            )
             grid = extract_heatmap(heat_sections[0])
             baseline, _ = modal_baseline(grid)
             components = connected_components(grid, baseline)
-            contacts, rejected = accepted_contacts(grid, baseline)
+            unfiltered_contacts, _ = accepted_contacts(grid, baseline)
+            contacts, rejected = accepted_contacts(grid, baseline, nsr_bins=nsr_bins)
         except (OSError, ValueError) as error:
             errors.append((path, str(error)))
             continue
 
         baselines[baseline] += 1
         palm_rejections += rejected
+        if nsr_bins is not None:
+            nsr_metadata_frames += 1
+            nsr_rejections += max(0, len(unfiltered_contacts) - len(contacts))
+            nsr_values.update(nsr_bins)
+            if nsr_bins:
+                nsr_value_max = max(nsr_value_max, max(nsr_bins))
         for component in components:
             if int(component["pixels"]) >= MIN_CONTACT_PIXELS:
                 continue
@@ -97,12 +122,21 @@ def main() -> int:
             largest_pixels = max(largest_pixels, int(contact["pixels"]))
             x_values.append(contact["x32767"])
             y_values.append(contact["y32767"])
+            axis_ratios.append(contact["axis_ratio"])
+            normalized_spreads.append(contact["normalized_spread"])
 
     print(f"frames={frame_count} decoded={frame_count - len(errors)} errors={len(errors)}")
     print(
         f"contact_frames={contact_frames} idle_frames={idle_frames} "
         f"palm_rejections={palm_rejections} small_strong={small_strong_contacts} "
         f"weak_rejections={weak_rejections} max_contact_pixels={largest_pixels}"
+    )
+    print(
+        f"nsr_metadata_frames={nsr_metadata_frames} "
+        f"nsr_rejections={nsr_rejections} nsr_cutoff={WINDOWS_NSR_CUTOFF} "
+        f"nsr_value_max={nsr_value_max} "
+        "nsr_values="
+        + ",".join(f"{value}:{count}" for value, count in sorted(nsr_values.items()))
     )
     print(
         "baselines="
@@ -116,6 +150,12 @@ def main() -> int:
         print(
             f"observed_contact_bounds=x:{min(x_values):.1f}..{max(x_values):.1f} "
             f"y:{min(y_values):.1f}..{max(y_values):.1f}"
+        )
+        print(
+            "windows_geometry_bounds="
+            f"axis_ratio:{min(axis_ratios):.6f}..{max(axis_ratios):.6f} "
+            f"normalized_spread:{min(normalized_spreads):.6f}.."
+            f"{max(normalized_spreads):.6f}"
         )
 
     for path, message in errors[:20]:

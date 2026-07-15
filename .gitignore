@@ -12,6 +12,7 @@ modules.order
 *.dtbo
 *.bin
 *.efi
+*.dll
 *.img
 *.zip
 *.7z
