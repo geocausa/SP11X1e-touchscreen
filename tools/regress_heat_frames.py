@@ -28,7 +28,9 @@ from tools.decode_heat_frame import (
     extract_report,
     modal_baseline,
     parse_sections,
+    windows_classifier_features,
 )
+from tools.extract_windows_classifier import ProjectClassifier
 
 
 def iter_frames(paths: list[Path]):
@@ -50,7 +52,21 @@ def main() -> int:
         type=int,
         help="fail unless exactly this many frame files are processed",
     )
+    parser.add_argument(
+        "--classifier-dll",
+        type=Path,
+        help="verify floating-point and Q20.12 class winners against this DLL",
+    )
     args = parser.parse_args()
+
+    classifier = None
+    if args.classifier_dll is not None:
+        try:
+            classifier = ProjectClassifier.from_dll(
+                args.classifier_dll.read_bytes(), 0x0C83
+            )
+        except (OSError, ValueError) as error:
+            parser.error(f"cannot load classifier: {error}")
 
     frame_count = 0
     contact_frames = 0
@@ -70,6 +86,8 @@ def main() -> int:
     y_values: list[float] = []
     axis_ratios: list[float] = []
     normalized_spreads: list[float] = []
+    classifier_classes: Counter[int] = Counter()
+    classifier_mismatches = 0
 
     for path in iter_frames(args.paths):
         frame_count += 1
@@ -124,6 +142,14 @@ def main() -> int:
             y_values.append(contact["y32767"])
             axis_ratios.append(contact["axis_ratio"])
             normalized_spreads.append(contact["normalized_spread"])
+            if classifier is not None:
+                features = windows_classifier_features(grid, contact)
+                floating = classifier.scores(features, 0)
+                fixed = classifier.fixed_scores(features, 0)
+                floating_class = max(range(len(floating)), key=floating.__getitem__)
+                fixed_class = max(range(len(fixed)), key=fixed.__getitem__)
+                classifier_classes[fixed_class] += 1
+                classifier_mismatches += floating_class != fixed_class
 
     print(f"frames={frame_count} decoded={frame_count - len(errors)} errors={len(errors)}")
     print(
@@ -157,6 +183,15 @@ def main() -> int:
             f"normalized_spread:{min(normalized_spreads):.6f}.."
             f"{max(normalized_spreads):.6f}"
         )
+    if classifier is not None:
+        print(
+            "classifier_classes="
+            + ",".join(
+                f"{value}:{count}"
+                for value, count in sorted(classifier_classes.items())
+            )
+            + f" fixed_point_mismatches={classifier_mismatches}"
+        )
 
     for path, message in errors[:20]:
         print(f"ERROR {path}: {message}", file=sys.stderr)
@@ -169,7 +204,7 @@ def main() -> int:
             file=sys.stderr,
         )
         return 1
-    return 1 if errors else 0
+    return 1 if errors or classifier_mismatches else 0
 
 
 if __name__ == "__main__":

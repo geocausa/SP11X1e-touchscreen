@@ -27,6 +27,20 @@ WINDOWS_NSR_CUTOFF = 655
 WINDOWS_NSR_BINS = 16
 WINDOWS_AXIS_SCALE = 4.618800163269043
 WINDOWS_SPREAD_SCALE = 6.2831854820251465
+# TouchPenProcessor's byte-to-signal lookup is initialized by FUN_180043e58.
+# The project-0x0c83 secondary detector then interpolates three thresholds
+# between its 0.05 floor and the candidate peak less the 0.02 noise margin.
+WINDOWS_LOOKUP_BASE = 0.6000000238418579
+WINDOWS_LOOKUP_INTERCEPT = 1.0 - WINDOWS_LOOKUP_BASE
+WINDOWS_LOOKUP_STEP = 0.002220354275777936
+WINDOWS_SECONDARY_FLOOR = 0.05000000074505806
+WINDOWS_SECONDARY_NOISE = 0.019999999552965164
+WINDOWS_SECONDARY_SEED = 0.054999999701976776
+WINDOWS_SECONDARY_FRACTIONS = (0.5, 0.75, 0.875)
+WINDOWS_HALO_PEAK_FRACTION = 0.25
+WINDOWS_HALO_RING_RATIOS = (0.15000000596046448, 0.15000000596046448)
+WINDOWS_HALO_EPSILON = 0.00009999999747378752
+WINDOWS_HALO_UNAVAILABLE = 100.0
 # Project 0x0C83 table at TouchPenProcessor configuration +0x0D90.
 WINDOWS_NSR_ROW_TO_BIN = (
     0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
@@ -208,9 +222,14 @@ def modal_baseline(grid: bytes) -> tuple[int, int]:
     return baseline, histogram[baseline]
 
 
+def windows_signal(value: int) -> float:
+    """Return the linear calibrated signal used by project 0x0c83."""
+    return WINDOWS_LOOKUP_INTERCEPT - WINDOWS_LOOKUP_STEP * value
+
+
 def connected_components(
     grid: bytes, baseline: int, threshold: int = HEAT_THRESHOLD
-) -> list[dict[str, float]]:
+) -> list[dict[str, object]]:
     """Build the four-connected candidates used by the Windows detector.
 
     ``baseline`` is retained for diagnostics and API compatibility.  Windows
@@ -245,24 +264,31 @@ def connected_components(
                     queue.append(neighbour)
 
         total = sum(strength[index] for index in pixels)
+        signal_total = sum(windows_signal(grid[index]) for index in pixels)
         rows = [index // GRID_COLS for index in pixels]
         cols = [index % GRID_COLS for index in pixels]
         weighted_row = sum((index // GRID_COLS) * strength[index] for index in pixels) / total
         weighted_col = sum((index % GRID_COLS) * strength[index] for index in pixels) / total
+        geometry_row = sum(
+            (index // GRID_COLS) * windows_signal(grid[index]) for index in pixels
+        ) / signal_total
+        geometry_col = sum(
+            (index % GRID_COLS) * windows_signal(grid[index]) for index in pixels
+        ) / signal_total
         variance_row = sum(
-            strength[index] * ((index // GRID_COLS) - weighted_row) ** 2
+            windows_signal(grid[index]) * ((index // GRID_COLS) - geometry_row) ** 2
             for index in pixels
-        ) / total
+        ) / signal_total
         variance_col = sum(
-            strength[index] * ((index % GRID_COLS) - weighted_col) ** 2
+            windows_signal(grid[index]) * ((index % GRID_COLS) - geometry_col) ** 2
             for index in pixels
-        ) / total
+        ) / signal_total
         covariance = sum(
-            strength[index]
-            * ((index // GRID_COLS) - weighted_row)
-            * ((index % GRID_COLS) - weighted_col)
+            windows_signal(grid[index])
+            * ((index // GRID_COLS) - geometry_row)
+            * ((index % GRID_COLS) - geometry_col)
             for index in pixels
-        ) / total
+        ) / signal_total
         trace = variance_row + variance_col
         discriminant = math.sqrt(
             max(0.0, (variance_row - variance_col) ** 2 + 4.0 * covariance**2)
@@ -297,10 +323,178 @@ def connected_components(
                 "minor_axis": minor_axis,
                 "axis_ratio": axis_ratio,
                 "normalized_spread": normalized_spread,
+                # Retained for faithful secondary-detector and halo passes.
+                # Command-line output deliberately does not expose this list.
+                "pixel_indices": tuple(pixels),
             }
         )
     components.sort(key=lambda item: item["strength"], reverse=True)
     return components
+
+
+def secondary_detector_features(
+    grid: bytes, component: dict[str, object]
+) -> tuple[int, int, int, int, int, int]:
+    """Mirror the three project-0x0c83 component reruns.
+
+    FUN_180048838 derives three candidate-local thresholds. FUN_180047a98,
+    FUN_180047cf8 and FUN_180045d98 then relabel four-connected pixels from
+    the original candidate, merge equivalences, and retain islands with more
+    than two cells or a peak above the 0.055 strong-seed threshold.
+    """
+    pixels = set(component["pixel_indices"])
+    peak_signal = windows_signal(int(component["peak_value"]))
+    results: list[int] = []
+
+    # FUN_180041fd8 initializes every rerun to the undivided candidate. It
+    # only invokes FUN_180048838 for a sufficiently strong, bounded blob.
+    area = (
+        (int(component["col_max"]) - int(component["col_min"]) + 1)
+        * (int(component["row_max"]) - int(component["row_min"]) + 1)
+    )
+    if area >= 0x4E3 or peak_signal <= WINDOWS_SECONDARY_FLOOR + WINDOWS_SECONDARY_NOISE:
+        point_count = int(component["pixels"])
+        return (1, point_count, 1, point_count, 1, point_count)
+
+    for fraction in WINDOWS_SECONDARY_FRACTIONS:
+        threshold = WINDOWS_SECONDARY_FLOOR + (
+            peak_signal - WINDOWS_SECONDARY_NOISE - WINDOWS_SECONDARY_FLOOR
+        ) * fraction
+        cutoff = int(
+            ((1.0 - threshold) - WINDOWS_LOOKUP_BASE) / WINDOWS_LOOKUP_STEP + 0.5
+        ) & 0xFF
+        eligible = {index for index in pixels if grid[index] <= cutoff}
+        islands: list[list[int]] = []
+
+        while eligible:
+            start = eligible.pop()
+            queue = deque([start])
+            island = [start]
+            while queue:
+                index = queue.popleft()
+                row, col = divmod(index, GRID_COLS)
+                for dr, dc in ((-1, 0), (0, -1), (0, 1), (1, 0)):
+                    nr, nc = row + dr, col + dc
+                    neighbour = nr * GRID_COLS + nc
+                    if (
+                        0 <= nr < GRID_ROWS
+                        and 0 <= nc < GRID_COLS
+                        and neighbour in eligible
+                    ):
+                        eligible.remove(neighbour)
+                        queue.append(neighbour)
+                        island.append(neighbour)
+
+            island_peak = windows_signal(min(grid[index] for index in island))
+            if len(island) > 2 or island_peak > WINDOWS_SECONDARY_SEED:
+                islands.append(island)
+
+        results.extend((len(islands), max(map(len, islands), default=0)))
+
+    return tuple(results)  # type: ignore[return-value]
+
+
+def halo_ratio(grid: bytes, component: dict[str, object]) -> float:
+    """Mirror FUN_1800432a0/FUN_1800434d8's bounded two-ring walk."""
+    col_min = int(component["col_min"])
+    col_max = int(component["col_max"])
+    row_min = int(component["row_min"])
+    row_max = int(component["row_max"])
+    if col_max - col_min + 1 >= 11 or row_max - row_min + 1 >= 11:
+        return WINDOWS_HALO_UNAVAILABLE
+
+    core = set(component["pixel_indices"])
+    peak_signal = windows_signal(int(component["peak_value"]))
+    peak_threshold = peak_signal * WINDOWS_HALO_PEAK_FRACTION
+    # Windows uses a fixed 16x16 scratch tile with a three-cell border:
+    # 0=core, 1..3=walk depth, 4=available background, 5=unavailable.
+    state = [[5 for _ in range(16)] for _ in range(16)]
+    origin_col = col_min - 3
+    origin_row = row_min - 3
+
+    for row in range(max(0, row_min - 3), min(GRID_ROWS - 1, row_max + 3) + 1):
+        for col in range(max(0, col_min - 3), min(GRID_COLS - 1, col_max + 3) + 1):
+            local_row = row - origin_row
+            local_col = col - origin_col
+            index = row * GRID_COLS + col
+            if index in core:
+                state[local_row][local_col] = 0
+            elif grid[index] <= WINDOWS_ACTIVE_MAX:
+                # A neighbouring primary candidate is not halo background.
+                state[local_row][local_col] = 5
+            else:
+                state[local_row][local_col] = 4
+
+    neighbours = ((-1, 0), (0, -1), (1, 0), (0, 1))
+    for row in range(row_min, row_max + 1):
+        for col in range(col_min, col_max + 1):
+            local_row = row - origin_row
+            local_col = col - origin_col
+            if state[local_row][local_col] != 0:
+                continue
+            for dc, dr in neighbours:
+                nr, nc = row + dr, col + dc
+                lr, lc = nr - origin_row, nc - origin_col
+                if (
+                    0 <= nr < GRID_ROWS
+                    and 0 <= nc < GRID_COLS
+                    and state[lr][lc] == 4
+                    and windows_signal(grid[nr * GRID_COLS + nc]) > peak_threshold
+                ):
+                    state[lr][lc] = 1
+
+    halo_energy = 0.0
+    for radius, ring_ratio in enumerate(WINDOWS_HALO_RING_RATIOS, start=1):
+        row_start = max(0, row_min - radius)
+        row_end = min(GRID_ROWS - 1, row_max + radius)
+        col_start = max(0, col_min - radius)
+        col_end = min(GRID_COLS - 1, col_max + radius)
+        for row in range(row_start, row_end + 1):
+            for col in range(col_start, col_end + 1):
+                local_row = row - origin_row
+                local_col = col - origin_col
+                if state[local_row][local_col] > radius:
+                    continue
+                current = windows_signal(grid[row * GRID_COLS + col])
+                for dc, dr in neighbours:
+                    nr, nc = row + dr, col + dc
+                    lr, lc = nr - origin_row, nc - origin_col
+                    if not (
+                        0 <= nr < GRID_ROWS
+                        and 0 <= nc < GRID_COLS
+                        and state[lr][lc] == 4
+                    ):
+                        continue
+                    neighbour = windows_signal(grid[nr * GRID_COLS + nc])
+                    if (
+                        neighbour < peak_threshold
+                        and current > neighbour
+                        and current != 0.0
+                        and neighbour / current > ring_ratio - WINDOWS_HALO_EPSILON
+                    ):
+                        state[lr][lc] = radius + 1
+                        halo_energy += neighbour
+
+    return halo_energy / peak_signal if peak_signal != 0.0 else WINDOWS_HALO_UNAVAILABLE
+
+
+def windows_classifier_features(
+    grid: bytes, component: dict[str, object]
+) -> tuple[float, ...]:
+    """Assemble the ten inputs consumed by FUN_1800406a8."""
+    secondary = secondary_detector_features(grid, component)
+    return (
+        float(component["pixels"]),
+        float(secondary[1]),
+        float(secondary[3]),
+        float(secondary[5]),
+        float(secondary[0]),
+        float(secondary[2]),
+        float(secondary[4]),
+        float(component["axis_ratio"]),
+        float(component["normalized_spread"]),
+        halo_ratio(grid, component),
+    )
 
 
 def accepted_contacts(

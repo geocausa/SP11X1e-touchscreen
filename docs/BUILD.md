@@ -52,11 +52,52 @@ modinfo -F vermagic spi-geni-qcom.ko
 modinfo -F vermagic g6ts_biosref.ko
 ```
 
+The Phase 65 keyboard-latency boot image must embed both the matched
+`spi-geni-qcom.ko` and `g6ts_biosref.ko`. Reusing an older installed
+controller module reintroduces successful-transfer `INFO` logging and defeats
+the latency test. Assemble it only as a separate initramfs and verify the
+embedded module source versions before rebooting.
+
 Run the hardware-independent checks with:
 
 ```bash
 make test
 python3 -m compileall -q tools tests
+```
+
+With a locally mounted Windows installation and saved Heat corpus, the full
+Phase 67 fidelity regression is:
+
+```bash
+python3 tools/regress_heat_frames.py \
+  --expect-frames 1381 \
+  --classifier-dll /path/to/TouchPenProcessor0C83.dll \
+  /path/to/etw_3636_frames_20260506
+```
+
+The DLL and captures are read-only inputs and are not copied into the tree.
+
+After committing a verified tree and building the matched GCC modules, create
+the redistributable source/module artifact with:
+
+```bash
+scripts/package_phase67.sh
+```
+
+The packager refuses dirty source, missing modules, or a mismatched vermagic.
+It includes the complete GPL source snapshot, the three exact-target modules,
+build identity, and SHA-256 manifests. It does not include Microsoft files.
+
+The Phase 64 panel profile is checked in as generated configuration. To
+reproduce it from a locally supplied Windows component without copying the DLL
+into the repository:
+
+```bash
+python3 tools/generate_classifier_header.py \
+  /path/to/TouchPenProcessor0C83.dll \
+  > /tmp/g6ts_classifier_profile.h
+cmp /tmp/g6ts_classifier_profile.h \
+  phase55/modules/g6ts_classifier_profile.h
 ```
 
 ## Device tree

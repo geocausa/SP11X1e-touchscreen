@@ -920,6 +920,7 @@ static inline void gpi_write_ch_db(struct gchan *gchan,
 			 gpi_qspi_side_name(gchan->chid), gchan->chid, &p_wp,
 			 upper_32_bits(p_wp), lower_32_bits(p_wp));
 	gpi_write_reg(gpii, gchan->ch_cntxt_db_reg + 4, upper_32_bits(p_wp));
+	/* The high doorbell half must be visible before the low half commits it. */
 	wmb();
 	gpi_write_reg(gpii, gchan->ch_cntxt_db_reg, lower_32_bits(p_wp));
 }
@@ -932,6 +933,7 @@ static inline void gpi_write_ev_db(struct gpii *gpii,
 
 	p_wp = ring->phys_addr + (wp - ring->base);
 	gpi_write_reg(gpii, gpii->ev_cntxt_db_reg + 4, upper_32_bits(p_wp));
+	/* The high doorbell half must be visible before the low half commits it. */
 	wmb();
 	gpi_write_reg(gpii, gpii->ev_cntxt_db_reg, lower_32_bits(p_wp));
 }
@@ -1390,25 +1392,26 @@ static void gpi_process_events(struct gpii *gpii)
 				chid, type, gpi_event->gpi_ere.dword[0],
 				gpi_event->gpi_ere.dword[1], gpi_event->gpi_ere.dword[2],
 				gpi_event->gpi_ere.dword[3]);
-				if (gpii_has_active_qspi(gpii)) {
-					dev_dbg(gpii->gpi_dev->dev,
-						 "SP11 QSPI raw event sw_rp:%pa hw_rp:%pa chid:%u type:%02x code:%u len:%u ptr:%pa raw:%08x:%08x:%08x:%08x\n",
-						 &(phys_addr_t){ to_physical(ev_ring, ev_ring->rp) },
-						 &cntxt_rp, chid, type,
-						 gpi_event->xfer_compl_event.code,
-					 gpi_event->xfer_compl_event.length,
-					 &(phys_addr_t){ gpi_event->xfer_compl_event.ptr },
-						 gpi_event->gpi_ere.dword[0],
-						 gpi_event->gpi_ere.dword[1],
-						 gpi_event->gpi_ere.dword[2],
-						 gpi_event->gpi_ere.dword[3]);
-					gpi_sp11_dump_state(gpii,
-							    chid < MAX_CHANNELS_PER_GPII ?
-							    &gpii->gchan[chid] : NULL,
-							    "event", 0);
-				}
+			if (gpii_has_active_qspi(gpii)) {
+				dev_dbg(gpii->gpi_dev->dev,
+					"SP11 QSPI event chid:%u type:%02x code:%u len:%u ptr:%pa\n",
+					chid, type, gpi_event->xfer_compl_event.code,
+					gpi_event->xfer_compl_event.length,
+					&(phys_addr_t){
+						gpi_event->xfer_compl_event.ptr });
+				dev_dbg(gpii->gpi_dev->dev,
+					"SP11 QSPI raw %08x:%08x:%08x:%08x\n",
+					gpi_event->gpi_ere.dword[0],
+					gpi_event->gpi_ere.dword[1],
+					gpi_event->gpi_ere.dword[2],
+					gpi_event->gpi_ere.dword[3]);
+				gpi_sp11_dump_state(gpii,
+						    chid < MAX_CHANNELS_PER_GPII ?
+						    &gpii->gchan[chid] : NULL,
+						    "event", 0);
+			}
 
-				switch (type) {
+			switch (type) {
 			case XFER_COMPLETE_EV_TYPE:
 				gchan = &gpii->gchan[chid];
 				gpi_process_xfer_compl_event(gchan,

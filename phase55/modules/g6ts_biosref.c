@@ -14,6 +14,7 @@
 #include <linux/jiffies.h>
 #include <linux/kernel.h>
 #include <linux/math.h>
+#include <linux/math64.h>
 #include <linux/module.h>
 #include <linux/mutex.h>
 #include <linux/pm.h>
@@ -22,6 +23,8 @@
 #include <linux/unaligned.h>
 #include <linux/workqueue.h>
 
+#include "g6ts_classifier_profile.h"
+
 #define G6TS_NAME			"microsoft-g6ts"
 #define G6TS_SPI_HZ			40000000U
 #define G6TS_MAX_BODY			8192U
@@ -29,6 +32,8 @@
 #define G6TS_HEADER_VERSION		0x03
 #define G6TS_FEATURE_RESPONSE_LIMIT	64U
 #define G6TS_HEATMAP_REPORT_ID		0x12
+#define G6TS_ETW_PROFILE_LO		0x1a
+#define G6TS_ETW_PROFILE_HI		0x03
 #define G6TS_MODE_ATTEMPT_LIMIT		3U
 #define G6TS_RECOVERY_DELAY_MS		100U
 #define G6TS_RECOVERY_RETRY_MS		500U
@@ -65,6 +70,15 @@
 #define G6TS_TRACK_SPLIT_RADIUS		2048U
 #define G6TS_SMOOTH_STATIONARY_MAX	64U
 #define G6TS_SMOOTH_SLOW_MAX		256U
+#define G6TS_SIGNAL_INTERCEPT_Q24	6710886
+#define G6TS_SIGNAL_STEP_Q24		37251
+#define G6TS_SECONDARY_A_Q12		645663
+#define G6TS_SECONDARY_NOISE_Q12	36895
+#define G6TS_SECONDARY_SEED_Q12		225
+#define G6TS_AXIS_SCALE_Q12		18919
+#define G6TS_SPREAD_SCALE_Q12		25736
+#define G6TS_HALO_RATIO_Q12		614
+#define G6TS_HALO_UNAVAILABLE_Q12	(100U << G6TS_CLASSIFIER_SHIFT)
 #define G6TS_ASSIGN_MAX			(G6TS_MAX_CONTACTS * 2U)
 #define G6TS_ASSIGN_UNMATCHED_COST	1000000
 #define G6TS_ASSIGN_INVALID_COST	3000000
@@ -91,6 +105,33 @@ static const u8 g6ts_mode_handshake[] = {
 	0xbc, 0xe6, 0x4a, 0x2e, 0x86, 0x78, 0x00,
 };
 
+/*
+ * Windows obtains report 0x60, performs these four report-0x65 exchanges,
+ * and only then enters the heat personality.  These are volatile HID output
+ * reports; they neither update firmware nor write persistent calibration.
+ */
+static const u8 g6ts_output65[][16] = {
+	{ 0x00, 0x00, 0xff, 0xa0 },
+	{ 0x01, 0x00, 0xff, 0xa0 },
+	{ 0x00, 0x00, 0x12, 0xa0, 0x89, 0x14, 0x00, 0x3f,
+	  0xff, 0xff, 0xff, 0xff, 0x04, 0x04, 0x75, 0x00 },
+	{ 0x02, 0x00, 0xff, 0xa0 },
+};
+
+/* Firmware 63.20.137 (0x3f001489), the exact build in the complete ETW run. */
+static const u8 g6ts_etw_firmware_version[] = { 0x89, 0x14, 0x00, 0x3f };
+
+/* Windows HidWriteReport payloads for the project-0x0c83 Heat collection. */
+static const u8 g6ts_output09_a1_template[63] = {
+	[0] = 0x8e, [1] = 0xa1, [2] = 0x01,
+	[4] = 0x90, [5] = 0x01,
+};
+
+static const u8 g6ts_output09_a5_template[63] = {
+	[0] = 0x8e, [1] = 0xa5, [3] = 0x02,
+	[46] = 0x40,
+};
+
 /* TouchPenProcessor project-0x0c83 sensor-row to NSR-bin mapping. */
 static const u8 g6ts_nsr_row_to_bin[G6TS_HEAT_ROWS] = {
 	0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
@@ -110,6 +151,9 @@ struct g6ts_contact {
 	u8 max_col;
 	u8 min_row;
 	u8 max_row;
+	s32 features_q12[G6TS_FEATURE_COUNT];
+	u8 shape_class;
+	bool shape_allowed;
 };
 
 struct g6ts_track {
@@ -125,6 +169,7 @@ struct g6ts_track {
 	u8 missed;
 	u8 evidence;
 	u8 required_evidence;
+	u8 shape_class;
 	bool active;
 	bool confirmed;
 };
@@ -152,6 +197,8 @@ struct g6ts {
 	u8 *body;
 	u8 heatmap[G6TS_HEAT_SAMPLES];
 	u8 heat_seen[G6TS_HEAT_SAMPLES];
+	u8 heat_component[G6TS_HEAT_SAMPLES];
+	u8 heat_work[G6TS_HEAT_SAMPLES];
 	u16 heat_queue[G6TS_HEAT_SAMPLES];
 	u16 nsr_bins[G6TS_NSR_BINS];
 	struct g6ts_contact contacts[G6TS_MAX_CONTACTS];
@@ -163,10 +210,16 @@ struct g6ts {
 	u16 last_content_len;
 	u16 expected_report_descriptor_len;
 	u8 last_content_id;
+	u8 heat_profile[2];
 	int interrupt_irq;
 	atomic64_t interrupt_edges;
 	s64 handled_interrupt_edges;
+	u64 reset_notifications;
+	u64 recovery_successes;
+	u64 recovery_failures;
+	unsigned long last_reset_jiffies;
 	u8 nsr_bin_count;
+	u8 initialization_stage;
 	u8 recovery_fail_streak;
 	bool nsr_valid;
 	bool mode_enabled;
@@ -203,19 +256,26 @@ static int g6ts_power_on(struct g6ts *ts)
 		return dev_err_probe(&ts->spi->dev, ret,
 				     "ACPI _PS0 failed\n");
 
-	return g6ts_acpi_method(&ts->spi->dev, "_RST");
+	ret = g6ts_acpi_method(&ts->spi->dev, "_RST");
+	if (ret) {
+		g6ts_acpi_method(&ts->spi->dev, "_PS3");
+		return dev_err_probe(&ts->spi->dev, ret,
+				     "ACPI _RST failed\n");
+	}
+
+	return 0;
 }
 
-static void g6ts_power_off(struct g6ts *ts)
+static int g6ts_power_off(struct g6ts *ts)
 {
 	if (ts->power_gpio && ts->reset_gpio) {
 		gpiod_set_value_cansleep(ts->reset_gpio, 0);
 		usleep_range(10000, 12000);
 		gpiod_set_value_cansleep(ts->power_gpio, 0);
-		return;
+		return 0;
 	}
 
-	g6ts_acpi_method(&ts->spi->dev, "_PS3");
+	return g6ts_acpi_method(&ts->spi->dev, "_PS3");
 }
 
 /*
@@ -481,6 +541,317 @@ static void g6ts_store_contact(struct g6ts *ts,
 		ts->contacts[weakest] = *contact;
 }
 
+static s32 g6ts_signal_q12(u8 value)
+{
+	s32 signal_q24 = G6TS_SIGNAL_INTERCEPT_Q24 -
+			 value * G6TS_SIGNAL_STEP_Q24;
+
+	return (signal_q24 + BIT(G6TS_CLASSIFIER_SHIFT - 1)) >>
+		G6TS_CLASSIFIER_SHIFT;
+}
+
+static u8 g6ts_secondary_cutoff(u8 peak_value, unsigned int pass)
+{
+	static const u16 fractions_q12[] = { 2048, 3072, 3584 };
+	u32 fraction = fractions_q12[pass];
+	u64 cutoff_q24;
+	u32 cutoff_q12;
+
+	cutoff_q24 = (u64)((1U << G6TS_CLASSIFIER_SHIFT) - fraction) *
+		      G6TS_SECONDARY_A_Q12;
+	cutoff_q24 += (u64)fraction *
+		       ((peak_value << G6TS_CLASSIFIER_SHIFT) +
+			G6TS_SECONDARY_NOISE_Q12);
+	cutoff_q12 = (cutoff_q24 + BIT(G6TS_CLASSIFIER_SHIFT - 1)) >>
+		      G6TS_CLASSIFIER_SHIFT;
+	return min_t(u32, U8_MAX,
+		     (cutoff_q12 + BIT(G6TS_CLASSIFIER_SHIFT - 1)) >>
+		     G6TS_CLASSIFIER_SHIFT);
+}
+
+static bool g6ts_secondary_neighbour(const struct g6ts *ts, int row, int col,
+				     u8 cutoff)
+{
+	unsigned int index;
+
+	if (row < 0 || row >= G6TS_HEAT_ROWS ||
+	    col < 0 || col >= G6TS_HEAT_COLS)
+		return false;
+	index = row * G6TS_HEAT_COLS + col;
+	return ts->heat_component[index] && !ts->heat_work[index] &&
+	       ts->heatmap[index] <= cutoff;
+}
+
+static void g6ts_secondary_features(struct g6ts *ts,
+				    struct g6ts_contact *contact)
+{
+	static const s8 neighbours[][2] = {
+		{ -1, 0 }, { 0, -1 }, { 1, 0 }, { 0, 1 },
+	};
+	unsigned int area = (contact->max_col - contact->min_col + 1) *
+			    (contact->max_row - contact->min_row + 1);
+	unsigned int pass;
+
+	for (pass = 0; pass < 3; pass++) {
+		contact->features_q12[1 + pass] =
+			contact->pixels << G6TS_CLASSIFIER_SHIFT;
+		contact->features_q12[4 + pass] = 1U << G6TS_CLASSIFIER_SHIFT;
+	}
+	/* FUN_180041fd8 only reruns bounded candidates above 0.05 + 0.02. */
+	if (area >= 0x4e3 || g6ts_signal_q12(contact->peak_value) <= 287)
+		return;
+
+	for (pass = 0; pass < 3; pass++) {
+		u8 cutoff = g6ts_secondary_cutoff(contact->peak_value, pass);
+		unsigned int accepted = 0, largest = 0, start;
+
+		memset(ts->heat_work, 0, sizeof(ts->heat_work));
+		for (start = 0; start < G6TS_HEAT_SAMPLES; start++) {
+			unsigned int head = 0, tail = 0, pixels = 0;
+			u8 peak = U8_MAX;
+
+			if (!ts->heat_component[start] || ts->heat_work[start] ||
+			    ts->heatmap[start] > cutoff)
+				continue;
+			ts->heat_work[start] = 1;
+			ts->heat_queue[tail++] = start;
+			while (head < tail) {
+				unsigned int index = ts->heat_queue[head++];
+				unsigned int row = index / G6TS_HEAT_COLS;
+				unsigned int col = index % G6TS_HEAT_COLS;
+				unsigned int n;
+
+				pixels++;
+				peak = min_t(u8, peak, ts->heatmap[index]);
+				for (n = 0; n < ARRAY_SIZE(neighbours); n++) {
+					int nr = row + neighbours[n][1];
+					int nc = col + neighbours[n][0];
+					unsigned int neighbour;
+
+					if (!g6ts_secondary_neighbour(ts, nr, nc, cutoff))
+						continue;
+					neighbour = nr * G6TS_HEAT_COLS + nc;
+					ts->heat_work[neighbour] = 1;
+					ts->heat_queue[tail++] = neighbour;
+				}
+			}
+			if (pixels <= 2 &&
+			    g6ts_signal_q12(peak) <= G6TS_SECONDARY_SEED_Q12)
+				continue;
+			accepted++;
+			largest = max(largest, pixels);
+		}
+		contact->features_q12[1 + pass] =
+			largest << G6TS_CLASSIFIER_SHIFT;
+		contact->features_q12[4 + pass] =
+			accepted << G6TS_CLASSIFIER_SHIFT;
+	}
+}
+
+static void g6ts_geometry_features(struct g6ts *ts,
+				   struct g6ts_contact *contact)
+{
+	u64 sum = 0, sum_x = 0, sum_y = 0;
+	u64 sum_xx = 0, sum_yy = 0, sum_xy = 0;
+	s64 var_x, var_y, covariance, trace, delta, discriminant;
+	u64 denominator;
+	u32 major_axis, minor_axis;
+	unsigned int index;
+
+	for (index = 0; index < G6TS_HEAT_SAMPLES; index++) {
+		u32 row, col;
+		s32 signal;
+
+		if (!ts->heat_component[index])
+			continue;
+		row = index / G6TS_HEAT_COLS;
+		col = index % G6TS_HEAT_COLS;
+		signal = g6ts_signal_q12(ts->heatmap[index]);
+		if (signal <= 0)
+			continue;
+		sum += signal;
+		sum_x += (u64)signal * col;
+		sum_y += (u64)signal * row;
+		sum_xx += (u64)signal * col * col;
+		sum_yy += (u64)signal * row * row;
+		sum_xy += (u64)signal * col * row;
+	}
+	if (!sum) {
+		contact->features_q12[7] = 1U << G6TS_CLASSIFIER_SHIFT;
+		contact->features_q12[8] = 1U << G6TS_CLASSIFIER_SHIFT;
+		return;
+	}
+
+	denominator = sum * sum;
+	var_x = div64_s64(((s64)(sum_xx * sum) - (s64)(sum_x * sum_x)) *
+			    (1U << G6TS_CLASSIFIER_SHIFT), denominator);
+	var_y = div64_s64(((s64)(sum_yy * sum) - (s64)(sum_y * sum_y)) *
+			    (1U << G6TS_CLASSIFIER_SHIFT), denominator);
+	covariance = div64_s64(((s64)(sum_xy * sum) - (s64)(sum_x * sum_y)) *
+				 (1U << G6TS_CLASSIFIER_SHIFT), denominator);
+	trace = max_t(s64, 0, var_x + var_y);
+	delta = var_x - var_y;
+	discriminant = int_sqrt64(delta * delta + 4 * covariance * covariance);
+	major_axis = int_sqrt64(((trace + discriminant) / 2) <<
+				 G6TS_CLASSIFIER_SHIFT);
+	minor_axis = int_sqrt64(max_t(s64, 0, (trace - discriminant) / 2) <<
+				 G6TS_CLASSIFIER_SHIFT);
+	major_axis = max_t(u32, 1U << G6TS_CLASSIFIER_SHIFT,
+			   ((u64)major_axis * G6TS_AXIS_SCALE_Q12) >>
+			   G6TS_CLASSIFIER_SHIFT);
+	minor_axis = max_t(u32, 1U << G6TS_CLASSIFIER_SHIFT,
+			   ((u64)minor_axis * G6TS_AXIS_SCALE_Q12) >>
+			   G6TS_CLASSIFIER_SHIFT);
+	contact->features_q12[7] = div_u64((u64)major_axis <<
+					   G6TS_CLASSIFIER_SHIFT, minor_axis);
+	if (contact->pixels < 2) {
+		contact->features_q12[8] = 1U << G6TS_CLASSIFIER_SHIFT;
+	} else {
+		s64 spread = trace * G6TS_SPREAD_SCALE_Q12;
+		u32 samples = (1U << G6TS_CLASSIFIER_SHIFT) *
+			      (contact->pixels - 1);
+
+		contact->features_q12[8] = div64_s64(spread, samples);
+	}
+}
+
+static s32 g6ts_halo_feature(struct g6ts *ts,
+			     const struct g6ts_contact *contact)
+{
+	static const s8 neighbours[][2] = {
+		{ -1, 0 }, { 0, -1 }, { 1, 0 }, { 0, 1 },
+	};
+	u8 state[16][16];
+	int origin_col = contact->min_col - 3;
+	int origin_row = contact->min_row - 3;
+	s32 peak = g6ts_signal_q12(contact->peak_value);
+	s32 peak_threshold = peak / 4;
+	s64 halo = 0;
+	unsigned int radius, n;
+	int row, col;
+
+	if (contact->max_col - contact->min_col + 1 >= 11 ||
+	    contact->max_row - contact->min_row + 1 >= 11 || peak <= 0)
+		return G6TS_HALO_UNAVAILABLE_Q12;
+	memset(state, 5, sizeof(state));
+	for (row = max(0, origin_row); row <=
+		     min_t(int, G6TS_HEAT_ROWS - 1, contact->max_row + 3); row++) {
+		for (col = max(0, origin_col); col <=
+		     min_t(int, G6TS_HEAT_COLS - 1, contact->max_col + 3); col++) {
+			unsigned int index = row * G6TS_HEAT_COLS + col;
+
+			if (ts->heat_component[index])
+				state[row - origin_row][col - origin_col] = 0;
+			else if (!g6ts_heat_active(ts, index))
+				state[row - origin_row][col - origin_col] = 4;
+		}
+	}
+	for (row = contact->min_row; row <= contact->max_row; row++) {
+		for (col = contact->min_col; col <= contact->max_col; col++) {
+			if (state[row - origin_row][col - origin_col])
+				continue;
+			for (n = 0; n < ARRAY_SIZE(neighbours); n++) {
+				int nc = col + neighbours[n][0];
+				int nr = row + neighbours[n][1];
+
+				if (nr < 0 || nr >= G6TS_HEAT_ROWS || nc < 0 ||
+				    nc >= G6TS_HEAT_COLS ||
+				    state[nr - origin_row][nc - origin_col] != 4)
+					continue;
+				if (g6ts_signal_q12(ts->heatmap[nr * G6TS_HEAT_COLS + nc]) >
+				    peak_threshold)
+					state[nr - origin_row][nc - origin_col] = 1;
+			}
+		}
+	}
+	for (radius = 1; radius <= 2; radius++) {
+		for (row = max_t(int, 0, contact->min_row - radius); row <=
+		     min_t(int, G6TS_HEAT_ROWS - 1, contact->max_row + radius); row++) {
+			for (col = max_t(int, 0, contact->min_col - radius); col <=
+			     min_t(int, G6TS_HEAT_COLS - 1, contact->max_col + radius); col++) {
+				unsigned int current_index;
+				s32 current_signal;
+
+				if (state[row - origin_row][col - origin_col] > radius)
+					continue;
+				current_index = row * G6TS_HEAT_COLS + col;
+				current_signal = g6ts_signal_q12(ts->heatmap[current_index]);
+				for (n = 0; n < ARRAY_SIZE(neighbours); n++) {
+					int nc = col + neighbours[n][0];
+					int nr = row + neighbours[n][1];
+					unsigned int next_index;
+					s32 next;
+
+					if (nr < 0 || nr >= G6TS_HEAT_ROWS || nc < 0 ||
+					    nc >= G6TS_HEAT_COLS ||
+					    state[nr - origin_row][nc - origin_col] != 4)
+						continue;
+					next_index = nr * G6TS_HEAT_COLS + nc;
+					next = g6ts_signal_q12(ts->heatmap[next_index]);
+					if (next < peak_threshold && current_signal > next &&
+					    current_signal > 0 &&
+					    (s64)next << G6TS_CLASSIFIER_SHIFT >
+						(s64)current_signal * G6TS_HALO_RATIO_Q12) {
+						state[nr - origin_row][nc - origin_col] =
+							radius + 1;
+						halo += next;
+					}
+				}
+			}
+		}
+	}
+	return div64_s64(halo << G6TS_CLASSIFIER_SHIFT, peak);
+}
+
+static u8 g6ts_classify_contact(const struct g6ts_contact *contact)
+{
+	s64 best_score = S64_MIN;
+	u8 best_class = 0;
+	unsigned int class, row, col;
+
+	for (class = 0; class < ARRAY_SIZE(g6ts_classifier_models); class++) {
+		const struct g6ts_classifier_model *model =
+			&g6ts_classifier_models[class];
+		s64 distance = 0;
+
+		if (contact->pixels > model->max_points)
+			continue;
+		for (row = 0; row < G6TS_FEATURE_COUNT; row++) {
+			s64 transformed = 0;
+
+			for (col = row; col < G6TS_FEATURE_COUNT; col++) {
+				s32 residual;
+
+				if (col == 9 && contact->features_q12[col] ==
+						G6TS_HALO_UNAVAILABLE_Q12)
+					residual = 0;
+				else
+					residual = contact->features_q12[col] -
+						   model->means_q12[col];
+				transformed += (s64)residual *
+					       model->transform_q12[row][col];
+			}
+			transformed >>= G6TS_CLASSIFIER_SHIFT;
+			if (transformed > INT_MAX || transformed < -INT_MAX ||
+			    distance > S64_MAX - transformed * transformed) {
+				distance = S64_MAX;
+				break;
+			}
+			distance += transformed * transformed;
+		}
+		if (distance != S64_MAX) {
+			s64 score = ((s64)model->score_offset_q12 <<
+				     G6TS_CLASSIFIER_SHIFT) - distance / 2;
+
+			if (score > best_score) {
+				best_score = score;
+				best_class = class;
+			}
+		}
+	}
+	return best_class;
+}
+
 static unsigned int g6ts_find_contacts(struct g6ts *ts)
 {
 	unsigned int contact_count = 0;
@@ -568,6 +939,23 @@ static unsigned int g6ts_find_contacts(struct g6ts *ts)
 				    (u64)contact.strength * (G6TS_HEAT_COLS - 1));
 		contact.y = div_u64(contact.weighted_y * G6TS_LOGICAL_MAX,
 				    (u64)contact.strength * (G6TS_HEAT_ROWS - 1));
+		memset(ts->heat_component, 0, sizeof(ts->heat_component));
+		while (tail)
+			ts->heat_component[ts->heat_queue[--tail]] = 1;
+		contact.features_q12[0] =
+			contact.pixels << G6TS_CLASSIFIER_SHIFT;
+		g6ts_secondary_features(ts, &contact);
+		g6ts_geometry_features(ts, &contact);
+		contact.features_q12[9] = g6ts_halo_feature(ts, &contact);
+		contact.shape_class = g6ts_classify_contact(&contact);
+		/* FUN_180049458 permits the classifier's classes zero and two. */
+		contact.shape_allowed = contact.shape_class == 0 ||
+					contact.shape_class == 2;
+		dev_dbg(&ts->spi->dev,
+			"candidate class=%u allowed=%u pixels=%u halo_q12=%d\n",
+			contact.shape_class, contact.shape_allowed, contact.pixels,
+			contact.features_q12[9]);
+		memset(ts->heat_component, 0, sizeof(ts->heat_component));
 		g6ts_store_contact(ts, &contact, &contact_count);
 	}
 
@@ -624,6 +1012,8 @@ static u8 g6ts_confirmation_requirement(const struct g6ts *ts,
 	 */
 	if (contact->pixels < G6TS_HEAT_MIN_PIXELS)
 		required = G6TS_TRACK_CONFIRM_WEAK;
+	if (!contact->shape_allowed)
+		required = max_t(u8, required, G6TS_TRACK_CONFIRM_WEAK);
 
 	for (i = 0; i < G6TS_MAX_CONTACTS; i++) {
 		const struct g6ts_track *track = &ts->tracks[i];
@@ -666,9 +1056,10 @@ static void g6ts_assign_tracks(struct g6ts *ts, unsigned int count,
 	unsigned int n, row, col, i, j;
 
 	memset(work, 0, sizeof(*work));
+	for (i = 0; i < G6TS_MAX_CONTACTS; i++)
+		contact_slots[i] = -1;
 
 	for (i = 0; i < G6TS_MAX_CONTACTS; i++) {
-		contact_slots[i] = -1;
 		if (ts->tracks[i].active)
 			work->active_slots[active_count++] = i;
 	}
@@ -765,9 +1156,11 @@ static void g6ts_update_track(struct g6ts_track *track,
 	track->output_y = g6ts_filter_coordinate(track->output_y, contact->y);
 	track->strength = contact->strength;
 	track->pixels = contact->pixels;
+	track->shape_class = contact->shape_class;
 	if (track->age < U16_MAX)
 		track->age++;
-	if (!track->confirmed && track->evidence < U8_MAX) {
+	if (!track->confirmed && contact->shape_allowed &&
+	    track->evidence < U8_MAX) {
 		track->evidence++;
 		if (track->evidence >= track->required_evidence)
 			track->confirmed = true;
@@ -792,8 +1185,9 @@ static int g6ts_new_track(struct g6ts *ts,
 		track->output_y = contact->y;
 		track->strength = contact->strength;
 		track->pixels = contact->pixels;
+		track->shape_class = contact->shape_class;
 		track->age = 1;
-		track->evidence = 1;
+		track->evidence = contact->shape_allowed ? 1 : 0;
 		track->required_evidence =
 			g6ts_confirmation_requirement(ts, contact);
 		track->confirmed = track->required_evidence <= 1;
@@ -988,8 +1382,19 @@ static irqreturn_t g6ts_interrupt_thread(int irq, void *data)
 		if (ret)
 			break;
 		if (ts->last_class == RESET_RESPONSE) {
+			unsigned long now = jiffies;
+			unsigned long interval_ms = 0;
+
+			if (ts->last_reset_jiffies)
+				interval_ms = jiffies_to_msecs(now -
+							       ts->last_reset_jiffies);
+			ts->last_reset_jiffies = now;
+			ts->reset_notifications++;
 			ts->mode_enabled = false;
 			g6ts_release_contacts(ts);
+			dev_warn(&ts->spi->dev,
+				 "panel reset notification #%llu interval=%lums\n",
+				 ts->reset_notifications, interval_ms);
 			if (!READ_ONCE(ts->stopping))
 				schedule_delayed_work(&ts->recovery_work,
 						      msecs_to_jiffies(G6TS_RECOVERY_DELAY_MS));
@@ -1050,6 +1455,91 @@ static int g6ts_dma_feature_exchange(struct g6ts *ts, u8 report_type,
 	return -EOVERFLOW;
 }
 
+static int g6ts_dma_output_data_exchange(struct g6ts *ts, u8 content_id,
+					 const u8 *content, size_t content_len,
+					 size_t min_response_len)
+{
+	unsigned int response_index;
+	int ret;
+
+	ret = g6ts_dma_hidspi_output(ts, OUTPUT_REPORT, content_id,
+				     content, content_len);
+	if (ret) {
+		ts->fatal_transport_error = true;
+		return ret;
+	}
+
+	for (response_index = 0;
+	     response_index < G6TS_FEATURE_RESPONSE_LIMIT;
+	     response_index++) {
+		ret = g6ts_wait_pending(ts, 1000);
+		if (ret)
+			return ret;
+		ret = g6ts_dma_read_response(ts);
+		if (ret)
+			return ret;
+
+		if (ts->last_class == DATA &&
+		    ts->last_content_id == content_id &&
+		    ts->last_content_len >= min_response_len)
+			return 0;
+		if (ts->last_class == DATA ||
+		    (ts->last_class == OUTPUT_REPORT_RESPONSE &&
+		     ts->last_content_id == content_id))
+			continue;
+
+		return -EPROTO;
+	}
+
+	return -EOVERFLOW;
+}
+
+static int g6ts_dma_report09(struct g6ts *ts, bool a5)
+{
+	u8 payload[sizeof(g6ts_output09_a1_template)];
+
+	if (a5) {
+		memcpy(payload, g6ts_output09_a5_template, sizeof(payload));
+		payload[39] = ts->heat_profile[0];
+		payload[40] = ts->heat_profile[1];
+	} else {
+		memcpy(payload, g6ts_output09_a1_template, sizeof(payload));
+		payload[40] = ts->heat_profile[0];
+		payload[41] = ts->heat_profile[1];
+	}
+
+	return g6ts_dma_hidspi_output(ts, OUTPUT_REPORT, 0x09,
+				      payload, sizeof(payload));
+}
+
+static int g6ts_validate_etw_firmware(struct g6ts *ts)
+{
+	const u8 *content = ts->body + HIDSPI_INPUT_BODY_HEADER_SIZE;
+
+	if (ts->last_class != GET_FEATURE_RESPONSE ||
+	    ts->last_content_id != 0x60 || ts->last_content_len < 8 ||
+	    memcmp(content + 4, g6ts_etw_firmware_version,
+		   sizeof(g6ts_etw_firmware_version)))
+		return -EPROTONOSUPPORT;
+
+	return 0;
+}
+
+static int g6ts_validate_etw_profile(struct g6ts *ts)
+{
+	const u8 *content = ts->body + HIDSPI_INPUT_BODY_HEADER_SIZE;
+
+	if (ts->last_class != GET_FEATURE_RESPONSE ||
+	    ts->last_content_id != 0x73 || ts->last_content_len < 2 ||
+	    content[0] != G6TS_ETW_PROFILE_LO ||
+	    content[1] != G6TS_ETW_PROFILE_HI)
+		return -EPROTONOSUPPORT;
+
+	ts->heat_profile[0] = content[0];
+	ts->heat_profile[1] = content[1];
+	return 0;
+}
+
 static int g6ts_expect_response(struct g6ts *ts, u8 response_class,
 				u8 content_id, size_t min_content_len)
 {
@@ -1081,6 +1571,9 @@ static int g6ts_recovery_read_expected(struct g6ts *ts, u8 response_class,
 		    ts->last_content_id == content_id &&
 		    ts->last_content_len >= min_content_len)
 			return 0;
+		if (response_class == DATA &&
+		    ts->last_class == RESET_RESPONSE)
+			return -EPIPE;
 
 		/* A reset or stale input can precede the solicited reply. */
 		if (ts->last_class == RESET_RESPONSE || ts->last_class == DATA ||
@@ -1102,17 +1595,22 @@ static int g6ts_recovery_read_expected(struct g6ts *ts, u8 response_class,
  */
 static int g6ts_full_reinitialize_locked(struct g6ts *ts)
 {
+	unsigned int i;
 	int ret;
 
 	ts->mode_enabled = false;
 	ts->expected_report_descriptor_len = 0;
+	ts->initialization_stage = 0;
 
-	g6ts_power_off(ts);
+	ret = g6ts_power_off(ts);
+	if (ret)
+		return ret;
 	msleep(100);
 	ret = g6ts_power_on(ts);
 	if (ret)
 		return ret;
 
+	ts->initialization_stage = 1;
 	ret = g6ts_wait_pending(ts, 1000);
 	if (ret)
 		goto out;
@@ -1123,6 +1621,7 @@ static int g6ts_full_reinitialize_locked(struct g6ts *ts)
 	if (ret)
 		goto out;
 
+	ts->initialization_stage = 2;
 	ret = g6ts_dma_output(ts, g6ts_device_descriptor_cmd,
 			      sizeof(g6ts_device_descriptor_cmd));
 	if (ret) {
@@ -1140,6 +1639,7 @@ static int g6ts_full_reinitialize_locked(struct g6ts *ts)
 		goto out;
 	}
 
+	ts->initialization_stage = 3;
 	ret = g6ts_dma_output(ts, g6ts_report_descriptor_cmd,
 			      sizeof(g6ts_report_descriptor_cmd));
 	if (ret) {
@@ -1154,21 +1654,36 @@ static int g6ts_full_reinitialize_locked(struct g6ts *ts)
 		goto out;
 	}
 
-	ret = g6ts_dma_feature_exchange(ts, SET_FEATURE, 0x05,
-					g6ts_mode_enable,
-					sizeof(g6ts_mode_enable));
+	/* Reproduce the Windows cold-start collection setup before mode entry. */
+	ts->initialization_stage = 4;
+	ret = g6ts_dma_feature_exchange(ts, GET_FEATURE, 0x60, NULL, 0);
 	if (ret)
 		goto out;
-	ret = g6ts_expect_response(ts, SET_FEATURE_RESPONSE, 0x05, 0);
+	ret = g6ts_expect_response(ts, GET_FEATURE_RESPONSE, 0x60, 60);
+	if (ret)
+		goto out;
+	ret = g6ts_validate_etw_firmware(ts);
 	if (ret)
 		goto out;
 
+	ts->initialization_stage = 5;
+	for (i = 0; i < ARRAY_SIZE(g6ts_output65); i++) {
+		ret = g6ts_dma_output_data_exchange(ts, 0x65,
+						    g6ts_output65[i],
+						    sizeof(g6ts_output65[i]), 16);
+		if (ret)
+			goto out;
+	}
+
+	ts->initialization_stage = 6;
 	ret = g6ts_dma_feature_exchange(ts, GET_FEATURE, 0x70, NULL, 0);
 	if (ret)
 		goto out;
 	ret = g6ts_expect_response(ts, GET_FEATURE_RESPONSE, 0x70, 1);
 	if (ret)
 		goto out;
+
+	ts->initialization_stage = 7;
 	ret = g6ts_dma_feature_exchange(ts, SET_FEATURE, 0x70,
 					g6ts_mode_enable,
 					sizeof(g6ts_mode_enable));
@@ -1178,6 +1693,7 @@ static int g6ts_full_reinitialize_locked(struct g6ts *ts)
 	if (ret)
 		goto out;
 
+	ts->initialization_stage = 8;
 	ret = g6ts_dma_feature_exchange(ts, SET_FEATURE, 0x56,
 					g6ts_mode_handshake,
 					sizeof(g6ts_mode_handshake));
@@ -1187,9 +1703,59 @@ static int g6ts_full_reinitialize_locked(struct g6ts *ts)
 	if (ret)
 		goto out;
 
+	ts->initialization_stage = 9;
+	ret = g6ts_dma_feature_exchange(ts, GET_FEATURE, 0x06, NULL, 0);
+	if (ret)
+		goto out;
+	ret = g6ts_expect_response(ts, GET_FEATURE_RESPONSE, 0x06, 119);
+	if (ret)
+		goto out;
+
+	/* The complete ETW cold-start trace for firmware 63.20.137 uses 0x031a. */
+	ts->initialization_stage = 10;
+	ret = g6ts_dma_report09(ts, false);
+	if (ret)
+		goto transport_error;
+	usleep_range(1000, 2000);
+	ret = g6ts_dma_report09(ts, true);
+	if (ret)
+		goto transport_error;
+
+	ts->initialization_stage = 11;
+	ret = g6ts_dma_feature_exchange(ts, SET_FEATURE, 0x05,
+					g6ts_mode_enable,
+					sizeof(g6ts_mode_enable));
+	if (ret)
+		goto out;
+	ret = g6ts_expect_response(ts, SET_FEATURE_RESPONSE, 0x05, 0);
+	if (ret)
+		goto out;
+
+	/*
+	 * The complete ETW trace next sends GetFeature 0x73. Its response wait
+	 * consumes the pending data report 0x2e before class 5/report 0x73. A
+	 * second A1/A5 pair exists only in a later partial KD recovery capture;
+	 * cold-start replay caused the Phase 66 stage-12 timeout.
+	 */
+	ts->initialization_stage = 12;
+	ret = g6ts_dma_feature_exchange(ts, GET_FEATURE, 0x73, NULL, 0);
+	if (ret)
+		goto out;
+	ret = g6ts_validate_etw_profile(ts);
+	if (ret)
+		goto out;
+
+	/* Do not report recovery success until a complete Heat frame arrives. */
+	ts->initialization_stage = 13;
+	ret = g6ts_recovery_read_expected(ts, DATA, G6TS_HEATMAP_REPORT_ID, 1);
+	if (ret)
+		goto out;
+
 	ts->mode_enabled = true;
 	return 0;
 
+transport_error:
+	ts->fatal_transport_error = true;
 out:
 	ts->mode_enabled = false;
 	return ret;
@@ -1213,13 +1779,19 @@ static void g6ts_recovery_work(struct work_struct *work)
 	ret = g6ts_full_reinitialize_locked(ts);
 	if (!ret) {
 		ts->recovery_fail_streak = 0;
-		dev_dbg(&ts->spi->dev, "touch controller initialized\n");
+		ts->recovery_successes++;
+		dev_info(&ts->spi->dev,
+			 "touch controller initialized profile=%02x%02x recoveries=%llu resets=%llu\n",
+			 ts->heat_profile[1], ts->heat_profile[0],
+			 ts->recovery_successes, ts->reset_notifications);
 	} else {
+		ts->recovery_failures++;
 		ts->recovery_fail_streak++;
 		retry = !ts->fatal_transport_error &&
 			ts->recovery_fail_streak < G6TS_RECOVERY_LIMIT;
 		dev_warn(&ts->spi->dev,
-			 "touch controller initialization failed: %d%s\n", ret,
+			 "touch controller initialization failed stage=%u ret=%d failures=%llu%s\n",
+			 ts->initialization_stage, ret, ts->recovery_failures,
 			 retry ? "; retrying" : "");
 	}
 	mutex_unlock(&ts->io_lock);
@@ -1241,6 +1813,8 @@ static int g6ts_probe(struct spi_device *spi)
 	if (!ts->body)
 		return -ENOMEM;
 	ts->spi = spi;
+	ts->heat_profile[0] = G6TS_ETW_PROFILE_LO;
+	ts->heat_profile[1] = G6TS_ETW_PROFILE_HI;
 	ts->interrupt_gpio = devm_gpiod_get(&spi->dev, "interrupt", GPIOD_IN);
 	if (IS_ERR(ts->interrupt_gpio))
 		return dev_err_probe(&spi->dev, PTR_ERR(ts->interrupt_gpio),
@@ -1324,12 +1898,13 @@ static void g6ts_remove(struct spi_device *spi)
 	mutex_lock(&ts->io_lock);
 	g6ts_release_contacts(ts);
 	mutex_unlock(&ts->io_lock);
-	g6ts_power_off(ts);
+	(void)g6ts_power_off(ts);
 }
 
 static int g6ts_suspend(struct device *dev)
 {
 	struct g6ts *ts = dev_get_drvdata(dev);
+	int ret;
 
 	WRITE_ONCE(ts->mode_enabled, false);
 	disable_irq(ts->interrupt_irq);
@@ -1337,10 +1912,16 @@ static int g6ts_suspend(struct device *dev)
 
 	mutex_lock(&ts->io_lock);
 	g6ts_release_contacts(ts);
-	g6ts_power_off(ts);
+	ret = g6ts_power_off(ts);
 	mutex_unlock(&ts->io_lock);
 
-	return 0;
+	if (ret) {
+		enable_irq(ts->interrupt_irq);
+		schedule_delayed_work(&ts->recovery_work,
+				      msecs_to_jiffies(G6TS_RECOVERY_DELAY_MS));
+	}
+
+	return ret;
 }
 
 static int g6ts_resume(struct device *dev)

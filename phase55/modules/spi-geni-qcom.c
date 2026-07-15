@@ -157,6 +157,7 @@ static void spi_geni_sp11_qspi_prepare_hw(struct spi_geni_master *mas)
 	writel(SP11_QSPI_S_IRQ_CLEAR, se->base + SE_GENI_S_IRQ_CLEAR);
 	writel(0xf, se->base + SE_DMA_TX_IRQ_CLR);
 	writel(0xfff, se->base + SE_DMA_RX_IRQ_CLR);
+	/* Complete the SE register sequence before starting GPI channels. */
 	wmb();
 
 	dev_info_once(mas->dev,
@@ -172,6 +173,7 @@ static void spi_geni_sp11_qspi_arm_live(struct spi_geni_master *mas)
 
 	writel(SP11_QSPI_M_IRQ_LIVE, se->base + SE_GENI_M_IRQ_EN);
 	writel(SP11_QSPI_S_IRQ_LIVE, se->base + SE_GENI_S_IRQ_EN);
+	/* Make the live completion masks visible before submitting descriptors. */
 	wmb();
 }
 
@@ -184,6 +186,7 @@ static void spi_geni_sp11_qspi_restore_rest(struct spi_geni_master *mas)
 
 	writel(SP11_QSPI_M_IRQ_INIT, se->base + SE_GENI_M_IRQ_EN);
 	writel(SP11_QSPI_S_IRQ_INIT, se->base + SE_GENI_S_IRQ_EN);
+	/* Restore the resting masks before another transfer can be prepared. */
 	wmb();
 }
 
@@ -562,6 +565,7 @@ static int spi_geni_sp11_qspi_submit_read_pair(struct spi_controller *spi,
 	struct gpi_spi_config peripheral = {};
 	struct spi_geni_sp11_qspi_pair pair = {};
 	struct dma_async_tx_descriptor *tx_desc, *rx_desc;
+	dma_cookie_t tx_cookie, rx_cookie;
 	unsigned long deadline, timeout;
 	int ret;
 
@@ -573,25 +577,33 @@ static int spi_geni_sp11_qspi_submit_read_pair(struct spi_controller *spi,
 
 	ret = get_spi_clk_cfg(mas->cur_speed_hz, mas,
 			      &peripheral.clk_src, &peripheral.clk_div);
-	if (ret)
+	if (ret) {
+		msg->status = ret;
 		return ret;
+	}
 
 	config.peripheral_config = &peripheral;
 	config.peripheral_size = sizeof(peripheral);
 	peripheral.set_config = true;
-	spi_gsi_fill_config(mas, msg->spi, &peripheral, rx_xfer->len, SPI_DUPLEX);
+	spi_gsi_fill_config(mas, msg->spi, &peripheral, rx_xfer->len,
+			    SPI_DUPLEX);
 	/* Windows arms the broader completion masks for every live transfer. */
 	spi_geni_sp11_qspi_arm_live(mas);
 	if (spi_geni_is_sp11_qspi(mas)) {
 		struct geni_se *dse = &mas->se;
-		dev_info_once(mas->dev,
-			"SP11 FRAMING r7c:%08x txpack:%08x/%08x rxpack:%08x/%08x cpha:%08x cpol:%08x trans:%08x word:%08x demux:%08x mirq614:%08x sirq644:%08x fwqspi:%d wl:%u\n",
+
+		dev_dbg(mas->dev,
+			"SP11 framing r7c:%08x txpack:%08x/%08x rxpack:%08x/%08x\n",
 			readl(dse->base + 0x7c),
 			readl(dse->base + 0x260), readl(dse->base + 0x264),
-			readl(dse->base + 0x284), readl(dse->base + 0x288),
+			readl(dse->base + 0x284), readl(dse->base + 0x288));
+		dev_dbg(mas->dev,
+			"SP11 framing cpha:%08x cpol:%08x trans:%08x word:%08x demux:%08x\n",
 			readl(dse->base + 0x224), readl(dse->base + 0x230),
 			readl(dse->base + 0x25c), readl(dse->base + 0x268),
-			readl(dse->base + 0x250),
+			readl(dse->base + 0x250));
+		dev_dbg(mas->dev,
+			"SP11 framing mirq:%08x sirq:%08x qspi:%d wl:%u\n",
 			readl(dse->base + 0x614), readl(dse->base + 0x644),
 			peripheral.qspi, peripheral.word_len);
 	}
@@ -601,24 +613,34 @@ static int spi_geni_sp11_qspi_submit_read_pair(struct spi_controller *spi,
 		      dev_name(spi->cur_rx_dma_dev), rx_xfer->rx_sg_mapped);
 	spi_geni_sp11_qspi_sync_pair_for_device(spi, tx_xfer, rx_xfer);
 
-	dmaengine_slave_config(mas->rx, &config);
+	ret = dmaengine_slave_config(mas->rx, &config);
+	if (ret) {
+		dev_err(mas->dev,
+			"SP11 QSPI RX configuration failed: %d\n", ret);
+		goto terminate;
+	}
 	rx_desc = dmaengine_prep_slave_sg(mas->rx, rx_xfer->rx_sg.sgl,
-						  rx_xfer->rx_sg.nents, DMA_DEV_TO_MEM,
-					  flags);
+					  rx_xfer->rx_sg.nents,
+					  DMA_DEV_TO_MEM, flags);
 	if (!rx_desc) {
-		spi_geni_sp11_qspi_sync_pair_for_cpu(spi, tx_xfer, rx_xfer);
-		spi_geni_sp11_qspi_restore_rest(mas);
-		return -EIO;
+		ret = -EIO;
+		dev_err(mas->dev, "SP11 QSPI RX descriptor preparation failed\n");
+		goto terminate;
 	}
 
-	dmaengine_slave_config(mas->tx, &config);
+	ret = dmaengine_slave_config(mas->tx, &config);
+	if (ret) {
+		dev_err(mas->dev,
+			"SP11 QSPI TX configuration failed: %d\n", ret);
+		goto terminate;
+	}
 	tx_desc = dmaengine_prep_slave_sg(mas->tx, tx_xfer->tx_sg.sgl,
-					  tx_xfer->tx_sg.nents, DMA_MEM_TO_DEV,
-					  flags);
+					  tx_xfer->tx_sg.nents,
+					  DMA_MEM_TO_DEV, flags);
 	if (!tx_desc) {
-		spi_geni_sp11_qspi_sync_pair_for_cpu(spi, tx_xfer, rx_xfer);
-		spi_geni_sp11_qspi_restore_rest(mas);
-		return -EIO;
+		ret = -EIO;
+		dev_err(mas->dev, "SP11 QSPI TX descriptor preparation failed\n");
+		goto terminate;
 	}
 
 	init_completion(&pair.tx_done);
@@ -628,8 +650,20 @@ static int spi_geni_sp11_qspi_submit_read_pair(struct spi_controller *spi,
 	rx_desc->callback_result = spi_geni_sp11_qspi_rx_done;
 	rx_desc->callback_param = &pair;
 
-	dmaengine_submit(rx_desc);
-	dmaengine_submit(tx_desc);
+	rx_cookie = dmaengine_submit(rx_desc);
+	ret = dma_submit_error(rx_cookie);
+	if (ret) {
+		dev_err(mas->dev,
+			"SP11 QSPI RX submission failed: %d\n", ret);
+		goto terminate;
+	}
+	tx_cookie = dmaengine_submit(tx_desc);
+	ret = dma_submit_error(tx_cookie);
+	if (ret) {
+		dev_err(mas->dev,
+			"SP11 QSPI TX submission failed: %d\n", ret);
+		goto terminate;
+	}
 	dma_async_issue_pending(mas->rx);
 	dma_async_issue_pending(mas->tx);
 
@@ -643,7 +677,8 @@ static int spi_geni_sp11_qspi_submit_read_pair(struct spi_controller *spi,
 
 	timeout = time_before(jiffies, deadline) ? deadline - jiffies : 1;
 	if (!wait_for_completion_timeout(&pair.tx_done, timeout)) {
-		dev_err(&msg->spi->dev, "SPI TX transfer timed out after RX completion\n");
+		dev_err(&msg->spi->dev,
+			"SPI TX transfer timed out after RX completion\n");
 		goto timeout;
 	}
 
@@ -680,6 +715,14 @@ timeout:
 	spi_geni_handle_err(spi, msg);
 	spi_geni_sp11_qspi_sync_pair_for_cpu(spi, tx_xfer, rx_xfer);
 	return -ETIMEDOUT;
+
+terminate:
+	msg->status = ret;
+	dmaengine_terminate_sync(mas->tx);
+	dmaengine_terminate_sync(mas->rx);
+	spi_geni_sp11_qspi_sync_pair_for_cpu(spi, tx_xfer, rx_xfer);
+	spi_geni_sp11_qspi_restore_rest(mas);
+	return ret;
 }
 
 static bool spi_geni_sp11_qspi_is_read_pair(struct spi_geni_master *mas,

@@ -35,6 +35,8 @@ STATE_FEATURE_MASK_OFFSET = 0x11C
 RUNTIME_EXPONENT_OFFSET = 0xE76
 WINDOWS_LOG_BASE = 3370280550400.0
 DISABLED_SCORE = -9999.0
+FIXED_SHIFT = 12
+FIXED_ONE = 1 << FIXED_SHIFT
 
 
 def u16(data: bytes, offset: int) -> int:
@@ -214,6 +216,53 @@ class ProjectClassifier:
                 - distance * 0.5
             )
             scores.append(score)
+        return tuple(scores)
+
+    def fixed_scores(
+        self,
+        features: tuple[float, ...],
+        decision_index: int,
+        state_mask: int = 0,
+    ) -> tuple[int, ...]:
+        """Evaluate the model in the Q20.12 form used by the kernel port.
+
+        The common runtime offset is omitted because it cannot change the
+        winning class. Returned values are Q40.24 score numerators.
+        """
+        if len(features) != FEATURE_COUNT:
+            raise ValueError(f"expected {FEATURE_COUNT} features, got {len(features)}")
+        if decision_index not in (0, 1):
+            raise ValueError("decision index must be 0 or 1")
+        masked = tuple(
+            bool(base | (state & state_mask))
+            for base, state in zip(self.feature_masks, self.state_feature_masks)
+        )
+        masked = (*masked[:9], masked[9] or features[9] == 100.0)
+        feature_q = tuple(round(value * FIXED_ONE) for value in features)
+
+        scores: list[int] = []
+        for model in self.models:
+            if features[0] > model.max_points:
+                scores.append(round(DISABLED_SCORE * FIXED_ONE * FIXED_ONE))
+                continue
+            means_q = tuple(round(value * FIXED_ONE) for value in model.means)
+            residual_q = tuple(
+                0 if masked[index] else feature_q[index] - means_q[index]
+                for index in range(FEATURE_COUNT)
+            )
+            transformed_q = []
+            for row in range(FEATURE_COUNT):
+                accumulator = sum(
+                    residual_q[column]
+                    * round(model.transform[row][column] * FIXED_ONE)
+                    for column in range(row, FEATURE_COUNT)
+                )
+                transformed_q.append(accumulator >> FIXED_SHIFT)
+            distance_q24 = sum(value * value for value in transformed_q)
+            offset_q12 = round(
+                (model.decisions[decision_index] - model.bias * 0.5) * FIXED_ONE
+            )
+            scores.append(offset_q12 * FIXED_ONE - distance_q24 // 2)
         return tuple(scores)
 
     def summary(self) -> dict[str, object]:

@@ -25,6 +25,9 @@ MAX_CONTACTS = 10
 # ample margin for faster live motion while rejecting unrelated blobs.
 TRACK_MATCH_MAX = 4096
 TRACK_HOLD_FRAMES = 6
+# Two consecutive classifier-approved frames preserve the anti-ghost gate
+# while keeping short touchscreen-keyboard taps visible long enough for the
+# compositor. Weak and split candidates retain their longer evidence windows.
 TRACK_CONFIRM_NORMAL = 3
 TRACK_CONFIRM_WEAK = 5
 TRACK_CONFIRM_SPLIT = 8
