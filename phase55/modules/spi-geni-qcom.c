@@ -157,6 +157,7 @@ static void spi_geni_sp11_qspi_prepare_hw(struct spi_geni_master *mas)
 	writel(SP11_QSPI_S_IRQ_CLEAR, se->base + SE_GENI_S_IRQ_CLEAR);
 	writel(0xf, se->base + SE_DMA_TX_IRQ_CLR);
 	writel(0xfff, se->base + SE_DMA_RX_IRQ_CLR);
+	/* Complete the SE register sequence before starting GPI channels. */
 	wmb();
 
 	dev_info_once(mas->dev,
@@ -172,6 +173,7 @@ static void spi_geni_sp11_qspi_arm_live(struct spi_geni_master *mas)
 
 	writel(SP11_QSPI_M_IRQ_LIVE, se->base + SE_GENI_M_IRQ_EN);
 	writel(SP11_QSPI_S_IRQ_LIVE, se->base + SE_GENI_S_IRQ_EN);
+	/* Make the live completion masks visible before submitting descriptors. */
 	wmb();
 }
 
@@ -184,6 +186,7 @@ static void spi_geni_sp11_qspi_restore_rest(struct spi_geni_master *mas)
 
 	writel(SP11_QSPI_M_IRQ_INIT, se->base + SE_GENI_M_IRQ_EN);
 	writel(SP11_QSPI_S_IRQ_INIT, se->base + SE_GENI_S_IRQ_EN);
+	/* Restore the resting masks before another transfer can be prepared. */
 	wmb();
 }
 
@@ -584,6 +587,7 @@ static int spi_geni_sp11_qspi_submit_read_pair(struct spi_controller *spi,
 	spi_geni_sp11_qspi_arm_live(mas);
 	if (spi_geni_is_sp11_qspi(mas)) {
 		struct geni_se *dse = &mas->se;
+
 		dev_info_once(mas->dev,
 			"SP11 FRAMING r7c:%08x txpack:%08x/%08x rxpack:%08x/%08x cpha:%08x cpol:%08x trans:%08x word:%08x demux:%08x mirq614:%08x sirq644:%08x fwqspi:%d wl:%u\n",
 			readl(dse->base + 0x7c),

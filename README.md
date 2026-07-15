@@ -86,6 +86,15 @@ confirmation remains sticky so one anomalous shape frame cannot make a real
 finger flicker. See
 [docs/PHASE64_FIXED_POINT_CLASSIFIER.md](docs/PHASE64_FIXED_POINT_CLASSIFIER.md).
 
+Phase 65 targets fast on-screen-keyboard input. A paired raw-detector/input
+trace proves that the fixed-point classifier takes only 55 microseconds at
+the median and does not lose the reproduced taps. The isolated Phase 65 image
+replaces a noisy bring-up controller artifact whose successful DMA transfers
+were still logged at `INFO` level, and admits strong classifier-approved
+touches after two frames while retaining the longer weak/split anti-ghost
+windows. See
+[docs/PHASE65_KEYBOARD_LATENCY.md](docs/PHASE65_KEYBOARD_LATENCY.md).
+
 It is not yet ready for a mainline submission. Labelled palm and physical-edge
 captures, measured edge calibration, pressure, merged-contact separation,
 suspend/resume hardware validation, and broader kernel compatibility remain
@@ -116,6 +125,7 @@ docs/PHASE62_PSDB_MODEL_EXTRACTOR.md
 docs/PHASE62_DEPLOYMENT.md
 docs/PHASE63_WINDOWS_LIFECYCLE.md
 docs/PHASE64_FIXED_POINT_CLASSIFIER.md
+docs/PHASE65_KEYBOARD_LATENCY.md
 phase55/
 tools/analyze_spb_etw_csv.py
 tools/decode_heat_frame.py

@@ -70,6 +70,29 @@ axis, and spread arithmetic also produces zero class mismatches. All 33 unit
 tests pass, both client and generated profile pass checkpatch with zero
 warnings, and the matched 7.1.1 module builds with `W=1`.
 
+## Live validation
+
+The isolated entry was booted on the target Surface with command-line marker
+`sp11_entry=7.1.1-phase64`. Sysfs reported the expected live module source
+version `C97172EE0D703AF2ED13B54`; the older root-filesystem module did not
+replace the copy loaded from the dedicated initramfs.
+
+A mixed one-, two-, and three-finger exercise produced 1,790 input reports,
+23 contact-down transitions, and a maximum of three simultaneous contacts.
+The classifier evaluated 2,885 candidates:
+
+```text
+class 0, allowed: 2862
+class 1, denied:     1
+class 2, allowed:   20
+class 3, denied:     2
+```
+
+No touchscreen transport recovery, timeout, abort, kernel error, or crash was
+recorded. A separate 31-second hands-off capture produced zero input reports,
+zero contact transitions, and zero active slots. Dynamic classifier logging
+was disabled again after the capture.
+
 ## Safety boundary
 
 This classifier never sends commands to the panel and cannot alter firmware.

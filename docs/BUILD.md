@@ -52,6 +52,12 @@ modinfo -F vermagic spi-geni-qcom.ko
 modinfo -F vermagic g6ts_biosref.ko
 ```
 
+The Phase 65 keyboard-latency boot image must embed both the matched
+`spi-geni-qcom.ko` and `g6ts_biosref.ko`. Reusing an older installed
+controller module reintroduces successful-transfer `INFO` logging and defeats
+the latency test. Assemble it only as a separate initramfs and verify the
+embedded module source versions before rebooting.
+
 Run the hardware-independent checks with:
 
 ```bash
