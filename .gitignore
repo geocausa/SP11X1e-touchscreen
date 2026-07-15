@@ -21,3 +21,4 @@ modules.order
 *.payload
 __pycache__/
 *.pyc
+/dist/
