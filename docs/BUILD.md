@@ -65,6 +65,29 @@ make test
 python3 -m compileall -q tools tests
 ```
 
+With a locally mounted Windows installation and saved Heat corpus, the full
+Phase 67 fidelity regression is:
+
+```bash
+python3 tools/regress_heat_frames.py \
+  --expect-frames 1381 \
+  --classifier-dll /path/to/TouchPenProcessor0C83.dll \
+  /path/to/etw_3636_frames_20260506
+```
+
+The DLL and captures are read-only inputs and are not copied into the tree.
+
+After committing a verified tree and building the matched GCC modules, create
+the redistributable source/module artifact with:
+
+```bash
+scripts/package_phase67.sh
+```
+
+The packager refuses dirty source, missing modules, or a mismatched vermagic.
+It includes the complete GPL source snapshot, the three exact-target modules,
+build identity, and SHA-256 manifests. It does not include Microsoft files.
+
 The Phase 64 panel profile is checked in as generated configuration. To
 reproduce it from a locally supplied Windows component without copying the DLL
 into the repository:

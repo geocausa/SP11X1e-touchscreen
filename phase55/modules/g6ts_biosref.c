@@ -32,8 +32,8 @@
 #define G6TS_HEADER_VERSION		0x03
 #define G6TS_FEATURE_RESPONSE_LIMIT	64U
 #define G6TS_HEATMAP_REPORT_ID		0x12
-#define G6TS_WINDOWS_PROFILE_LO		0x14
-#define G6TS_WINDOWS_PROFILE_HI		0x03
+#define G6TS_ETW_PROFILE_LO		0x1a
+#define G6TS_ETW_PROFILE_HI		0x03
 #define G6TS_MODE_ATTEMPT_LIMIT		3U
 #define G6TS_RECOVERY_DELAY_MS		100U
 #define G6TS_RECOVERY_RETRY_MS		500U
@@ -117,6 +117,9 @@ static const u8 g6ts_output65[][16] = {
 	  0xff, 0xff, 0xff, 0xff, 0x04, 0x04, 0x75, 0x00 },
 	{ 0x02, 0x00, 0xff, 0xa0 },
 };
+
+/* Firmware 63.20.137 (0x3f001489), the exact build in the complete ETW run. */
+static const u8 g6ts_etw_firmware_version[] = { 0x89, 0x14, 0x00, 0x3f };
 
 /* Windows HidWriteReport payloads for the project-0x0c83 Heat collection. */
 static const u8 g6ts_output09_a1_template[63] = {
@@ -207,7 +210,7 @@ struct g6ts {
 	u16 last_content_len;
 	u16 expected_report_descriptor_len;
 	u8 last_content_id;
-	u8 windows_profile[2];
+	u8 heat_profile[2];
 	int interrupt_irq;
 	atomic64_t interrupt_edges;
 	s64 handled_interrupt_edges;
@@ -253,19 +256,26 @@ static int g6ts_power_on(struct g6ts *ts)
 		return dev_err_probe(&ts->spi->dev, ret,
 				     "ACPI _PS0 failed\n");
 
-	return g6ts_acpi_method(&ts->spi->dev, "_RST");
+	ret = g6ts_acpi_method(&ts->spi->dev, "_RST");
+	if (ret) {
+		g6ts_acpi_method(&ts->spi->dev, "_PS3");
+		return dev_err_probe(&ts->spi->dev, ret,
+				     "ACPI _RST failed\n");
+	}
+
+	return 0;
 }
 
-static void g6ts_power_off(struct g6ts *ts)
+static int g6ts_power_off(struct g6ts *ts)
 {
 	if (ts->power_gpio && ts->reset_gpio) {
 		gpiod_set_value_cansleep(ts->reset_gpio, 0);
 		usleep_range(10000, 12000);
 		gpiod_set_value_cansleep(ts->power_gpio, 0);
-		return;
+		return 0;
 	}
 
-	g6ts_acpi_method(&ts->spi->dev, "_PS3");
+	return g6ts_acpi_method(&ts->spi->dev, "_PS3");
 }
 
 /*
@@ -1046,9 +1056,10 @@ static void g6ts_assign_tracks(struct g6ts *ts, unsigned int count,
 	unsigned int n, row, col, i, j;
 
 	memset(work, 0, sizeof(*work));
+	for (i = 0; i < G6TS_MAX_CONTACTS; i++)
+		contact_slots[i] = -1;
 
 	for (i = 0; i < G6TS_MAX_CONTACTS; i++) {
-		contact_slots[i] = -1;
 		if (ts->tracks[i].active)
 			work->active_slots[active_count++] = i;
 	}
@@ -1489,29 +1500,43 @@ static int g6ts_dma_report09(struct g6ts *ts, bool a5)
 
 	if (a5) {
 		memcpy(payload, g6ts_output09_a5_template, sizeof(payload));
-		payload[39] = ts->windows_profile[0];
-		payload[40] = ts->windows_profile[1];
+		payload[39] = ts->heat_profile[0];
+		payload[40] = ts->heat_profile[1];
 	} else {
 		memcpy(payload, g6ts_output09_a1_template, sizeof(payload));
-		payload[40] = ts->windows_profile[0];
-		payload[41] = ts->windows_profile[1];
+		payload[40] = ts->heat_profile[0];
+		payload[41] = ts->heat_profile[1];
 	}
 
 	return g6ts_dma_hidspi_output(ts, OUTPUT_REPORT, 0x09,
 				      payload, sizeof(payload));
 }
 
-static int g6ts_update_windows_profile(struct g6ts *ts)
+static int g6ts_validate_etw_firmware(struct g6ts *ts)
+{
+	const u8 *content = ts->body + HIDSPI_INPUT_BODY_HEADER_SIZE;
+
+	if (ts->last_class != GET_FEATURE_RESPONSE ||
+	    ts->last_content_id != 0x60 || ts->last_content_len < 8 ||
+	    memcmp(content + 4, g6ts_etw_firmware_version,
+		   sizeof(g6ts_etw_firmware_version)))
+		return -EPROTONOSUPPORT;
+
+	return 0;
+}
+
+static int g6ts_validate_etw_profile(struct g6ts *ts)
 {
 	const u8 *content = ts->body + HIDSPI_INPUT_BODY_HEADER_SIZE;
 
 	if (ts->last_class != GET_FEATURE_RESPONSE ||
 	    ts->last_content_id != 0x73 || ts->last_content_len < 2 ||
-	    !content[0] || content[1] != G6TS_WINDOWS_PROFILE_HI)
-		return -EPROTO;
+	    content[0] != G6TS_ETW_PROFILE_LO ||
+	    content[1] != G6TS_ETW_PROFILE_HI)
+		return -EPROTONOSUPPORT;
 
-	ts->windows_profile[0] = content[0];
-	ts->windows_profile[1] = content[1];
+	ts->heat_profile[0] = content[0];
+	ts->heat_profile[1] = content[1];
 	return 0;
 }
 
@@ -1577,7 +1602,9 @@ static int g6ts_full_reinitialize_locked(struct g6ts *ts)
 	ts->expected_report_descriptor_len = 0;
 	ts->initialization_stage = 0;
 
-	g6ts_power_off(ts);
+	ret = g6ts_power_off(ts);
+	if (ret)
+		return ret;
 	msleep(100);
 	ret = g6ts_power_on(ts);
 	if (ret)
@@ -1635,6 +1662,9 @@ static int g6ts_full_reinitialize_locked(struct g6ts *ts)
 	ret = g6ts_expect_response(ts, GET_FEATURE_RESPONSE, 0x60, 60);
 	if (ret)
 		goto out;
+	ret = g6ts_validate_etw_firmware(ts);
+	if (ret)
+		goto out;
 
 	ts->initialization_stage = 5;
 	for (i = 0; i < ARRAY_SIZE(g6ts_output65); i++) {
@@ -1681,10 +1711,7 @@ static int g6ts_full_reinitialize_locked(struct g6ts *ts)
 	if (ret)
 		goto out;
 
-	/*
-	 * The current panel profile is 0x0314.  Report 0x73 below confirms the
-	 * value and makes later recoveries follow firmware profile changes.
-	 */
+	/* The complete ETW cold-start trace for firmware 63.20.137 uses 0x031a. */
 	ts->initialization_stage = 10;
 	ret = g6ts_dma_report09(ts, false);
 	if (ret)
@@ -1705,30 +1732,18 @@ static int g6ts_full_reinitialize_locked(struct g6ts *ts)
 		goto out;
 
 	/*
-	 * The newer KD trace sends A1 while report 0x2e is pending, consumes that
-	 * data report, then sends A5 after the following interrupt.  Preserve the
-	 * overlap: flattening these into adjacent writes previously froze the lab
-	 * system when combined with the obsolete profile.
+	 * The complete ETW trace next sends GetFeature 0x73. Its response wait
+	 * consumes the pending data report 0x2e before class 5/report 0x73. A
+	 * second A1/A5 pair exists only in a later partial KD recovery capture;
+	 * cold-start replay caused the Phase 66 stage-12 timeout.
 	 */
 	ts->initialization_stage = 12;
-	ret = g6ts_wait_pending(ts, 1000);
+	ret = g6ts_dma_feature_exchange(ts, GET_FEATURE, 0x73, NULL, 0);
 	if (ret)
 		goto out;
-	ret = g6ts_dma_report09(ts, false);
-	if (ret)
-		goto transport_error;
-	usleep_range(1000, 2000);
-	ret = g6ts_dma_read_response(ts);
+	ret = g6ts_validate_etw_profile(ts);
 	if (ret)
 		goto out;
-	if (ts->last_class != DATA)
-		goto protocol_error;
-	ret = g6ts_wait_pending(ts, 1000);
-	if (ret)
-		goto out;
-	ret = g6ts_dma_report09(ts, true);
-	if (ret)
-		goto transport_error;
 
 	/* Do not report recovery success until a complete Heat frame arrives. */
 	ts->initialization_stage = 13;
@@ -1736,21 +1751,9 @@ static int g6ts_full_reinitialize_locked(struct g6ts *ts)
 	if (ret)
 		goto out;
 
-	/* Report 0x73 returns the two profile bytes used by report 0x09. */
-	ts->initialization_stage = 14;
-	ret = g6ts_dma_feature_exchange(ts, GET_FEATURE, 0x73, NULL, 0);
-	if (ret)
-		goto out;
-	ret = g6ts_update_windows_profile(ts);
-	if (ret)
-		goto out;
-
 	ts->mode_enabled = true;
 	return 0;
 
-protocol_error:
-	ret = -EPROTO;
-	goto out;
 transport_error:
 	ts->fatal_transport_error = true;
 out:
@@ -1779,7 +1782,7 @@ static void g6ts_recovery_work(struct work_struct *work)
 		ts->recovery_successes++;
 		dev_info(&ts->spi->dev,
 			 "touch controller initialized profile=%02x%02x recoveries=%llu resets=%llu\n",
-			 ts->windows_profile[1], ts->windows_profile[0],
+			 ts->heat_profile[1], ts->heat_profile[0],
 			 ts->recovery_successes, ts->reset_notifications);
 	} else {
 		ts->recovery_failures++;
@@ -1810,8 +1813,8 @@ static int g6ts_probe(struct spi_device *spi)
 	if (!ts->body)
 		return -ENOMEM;
 	ts->spi = spi;
-	ts->windows_profile[0] = G6TS_WINDOWS_PROFILE_LO;
-	ts->windows_profile[1] = G6TS_WINDOWS_PROFILE_HI;
+	ts->heat_profile[0] = G6TS_ETW_PROFILE_LO;
+	ts->heat_profile[1] = G6TS_ETW_PROFILE_HI;
 	ts->interrupt_gpio = devm_gpiod_get(&spi->dev, "interrupt", GPIOD_IN);
 	if (IS_ERR(ts->interrupt_gpio))
 		return dev_err_probe(&spi->dev, PTR_ERR(ts->interrupt_gpio),
@@ -1895,12 +1898,13 @@ static void g6ts_remove(struct spi_device *spi)
 	mutex_lock(&ts->io_lock);
 	g6ts_release_contacts(ts);
 	mutex_unlock(&ts->io_lock);
-	g6ts_power_off(ts);
+	(void)g6ts_power_off(ts);
 }
 
 static int g6ts_suspend(struct device *dev)
 {
 	struct g6ts *ts = dev_get_drvdata(dev);
+	int ret;
 
 	WRITE_ONCE(ts->mode_enabled, false);
 	disable_irq(ts->interrupt_irq);
@@ -1908,10 +1912,16 @@ static int g6ts_suspend(struct device *dev)
 
 	mutex_lock(&ts->io_lock);
 	g6ts_release_contacts(ts);
-	g6ts_power_off(ts);
+	ret = g6ts_power_off(ts);
 	mutex_unlock(&ts->io_lock);
 
-	return 0;
+	if (ret) {
+		enable_irq(ts->interrupt_irq);
+		schedule_delayed_work(&ts->recovery_work,
+				      msecs_to_jiffies(G6TS_RECOVERY_DELAY_MS));
+	}
+
+	return ret;
 }
 
 static int g6ts_resume(struct device *dev)

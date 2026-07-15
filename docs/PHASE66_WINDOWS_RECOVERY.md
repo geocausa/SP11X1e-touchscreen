@@ -1,5 +1,10 @@
 # Phase 66 Windows-aligned panel recovery
 
+> **Superseded after hardware failure.** The Phase 66 boot timed out at stage
+> 12 because this revision mixed a second report-09 pair from a partial KD
+> recovery capture into the complete ETW cold-start path. Do not deploy it.
+> Phase 67 records the corrected evidence boundary and implementation.
+
 Phase 66 addresses the skipped characters and visible pauses that remained
 after the Phase 65 latency experiment. The input classifier and compositor
 were not the source of the long stalls. A paired trace showed:

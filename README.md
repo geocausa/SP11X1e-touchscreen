@@ -95,14 +95,19 @@ touches after two frames while retaining the longer weak/split anti-ghost
 windows. See
 [docs/PHASE65_KEYBOARD_LATENCY.md](docs/PHASE65_KEYBOARD_LATENCY.md).
 
-Phase 66 identifies repeated class-3 panel resets and full power-cycle
-recovery—not classifier execution—as the cause of the remaining keyboard
-pauses. It reconstructs the full volatile Windows collection setup, learns
-the versioned report-09 profile through feature `0x73`, validates every stage,
-and requires a real Heat frame before recovery succeeds. The unsuccessful
-two-frame latency experiment is reverted to the safer three-frame normal
-confirmation gate. See
-[docs/PHASE66_WINDOWS_RECOVERY.md](docs/PHASE66_WINDOWS_RECOVERY.md).
+Phase 66 identified repeated class-3 panel resets as the cause of the remaining
+keyboard pauses, but its cold-start replay mixed a complete ETW trace with a
+second report-09 pair seen only in a partial KD recovery capture. The hardware
+timed out at that added stage and did not start touch.
+
+Phase 67 removes that unsupported replay and pins the cold path to the one
+complete, end-to-end Windows trace for the installed firmware. It also fixes
+an independently found uninitialized contact-to-slot array, validates the
+exact installed firmware/profile before entering Heat mode, checks every DMA
+configuration and submission error, and adds source-order regression tests.
+The complete 1,381-frame corpus, current Windows classifier extraction, GCC,
+Clang, sparse, cppcheck, and strict client checkpatch passes are recorded in
+[docs/PHASE67_STATIC_AUDIT.md](docs/PHASE67_STATIC_AUDIT.md).
 
 It is not yet ready for a mainline submission. Labelled palm and physical-edge
 captures, measured edge calibration, pressure, merged-contact separation,
@@ -136,6 +141,7 @@ docs/PHASE63_WINDOWS_LIFECYCLE.md
 docs/PHASE64_FIXED_POINT_CLASSIFIER.md
 docs/PHASE65_KEYBOARD_LATENCY.md
 docs/PHASE66_WINDOWS_RECOVERY.md
+docs/PHASE67_STATIC_AUDIT.md
 phase55/
 tools/analyze_spb_etw_csv.py
 tools/decode_heat_frame.py
@@ -145,6 +151,7 @@ tools/track_heat_contacts.py
 tests/test_heat_decoder.py
 tests/test_contact_tracker.py
 tests/test_windows_classifier.py
+tests/test_source_invariants.py
 packaging/initramfs-tools/hooks/sp11-g6ts
 ```
 
