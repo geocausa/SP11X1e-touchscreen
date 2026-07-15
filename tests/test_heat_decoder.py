@@ -18,6 +18,7 @@ from tools.decode_heat_frame import (
     WINDOWS_NSR_ROW_TO_BIN,
     WINDOWS_STRONG_MAX,
     accepted_contacts,
+    connected_components,
     extract_heatmap,
     extract_nsr_bins,
     extract_report,
@@ -145,6 +146,24 @@ class HeatDecoderTests(unittest.TestCase):
         contacts, palms = accepted_contacts(grid, 0xB5)
         self.assertEqual(len(contacts), 2)
         self.assertEqual(palms, 0)
+
+    def test_windows_covariance_geometry_distinguishes_elongation(self):
+        square = make_grid(
+            [(10, 10, 0x80), (10, 11, 0x80), (11, 10, 0x80), (11, 11, 0x80)]
+        )
+        line = make_grid([(20, column, 0x80) for column in range(20, 24)])
+        square_shape = connected_components(square, 0xB5)[0]
+        line_shape = connected_components(line, 0xB5)[0]
+
+        self.assertAlmostEqual(square_shape["axis_ratio"], 1.0)
+        self.assertGreater(line_shape["axis_ratio"], square_shape["axis_ratio"])
+        self.assertGreaterEqual(square_shape["major_axis"], 1.0)
+        self.assertGreaterEqual(square_shape["minor_axis"], 1.0)
+
+    def test_windows_one_pixel_spread_uses_degenerate_default(self):
+        component = connected_components(make_grid([(10, 10, 0x80)]), 0xB5)[0]
+        self.assertEqual(component["axis_ratio"], 1.0)
+        self.assertEqual(component["normalized_spread"], 1.0)
 
     def test_strong_two_cell_candidate_survives(self):
         strong, _ = accepted_contacts(

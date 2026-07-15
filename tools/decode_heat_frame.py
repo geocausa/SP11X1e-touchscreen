@@ -7,6 +7,7 @@ from __future__ import annotations
 import argparse
 from collections import Counter, deque
 from dataclasses import dataclass
+import math
 from pathlib import Path
 import struct
 
@@ -24,6 +25,8 @@ PALM_MAX_SPAN = 12
 MAX_CONTACTS = 10
 WINDOWS_NSR_CUTOFF = 655
 WINDOWS_NSR_BINS = 16
+WINDOWS_AXIS_SCALE = 4.618800163269043
+WINDOWS_SPREAD_SCALE = 6.2831854820251465
 # Project 0x0C83 table at TouchPenProcessor configuration +0x0D90.
 WINDOWS_NSR_ROW_TO_BIN = (
     0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
@@ -246,6 +249,34 @@ def connected_components(
         cols = [index % GRID_COLS for index in pixels]
         weighted_row = sum((index // GRID_COLS) * strength[index] for index in pixels) / total
         weighted_col = sum((index % GRID_COLS) * strength[index] for index in pixels) / total
+        variance_row = sum(
+            strength[index] * ((index // GRID_COLS) - weighted_row) ** 2
+            for index in pixels
+        ) / total
+        variance_col = sum(
+            strength[index] * ((index % GRID_COLS) - weighted_col) ** 2
+            for index in pixels
+        ) / total
+        covariance = sum(
+            strength[index]
+            * ((index // GRID_COLS) - weighted_row)
+            * ((index % GRID_COLS) - weighted_col)
+            for index in pixels
+        ) / total
+        trace = variance_row + variance_col
+        discriminant = math.sqrt(
+            max(0.0, (variance_row - variance_col) ** 2 + 4.0 * covariance**2)
+        )
+        major_eigenvalue = max(0.0, (trace + discriminant) / 2.0)
+        minor_eigenvalue = max(0.0, (trace - discriminant) / 2.0)
+        major_axis = max(1.0, math.sqrt(major_eigenvalue) * WINDOWS_AXIS_SCALE)
+        minor_axis = max(1.0, math.sqrt(minor_eigenvalue) * WINDOWS_AXIS_SCALE)
+        axis_ratio = major_axis / minor_axis
+        normalized_spread = (
+            trace * WINDOWS_SPREAD_SCALE / (len(pixels) - 1)
+            if len(pixels) >= 2
+            else 1.0
+        )
         components.append(
             {
                 "pixels": float(len(pixels)),
@@ -259,6 +290,13 @@ def connected_components(
                 "row_max": float(max(rows)),
                 "col_min": float(min(cols)),
                 "col_max": float(max(cols)),
+                "variance_row": variance_row,
+                "variance_col": variance_col,
+                "covariance": covariance,
+                "major_axis": major_axis,
+                "minor_axis": minor_axis,
+                "axis_ratio": axis_ratio,
+                "normalized_spread": normalized_spread,
             }
         )
     components.sort(key=lambda item: item["strength"], reverse=True)
@@ -347,6 +385,8 @@ def decode(path: Path, thresholds: list[int]) -> None:
                 f"#{index} pixels={int(component['pixels'])} strength={int(component['strength'])} "
                 f"sensor=({component['col']:.2f},{component['row']:.2f}) "
                 f"logical=({component['x32767']:.0f},{component['y32767']:.0f}) "
+                f"axis_ratio={component['axis_ratio']:.4f} "
+                f"spread={component['normalized_spread']:.4f} "
                 f"box=({int(component['col_min'])},{int(component['row_min'])})-"
                 f"({int(component['col_max'])},{int(component['row_max'])})"
             )

@@ -68,6 +68,8 @@ def main() -> int:
     largest_pixels = 0
     x_values: list[float] = []
     y_values: list[float] = []
+    axis_ratios: list[float] = []
+    normalized_spreads: list[float] = []
 
     for path in iter_frames(args.paths):
         frame_count += 1
@@ -120,6 +122,8 @@ def main() -> int:
             largest_pixels = max(largest_pixels, int(contact["pixels"]))
             x_values.append(contact["x32767"])
             y_values.append(contact["y32767"])
+            axis_ratios.append(contact["axis_ratio"])
+            normalized_spreads.append(contact["normalized_spread"])
 
     print(f"frames={frame_count} decoded={frame_count - len(errors)} errors={len(errors)}")
     print(
@@ -146,6 +150,12 @@ def main() -> int:
         print(
             f"observed_contact_bounds=x:{min(x_values):.1f}..{max(x_values):.1f} "
             f"y:{min(y_values):.1f}..{max(y_values):.1f}"
+        )
+        print(
+            "windows_geometry_bounds="
+            f"axis_ratio:{min(axis_ratios):.6f}..{max(axis_ratios):.6f} "
+            f"normalized_spread:{min(normalized_spreads):.6f}.."
+            f"{max(normalized_spreads):.6f}"
         )
 
     for path, message in errors[:20]:

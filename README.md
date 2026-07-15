@@ -49,10 +49,15 @@ does not reject any established contact. See
 [docs/PHASE59_NSR_METADATA.md](docs/PHASE59_NSR_METADATA.md).
 
 The next Windows stage is now bounded as a ten-feature, four-score statistical
-shape classifier with temporal class processing. Its architecture and embedded
-table layout are documented, but filtering is intentionally deferred until
-class labels and labelled captures are available. See
-[docs/PHASE60_CLASSIFIER_BOUNDARY.md](docs/PHASE60_CLASSIFIER_BOUNDARY.md).
+shape classifier with temporal class processing. Its architecture and decoded
+subsection layout are documented. Phase 61 adds the recovered covariance-axis
+and normalized-spread features to the offline tracer. Phase 62 proves the PSDB
+pointer path and adds a bounded extractor/scorer for a locally supplied DLL,
+without committing Microsoft data. Live filtering remains deferred until all
+ten inputs, class labels, and labelled captures are available. See
+[docs/PHASE60_CLASSIFIER_BOUNDARY.md](docs/PHASE60_CLASSIFIER_BOUNDARY.md) and
+[docs/PHASE61_OFFLINE_GEOMETRY.md](docs/PHASE61_OFFLINE_GEOMETRY.md), and
+[docs/PHASE62_PSDB_MODEL_EXTRACTOR.md](docs/PHASE62_PSDB_MODEL_EXTRACTOR.md).
 
 It is not yet production- or upstream-ready. Conservative broad-contact palm
 filtering remains while later shape classification still needs more recovery
@@ -80,13 +85,17 @@ docs/WINDOWS_TOUCH_TRACKER_RE.md
 docs/PHASE58_TRACKING_PIPELINE.md
 docs/PHASE59_NSR_METADATA.md
 docs/PHASE60_CLASSIFIER_BOUNDARY.md
+docs/PHASE61_OFFLINE_GEOMETRY.md
+docs/PHASE62_PSDB_MODEL_EXTRACTOR.md
 phase55/
 tools/analyze_spb_etw_csv.py
 tools/decode_heat_frame.py
+tools/extract_windows_classifier.py
 tools/regress_heat_frames.py
 tools/track_heat_contacts.py
 tests/test_heat_decoder.py
 tests/test_contact_tracker.py
+tests/test_windows_classifier.py
 packaging/initramfs-tools/hooks/sp11-g6ts
 ```
 
