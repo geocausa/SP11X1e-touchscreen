@@ -14,8 +14,11 @@ import struct
 GRID_ROWS = 46
 GRID_COLS = 68
 GRID_SAMPLES = GRID_ROWS * GRID_COLS
-HEAT_THRESHOLD = 8
-MIN_CONTACT_PIXELS = 2
+WINDOWS_SIGNAL_ZERO = 180
+HEAT_THRESHOLD = 9
+WINDOWS_ACTIVE_MAX = WINDOWS_SIGNAL_ZERO - HEAT_THRESHOLD
+WINDOWS_STRONG_MAX = 162
+MIN_CONTACT_PIXELS = 3
 PALM_MAX_PIXELS = 48
 PALM_MAX_SPAN = 12
 MAX_CONTACTS = 10
@@ -129,9 +132,20 @@ def modal_baseline(grid: bytes) -> tuple[int, int]:
     return baseline, histogram[baseline]
 
 
-def connected_components(grid: bytes, baseline: int, threshold: int) -> list[dict[str, float]]:
-    strength = [max(0, baseline - value) for value in grid]
-    active = [value >= threshold for value in strength]
+def connected_components(
+    grid: bytes, baseline: int, threshold: int = HEAT_THRESHOLD
+) -> list[dict[str, float]]:
+    """Build the four-connected candidates used by the Windows detector.
+
+    ``baseline`` is retained for diagnostics and API compatibility.  Windows
+    does not threshold relative to the frame mode: its normal configuration
+    converts the calibrated byte grid to a fixed active ceiling.  The DLL's
+    lookup is linear, with its zero crossing at approximately raw value 180.
+    """
+    del baseline
+    active_max = WINDOWS_SIGNAL_ZERO - threshold
+    strength = [max(0, WINDOWS_SIGNAL_ZERO - value) for value in grid]
+    active = [value <= active_max for value in grid]
     seen = [False] * GRID_SAMPLES
     components: list[dict[str, float]] = []
 
@@ -145,17 +159,14 @@ def connected_components(grid: bytes, baseline: int, threshold: int) -> list[dic
             index = queue.popleft()
             pixels.append(index)
             row, col = divmod(index, GRID_COLS)
-            for dr in (-1, 0, 1):
-                for dc in (-1, 0, 1):
-                    if dr == 0 and dc == 0:
-                        continue
-                    nr, nc = row + dr, col + dc
-                    if not (0 <= nr < GRID_ROWS and 0 <= nc < GRID_COLS):
-                        continue
-                    neighbour = nr * GRID_COLS + nc
-                    if active[neighbour] and not seen[neighbour]:
-                        seen[neighbour] = True
-                        queue.append(neighbour)
+            for dr, dc in ((-1, 0), (0, -1), (0, 1), (1, 0)):
+                nr, nc = row + dr, col + dc
+                if not (0 <= nr < GRID_ROWS and 0 <= nc < GRID_COLS):
+                    continue
+                neighbour = nr * GRID_COLS + nc
+                if active[neighbour] and not seen[neighbour]:
+                    seen[neighbour] = True
+                    queue.append(neighbour)
 
         total = sum(strength[index] for index in pixels)
         rows = [index // GRID_COLS for index in pixels]
@@ -166,6 +177,7 @@ def connected_components(grid: bytes, baseline: int, threshold: int) -> list[dic
             {
                 "pixels": float(len(pixels)),
                 "strength": float(total),
+                "peak_value": float(min(grid[index] for index in pixels)),
                 "row": weighted_row,
                 "col": weighted_col,
                 "x32767": weighted_col * 32767.0 / (GRID_COLS - 1),
@@ -190,7 +202,8 @@ def accepted_contacts(
         pixels = int(component["pixels"])
         row_span = int(component["row_max"] - component["row_min"] + 1)
         col_span = int(component["col_max"] - component["col_min"] + 1)
-        if pixels < MIN_CONTACT_PIXELS:
+        peak_value = int(component["peak_value"])
+        if pixels < MIN_CONTACT_PIXELS and peak_value > WINDOWS_STRONG_MAX:
             continue
         if (
             pixels > PALM_MAX_PIXELS
@@ -232,7 +245,8 @@ def decode(path: Path, thresholds: list[int]) -> None:
         useful = [component for component in components if component["pixels"] >= 2]
         accepted, palm_rejections = accepted_contacts(grid, baseline, threshold)
         print(
-            f"threshold={threshold} components={len(components)} useful={len(useful)} "
+            f"threshold={threshold} active_max={WINDOWS_SIGNAL_ZERO - threshold} "
+            f"components={len(components)} useful={len(useful)} "
             f"accepted={len(accepted)} palm_rejections={palm_rejections}"
         )
         for index, component in enumerate(accepted):

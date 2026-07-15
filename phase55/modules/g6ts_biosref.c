@@ -42,9 +42,19 @@
 #define G6TS_HEAT_COLS			68U
 #define G6TS_HEAT_SAMPLES		(G6TS_HEAT_ROWS * G6TS_HEAT_COLS)
 #define G6TS_HEAT_SECTION		0x0100
-#define G6TS_HEAT_THRESHOLD		8U
-#define G6TS_HEAT_MIN_PIXELS		5U
-#define G6TS_HEAT_MIN_STRENGTH		120U
+/*
+ * TouchPenProcessor0C83.dll converts a calibrated byte through a linear
+ * lookup whose zero crossing is approximately 180.  The SP11 configuration
+ * is inferred to start a candidate at raw <= 171.  Its scan-line union joins
+ * only edge-adjacent cells.  One- and two-cell candidates survive only when
+ * their peak is stronger than the secondary detector threshold (approximately
+ * raw <= 162); all candidates of three or more cells continue downstream.
+ */
+#define G6TS_HEAT_SIGNAL_ZERO		180U
+#define G6TS_HEAT_THRESHOLD		9U
+#define G6TS_HEAT_ACTIVE_MAX		(G6TS_HEAT_SIGNAL_ZERO - G6TS_HEAT_THRESHOLD)
+#define G6TS_HEAT_STRONG_MAX		162U
+#define G6TS_HEAT_MIN_PIXELS		3U
 #define G6TS_HEAT_PALM_PIXELS		48U
 #define G6TS_HEAT_PALM_SPAN		12U
 #define G6TS_MAX_CONTACTS		10U
@@ -87,6 +97,7 @@ struct g6ts_contact {
 	u16 pixels;
 	u16 x;
 	u16 y;
+	u8 peak_value;
 	u8 min_col;
 	u8 max_col;
 	u8 min_row;
@@ -152,6 +163,8 @@ struct g6ts {
 	u64 heatmap_contact_frames;
 	u64 heatmap_idle_frames;
 	u64 heatmap_palm_rejections;
+	u64 heatmap_small_strong_contacts;
+	u64 heatmap_weak_rejections;
 	u64 heatmap_held_frames;
 	u64 recovery_requests;
 	u64 recovery_successes;
@@ -415,11 +428,9 @@ static int g6ts_extract_heatmap(struct g6ts *ts, const u8 *content,
 	return found ? 0 : -ENOENT;
 }
 
-static bool g6ts_heat_active(const struct g6ts *ts, unsigned int index,
-			      u8 baseline)
+static bool g6ts_heat_active(const struct g6ts *ts, unsigned int index)
 {
-	return ts->heatmap[index] <= baseline &&
-	       baseline - ts->heatmap[index] >= G6TS_HEAT_THRESHOLD;
+	return ts->heatmap[index] <= G6TS_HEAT_ACTIVE_MAX;
 }
 
 static void g6ts_store_contact(struct g6ts *ts,
@@ -464,11 +475,11 @@ static unsigned int g6ts_find_contacts(struct g6ts *ts)
 		struct g6ts_contact contact = {
 			.min_col = G6TS_HEAT_COLS - 1,
 			.min_row = G6TS_HEAT_ROWS - 1,
+			.peak_value = U8_MAX,
 		};
 		unsigned int head = 0, tail = 0;
 
-		if (ts->heat_seen[start] ||
-		    !g6ts_heat_active(ts, start, baseline))
+		if (ts->heat_seen[start] || !g6ts_heat_active(ts, start))
 			continue;
 		ts->heat_seen[start] = 1;
 		ts->heat_queue[tail++] = start;
@@ -477,7 +488,8 @@ static unsigned int g6ts_find_contacts(struct g6ts *ts)
 			unsigned int index = ts->heat_queue[head++];
 			unsigned int row = index / G6TS_HEAT_COLS;
 			unsigned int col = index % G6TS_HEAT_COLS;
-			unsigned int strength = baseline - ts->heatmap[index];
+			unsigned int strength = G6TS_HEAT_SIGNAL_ZERO -
+						ts->heatmap[index];
 			int dr, dc;
 
 			contact.pixels++;
@@ -488,6 +500,8 @@ static unsigned int g6ts_find_contacts(struct g6ts *ts)
 			contact.max_col = max_t(u8, contact.max_col, col);
 			contact.min_row = min_t(u8, contact.min_row, row);
 			contact.max_row = max_t(u8, contact.max_row, row);
+			contact.peak_value = min_t(u8, contact.peak_value,
+						   ts->heatmap[index]);
 
 			for (dr = -1; dr <= 1; dr++) {
 				for (dc = -1; dc <= 1; dc++) {
@@ -495,7 +509,8 @@ static unsigned int g6ts_find_contacts(struct g6ts *ts)
 					int neighbour_col = col + dc;
 					unsigned int neighbour;
 
-					if ((!dr && !dc) || neighbour_row < 0 ||
+					if (abs(dr) + abs(dc) != 1 ||
+					    neighbour_row < 0 ||
 					    neighbour_row >= G6TS_HEAT_ROWS ||
 					    neighbour_col < 0 ||
 					    neighbour_col >= G6TS_HEAT_COLS)
@@ -503,8 +518,7 @@ static unsigned int g6ts_find_contacts(struct g6ts *ts)
 					neighbour = neighbour_row * G6TS_HEAT_COLS +
 						    neighbour_col;
 					if (ts->heat_seen[neighbour] ||
-					    !g6ts_heat_active(ts, neighbour,
-							      baseline))
+					    !g6ts_heat_active(ts, neighbour))
 						continue;
 					ts->heat_seen[neighbour] = 1;
 					ts->heat_queue[tail++] = neighbour;
@@ -516,9 +530,13 @@ static unsigned int g6ts_find_contacts(struct g6ts *ts)
 					       ts->max_contact_pixels,
 					       min_t(unsigned int, contact.pixels,
 						     U8_MAX));
-		if (contact.pixels < G6TS_HEAT_MIN_PIXELS ||
-		    contact.strength < G6TS_HEAT_MIN_STRENGTH)
-			continue;
+		if (contact.pixels < G6TS_HEAT_MIN_PIXELS) {
+			if (contact.peak_value > G6TS_HEAT_STRONG_MAX) {
+				ts->heatmap_weak_rejections++;
+				continue;
+			}
+			ts->heatmap_small_strong_contacts++;
+		}
 		if (contact.pixels > G6TS_HEAT_PALM_PIXELS ||
 		    contact.max_col - contact.min_col + 1 > G6TS_HEAT_PALM_SPAN ||
 		    contact.max_row - contact.min_row + 1 > G6TS_HEAT_PALM_SPAN) {
@@ -531,10 +549,11 @@ static unsigned int g6ts_find_contacts(struct g6ts *ts)
 				    (u64)contact.strength * (G6TS_HEAT_ROWS - 1));
 		if (ts->heat_debug)
 			dev_info(&ts->spi->dev,
-				 "blob: col=%u..%u row=%u..%u px=%u str=%u -> x=%u y=%u\n",
+				 "blob: col=%u..%u row=%u..%u px=%u peak=%u str=%u -> x=%u y=%u\n",
 				 contact.min_col, contact.max_col,
 				 contact.min_row, contact.max_row,
-				 contact.pixels, contact.strength,
+				 contact.pixels, contact.peak_value,
+				 contact.strength,
 				 contact.x, contact.y);
 		g6ts_store_contact(ts, &contact, &contact_count);
 	}
@@ -886,7 +905,7 @@ static ssize_t state_show(struct device *dev,
 		"manual_read_runs=%llu descriptor_runs=%llu report_descriptor_runs=%llu mode_sequence_runs=%llu next_report_runs=%llu dma_pairs=%llu dma_outputs=%llu responses=%llu reset_seen=%u descriptor_seen=%u report_descriptor_seen=%u\n"
 		"expected_report_descriptor_len=%u report_descriptor_len=%zu\n"
 		"mode_stage=%u mode_value=%#02x mode_enabled=%u post_mode_reset_seen=%u captured_report_len=%zu interleaved_data=%llu touch_reports=%llu heatmap_reports=%llu last_interleaved_id=%#02x last_interleaved_len=%u\n"
-		"heat_decode_errors=%llu contact_frames=%llu idle_frames=%llu last_contacts=%u heat_baseline=%#02x palm_rejections=%llu held_frames=%llu max_contact_pixels=%u\n"
+		"heat_decode_errors=%llu contact_frames=%llu idle_frames=%llu last_contacts=%u heat_baseline=%#02x active_max=%u strong_max=%u palm_rejections=%llu small_strong=%llu weak_rejections=%llu held_frames=%llu max_contact_pixels=%u\n"
 		"recovery_requests=%llu recovery_successes=%llu recovery_failures=%llu recovery_fail_streak=%u\n"
 		"last_ret=%d header_ret=%d body_ret=%d output_ret=%d pending_before=%d pending_after=%d\n"
 		"last_header=%*ph body_total_len=%zu class=%u content_len=%u content_id=%u last_body=%*ph\n",
@@ -907,7 +926,10 @@ static ssize_t state_show(struct device *dev,
 		ts->last_interleaved_id, ts->last_interleaved_len,
 		ts->heatmap_decode_errors, ts->heatmap_contact_frames,
 		ts->heatmap_idle_frames, ts->last_contact_count,
-		ts->last_heat_baseline, ts->heatmap_palm_rejections,
+		ts->last_heat_baseline, G6TS_HEAT_ACTIVE_MAX,
+		G6TS_HEAT_STRONG_MAX, ts->heatmap_palm_rejections,
+		ts->heatmap_small_strong_contacts,
+		ts->heatmap_weak_rejections,
 		ts->heatmap_held_frames, ts->max_contact_pixels,
 		ts->recovery_requests, ts->recovery_successes,
 		ts->recovery_failures, ts->recovery_fail_streak,
