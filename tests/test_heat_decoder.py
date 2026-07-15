@@ -25,6 +25,10 @@ from tools.decode_heat_frame import (
     modal_baseline,
     parse_sections,
     parse_metadata_records,
+    halo_ratio,
+    secondary_detector_features,
+    windows_classifier_features,
+    windows_signal,
 )
 from tools.track_heat_contacts import (
     TRACK_CONFIRM_NORMAL,
@@ -170,6 +174,40 @@ class HeatDecoderTests(unittest.TestCase):
         component = connected_components(make_grid([(10, 10, 0x80)]), 0xB5)[0]
         self.assertEqual(component["axis_ratio"], 1.0)
         self.assertEqual(component["normalized_spread"], 1.0)
+
+    def test_windows_secondary_detector_uses_peak_relative_reruns(self):
+        values = [80, 100, 120, 140, 160]
+        grid = make_grid(
+            [(10, 10 + index, value) for index, value in enumerate(values)],
+            baseline=180,
+        )
+        component = connected_components(grid, 180)[0]
+        self.assertEqual(
+            secondary_detector_features(grid, component),
+            (1, 3, 1, 2, 1, 1),
+        )
+        features = windows_classifier_features(grid, component)
+        self.assertEqual(features[:7], (5.0, 3.0, 2.0, 1.0, 1.0, 1.0, 1.0))
+
+    def test_windows_weak_candidate_keeps_default_rerun_features(self):
+        grid = make_grid(
+            [(20, 20, 150), (20, 21, 155), (20, 22, 160)], baseline=180
+        )
+        component = connected_components(grid, 180)[0]
+        self.assertLess(windows_signal(150), 0.07)
+        self.assertEqual(
+            secondary_detector_features(grid, component),
+            (1, 3, 1, 3, 1, 3),
+        )
+
+    def test_windows_halo_walk_accumulates_falling_outer_energy(self):
+        values = [80, 100, 120, 140, 160]
+        grid = make_grid(
+            [(10, 10 + index, value) for index, value in enumerate(values)],
+            baseline=172,
+        )
+        component = connected_components(grid, 172)[0]
+        self.assertAlmostEqual(halo_ratio(grid, component), 0.40695479884208435)
 
     def test_strong_two_cell_candidate_survives(self):
         strong, _ = accepted_contacts(

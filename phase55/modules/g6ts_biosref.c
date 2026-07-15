@@ -14,6 +14,7 @@
 #include <linux/jiffies.h>
 #include <linux/kernel.h>
 #include <linux/math.h>
+#include <linux/math64.h>
 #include <linux/module.h>
 #include <linux/mutex.h>
 #include <linux/pm.h>
@@ -21,6 +22,8 @@
 #include <linux/spi/spi.h>
 #include <linux/unaligned.h>
 #include <linux/workqueue.h>
+
+#include "g6ts_classifier_profile.h"
 
 #define G6TS_NAME			"microsoft-g6ts"
 #define G6TS_SPI_HZ			40000000U
@@ -65,6 +68,15 @@
 #define G6TS_TRACK_SPLIT_RADIUS		2048U
 #define G6TS_SMOOTH_STATIONARY_MAX	64U
 #define G6TS_SMOOTH_SLOW_MAX		256U
+#define G6TS_SIGNAL_INTERCEPT_Q24	6710886
+#define G6TS_SIGNAL_STEP_Q24		37251
+#define G6TS_SECONDARY_A_Q12		645663
+#define G6TS_SECONDARY_NOISE_Q12	36895
+#define G6TS_SECONDARY_SEED_Q12		225
+#define G6TS_AXIS_SCALE_Q12		18919
+#define G6TS_SPREAD_SCALE_Q12		25736
+#define G6TS_HALO_RATIO_Q12		614
+#define G6TS_HALO_UNAVAILABLE_Q12	(100U << G6TS_CLASSIFIER_SHIFT)
 #define G6TS_ASSIGN_MAX			(G6TS_MAX_CONTACTS * 2U)
 #define G6TS_ASSIGN_UNMATCHED_COST	1000000
 #define G6TS_ASSIGN_INVALID_COST	3000000
@@ -110,6 +122,9 @@ struct g6ts_contact {
 	u8 max_col;
 	u8 min_row;
 	u8 max_row;
+	s32 features_q12[G6TS_FEATURE_COUNT];
+	u8 shape_class;
+	bool shape_allowed;
 };
 
 struct g6ts_track {
@@ -125,6 +140,7 @@ struct g6ts_track {
 	u8 missed;
 	u8 evidence;
 	u8 required_evidence;
+	u8 shape_class;
 	bool active;
 	bool confirmed;
 };
@@ -152,6 +168,8 @@ struct g6ts {
 	u8 *body;
 	u8 heatmap[G6TS_HEAT_SAMPLES];
 	u8 heat_seen[G6TS_HEAT_SAMPLES];
+	u8 heat_component[G6TS_HEAT_SAMPLES];
+	u8 heat_work[G6TS_HEAT_SAMPLES];
 	u16 heat_queue[G6TS_HEAT_SAMPLES];
 	u16 nsr_bins[G6TS_NSR_BINS];
 	struct g6ts_contact contacts[G6TS_MAX_CONTACTS];
@@ -481,6 +499,314 @@ static void g6ts_store_contact(struct g6ts *ts,
 		ts->contacts[weakest] = *contact;
 }
 
+static s32 g6ts_signal_q12(u8 value)
+{
+	s32 signal_q24 = G6TS_SIGNAL_INTERCEPT_Q24 -
+			 value * G6TS_SIGNAL_STEP_Q24;
+
+	return (signal_q24 + BIT(G6TS_CLASSIFIER_SHIFT - 1)) >>
+		G6TS_CLASSIFIER_SHIFT;
+}
+
+static u8 g6ts_secondary_cutoff(u8 peak_value, unsigned int pass)
+{
+	static const u16 fractions_q12[] = { 2048, 3072, 3584 };
+	u32 fraction = fractions_q12[pass];
+	u64 cutoff_q24;
+	u32 cutoff_q12;
+
+	cutoff_q24 = (u64)((1U << G6TS_CLASSIFIER_SHIFT) - fraction) *
+		      G6TS_SECONDARY_A_Q12;
+	cutoff_q24 += (u64)fraction *
+		       ((peak_value << G6TS_CLASSIFIER_SHIFT) +
+			G6TS_SECONDARY_NOISE_Q12);
+	cutoff_q12 = (cutoff_q24 + BIT(G6TS_CLASSIFIER_SHIFT - 1)) >>
+		      G6TS_CLASSIFIER_SHIFT;
+	return min_t(u32, U8_MAX,
+		     (cutoff_q12 + BIT(G6TS_CLASSIFIER_SHIFT - 1)) >>
+		     G6TS_CLASSIFIER_SHIFT);
+}
+
+static bool g6ts_secondary_neighbour(const struct g6ts *ts, int row, int col,
+				     u8 cutoff)
+{
+	unsigned int index;
+
+	if (row < 0 || row >= G6TS_HEAT_ROWS ||
+	    col < 0 || col >= G6TS_HEAT_COLS)
+		return false;
+	index = row * G6TS_HEAT_COLS + col;
+	return ts->heat_component[index] && !ts->heat_work[index] &&
+	       ts->heatmap[index] <= cutoff;
+}
+
+static void g6ts_secondary_features(struct g6ts *ts,
+				    struct g6ts_contact *contact)
+{
+	static const s8 neighbours[][2] = {
+		{ -1, 0 }, { 0, -1 }, { 1, 0 }, { 0, 1 },
+	};
+	unsigned int area = (contact->max_col - contact->min_col + 1) *
+			    (contact->max_row - contact->min_row + 1);
+	unsigned int pass;
+
+	for (pass = 0; pass < 3; pass++) {
+		contact->features_q12[1 + pass] =
+			contact->pixels << G6TS_CLASSIFIER_SHIFT;
+		contact->features_q12[4 + pass] = 1U << G6TS_CLASSIFIER_SHIFT;
+	}
+	/* FUN_180041fd8 only reruns bounded candidates above 0.05 + 0.02. */
+	if (area >= 0x4e3 || g6ts_signal_q12(contact->peak_value) <= 287)
+		return;
+
+	for (pass = 0; pass < 3; pass++) {
+		u8 cutoff = g6ts_secondary_cutoff(contact->peak_value, pass);
+		unsigned int accepted = 0, largest = 0, start;
+
+		memset(ts->heat_work, 0, sizeof(ts->heat_work));
+		for (start = 0; start < G6TS_HEAT_SAMPLES; start++) {
+			unsigned int head = 0, tail = 0, pixels = 0;
+			u8 peak = U8_MAX;
+
+			if (!ts->heat_component[start] || ts->heat_work[start] ||
+			    ts->heatmap[start] > cutoff)
+				continue;
+			ts->heat_work[start] = 1;
+			ts->heat_queue[tail++] = start;
+			while (head < tail) {
+				unsigned int index = ts->heat_queue[head++];
+				unsigned int row = index / G6TS_HEAT_COLS;
+				unsigned int col = index % G6TS_HEAT_COLS;
+				unsigned int n;
+
+				pixels++;
+				peak = min_t(u8, peak, ts->heatmap[index]);
+				for (n = 0; n < ARRAY_SIZE(neighbours); n++) {
+					int nr = row + neighbours[n][1];
+					int nc = col + neighbours[n][0];
+					unsigned int neighbour;
+
+					if (!g6ts_secondary_neighbour(ts, nr, nc,
+								  cutoff))
+						continue;
+					neighbour = nr * G6TS_HEAT_COLS + nc;
+					ts->heat_work[neighbour] = 1;
+					ts->heat_queue[tail++] = neighbour;
+				}
+			}
+			if (pixels <= 2 &&
+			    g6ts_signal_q12(peak) <= G6TS_SECONDARY_SEED_Q12)
+				continue;
+			accepted++;
+			largest = max(largest, pixels);
+		}
+		contact->features_q12[1 + pass] =
+			largest << G6TS_CLASSIFIER_SHIFT;
+		contact->features_q12[4 + pass] =
+			accepted << G6TS_CLASSIFIER_SHIFT;
+	}
+}
+
+static void g6ts_geometry_features(struct g6ts *ts,
+				   struct g6ts_contact *contact)
+{
+	u64 sum = 0, sum_x = 0, sum_y = 0;
+	u64 sum_xx = 0, sum_yy = 0, sum_xy = 0;
+	s64 var_x, var_y, covariance, trace, delta, discriminant;
+	u64 denominator;
+	u32 major_axis, minor_axis;
+	unsigned int index;
+
+	for (index = 0; index < G6TS_HEAT_SAMPLES; index++) {
+		u32 row, col;
+		s32 signal;
+
+		if (!ts->heat_component[index])
+			continue;
+		row = index / G6TS_HEAT_COLS;
+		col = index % G6TS_HEAT_COLS;
+		signal = g6ts_signal_q12(ts->heatmap[index]);
+		if (signal <= 0)
+			continue;
+		sum += signal;
+		sum_x += (u64)signal * col;
+		sum_y += (u64)signal * row;
+		sum_xx += (u64)signal * col * col;
+		sum_yy += (u64)signal * row * row;
+		sum_xy += (u64)signal * col * row;
+	}
+	if (!sum) {
+		contact->features_q12[7] = 1U << G6TS_CLASSIFIER_SHIFT;
+		contact->features_q12[8] = 1U << G6TS_CLASSIFIER_SHIFT;
+		return;
+	}
+
+	denominator = sum * sum;
+	var_x = div64_s64(((s64)(sum_xx * sum) - (s64)(sum_x * sum_x)) *
+			    (1U << G6TS_CLASSIFIER_SHIFT), denominator);
+	var_y = div64_s64(((s64)(sum_yy * sum) - (s64)(sum_y * sum_y)) *
+			    (1U << G6TS_CLASSIFIER_SHIFT), denominator);
+	covariance = div64_s64(((s64)(sum_xy * sum) - (s64)(sum_x * sum_y)) *
+				 (1U << G6TS_CLASSIFIER_SHIFT), denominator);
+	trace = max_t(s64, 0, var_x + var_y);
+	delta = var_x - var_y;
+	discriminant = int_sqrt64(delta * delta + 4 * covariance * covariance);
+	major_axis = int_sqrt64(((trace + discriminant) / 2) <<
+				 G6TS_CLASSIFIER_SHIFT);
+	minor_axis = int_sqrt64(max_t(s64, 0, (trace - discriminant) / 2) <<
+				 G6TS_CLASSIFIER_SHIFT);
+	major_axis = max_t(u32, 1U << G6TS_CLASSIFIER_SHIFT,
+			   ((u64)major_axis * G6TS_AXIS_SCALE_Q12) >>
+			   G6TS_CLASSIFIER_SHIFT);
+	minor_axis = max_t(u32, 1U << G6TS_CLASSIFIER_SHIFT,
+			   ((u64)minor_axis * G6TS_AXIS_SCALE_Q12) >>
+			   G6TS_CLASSIFIER_SHIFT);
+	contact->features_q12[7] = div_u64((u64)major_axis <<
+					   G6TS_CLASSIFIER_SHIFT, minor_axis);
+	if (contact->pixels < 2) {
+		contact->features_q12[8] = 1U << G6TS_CLASSIFIER_SHIFT;
+	} else {
+		contact->features_q12[8] = div64_s64(
+			trace * G6TS_SPREAD_SCALE_Q12,
+			(1U << G6TS_CLASSIFIER_SHIFT) * (contact->pixels - 1));
+	}
+}
+
+static s32 g6ts_halo_feature(struct g6ts *ts,
+			     const struct g6ts_contact *contact)
+{
+	static const s8 neighbours[][2] = {
+		{ -1, 0 }, { 0, -1 }, { 1, 0 }, { 0, 1 },
+	};
+	u8 state[16][16];
+	int origin_col = contact->min_col - 3;
+	int origin_row = contact->min_row - 3;
+	s32 peak = g6ts_signal_q12(contact->peak_value);
+	s32 peak_threshold = peak / 4;
+	s64 halo = 0;
+	unsigned int radius, n;
+	int row, col;
+
+	if (contact->max_col - contact->min_col + 1 >= 11 ||
+	    contact->max_row - contact->min_row + 1 >= 11 || peak <= 0)
+		return G6TS_HALO_UNAVAILABLE_Q12;
+	memset(state, 5, sizeof(state));
+	for (row = max(0, origin_row); row <=
+		     min_t(int, G6TS_HEAT_ROWS - 1, contact->max_row + 3); row++) {
+		for (col = max(0, origin_col); col <=
+		     min_t(int, G6TS_HEAT_COLS - 1, contact->max_col + 3); col++) {
+			unsigned int index = row * G6TS_HEAT_COLS + col;
+
+			if (ts->heat_component[index])
+				state[row - origin_row][col - origin_col] = 0;
+			else if (!g6ts_heat_active(ts, index))
+				state[row - origin_row][col - origin_col] = 4;
+		}
+	}
+	for (row = contact->min_row; row <= contact->max_row; row++) {
+		for (col = contact->min_col; col <= contact->max_col; col++) {
+			if (state[row - origin_row][col - origin_col])
+				continue;
+			for (n = 0; n < ARRAY_SIZE(neighbours); n++) {
+				int nc = col + neighbours[n][0];
+				int nr = row + neighbours[n][1];
+
+				if (nr < 0 || nr >= G6TS_HEAT_ROWS || nc < 0 ||
+				    nc >= G6TS_HEAT_COLS ||
+				    state[nr - origin_row][nc - origin_col] != 4)
+					continue;
+				if (g6ts_signal_q12(ts->heatmap[nr * G6TS_HEAT_COLS + nc]) >
+				    peak_threshold)
+					state[nr - origin_row][nc - origin_col] = 1;
+			}
+		}
+	}
+	for (radius = 1; radius <= 2; radius++) {
+		for (row = max_t(int, 0, contact->min_row - radius); row <=
+		     min_t(int, G6TS_HEAT_ROWS - 1, contact->max_row + radius); row++) {
+			for (col = max_t(int, 0, contact->min_col - radius); col <=
+			     min_t(int, G6TS_HEAT_COLS - 1, contact->max_col + radius); col++) {
+				s32 current_signal;
+
+				if (state[row - origin_row][col - origin_col] > radius)
+					continue;
+				current_signal = g6ts_signal_q12(
+					ts->heatmap[row * G6TS_HEAT_COLS + col]);
+				for (n = 0; n < ARRAY_SIZE(neighbours); n++) {
+					int nc = col + neighbours[n][0];
+					int nr = row + neighbours[n][1];
+					s32 next;
+
+					if (nr < 0 || nr >= G6TS_HEAT_ROWS || nc < 0 ||
+					    nc >= G6TS_HEAT_COLS ||
+					    state[nr - origin_row][nc - origin_col] != 4)
+						continue;
+					next = g6ts_signal_q12(
+						ts->heatmap[nr * G6TS_HEAT_COLS + nc]);
+					if (next < peak_threshold && current_signal > next &&
+					    current_signal > 0 &&
+					    (s64)next << G6TS_CLASSIFIER_SHIFT >
+						(s64)current_signal * G6TS_HALO_RATIO_Q12) {
+						state[nr - origin_row][nc - origin_col] =
+							radius + 1;
+						halo += next;
+					}
+				}
+			}
+		}
+	}
+	return div64_s64(halo << G6TS_CLASSIFIER_SHIFT, peak);
+}
+
+static u8 g6ts_classify_contact(const struct g6ts_contact *contact)
+{
+	s64 best_score = S64_MIN;
+	u8 best_class = 0;
+	unsigned int class, row, col;
+
+	for (class = 0; class < ARRAY_SIZE(g6ts_classifier_models); class++) {
+		const struct g6ts_classifier_model *model =
+			&g6ts_classifier_models[class];
+		s64 distance = 0;
+
+		if (contact->pixels > model->max_points)
+			continue;
+		for (row = 0; row < G6TS_FEATURE_COUNT; row++) {
+			s64 transformed = 0;
+
+			for (col = row; col < G6TS_FEATURE_COUNT; col++) {
+				s32 residual;
+
+				if (col == 9 && contact->features_q12[col] ==
+						G6TS_HALO_UNAVAILABLE_Q12)
+					residual = 0;
+				else
+					residual = contact->features_q12[col] -
+						   model->means_q12[col];
+				transformed += (s64)residual *
+					       model->transform_q12[row][col];
+			}
+			transformed >>= G6TS_CLASSIFIER_SHIFT;
+			if (transformed > INT_MAX || transformed < -INT_MAX ||
+			    distance > S64_MAX - transformed * transformed) {
+				distance = S64_MAX;
+				break;
+			}
+			distance += transformed * transformed;
+		}
+		if (distance != S64_MAX) {
+			s64 score = ((s64)model->score_offset_q12 <<
+				     G6TS_CLASSIFIER_SHIFT) - distance / 2;
+
+			if (score > best_score) {
+				best_score = score;
+				best_class = class;
+			}
+		}
+	}
+	return best_class;
+}
+
 static unsigned int g6ts_find_contacts(struct g6ts *ts)
 {
 	unsigned int contact_count = 0;
@@ -568,6 +894,23 @@ static unsigned int g6ts_find_contacts(struct g6ts *ts)
 				    (u64)contact.strength * (G6TS_HEAT_COLS - 1));
 		contact.y = div_u64(contact.weighted_y * G6TS_LOGICAL_MAX,
 				    (u64)contact.strength * (G6TS_HEAT_ROWS - 1));
+		memset(ts->heat_component, 0, sizeof(ts->heat_component));
+		while (tail)
+			ts->heat_component[ts->heat_queue[--tail]] = 1;
+		contact.features_q12[0] =
+			contact.pixels << G6TS_CLASSIFIER_SHIFT;
+		g6ts_secondary_features(ts, &contact);
+		g6ts_geometry_features(ts, &contact);
+		contact.features_q12[9] = g6ts_halo_feature(ts, &contact);
+		contact.shape_class = g6ts_classify_contact(&contact);
+		/* FUN_180049458 permits the classifier's classes zero and two. */
+		contact.shape_allowed = contact.shape_class == 0 ||
+					contact.shape_class == 2;
+		dev_dbg(&ts->spi->dev,
+			"candidate class=%u allowed=%u pixels=%u halo_q12=%d\n",
+			contact.shape_class, contact.shape_allowed, contact.pixels,
+			contact.features_q12[9]);
+		memset(ts->heat_component, 0, sizeof(ts->heat_component));
 		g6ts_store_contact(ts, &contact, &contact_count);
 	}
 
@@ -624,6 +967,8 @@ static u8 g6ts_confirmation_requirement(const struct g6ts *ts,
 	 */
 	if (contact->pixels < G6TS_HEAT_MIN_PIXELS)
 		required = G6TS_TRACK_CONFIRM_WEAK;
+	if (!contact->shape_allowed)
+		required = max_t(u8, required, G6TS_TRACK_CONFIRM_WEAK);
 
 	for (i = 0; i < G6TS_MAX_CONTACTS; i++) {
 		const struct g6ts_track *track = &ts->tracks[i];
@@ -765,9 +1110,11 @@ static void g6ts_update_track(struct g6ts_track *track,
 	track->output_y = g6ts_filter_coordinate(track->output_y, contact->y);
 	track->strength = contact->strength;
 	track->pixels = contact->pixels;
+	track->shape_class = contact->shape_class;
 	if (track->age < U16_MAX)
 		track->age++;
-	if (!track->confirmed && track->evidence < U8_MAX) {
+	if (!track->confirmed && contact->shape_allowed &&
+	    track->evidence < U8_MAX) {
 		track->evidence++;
 		if (track->evidence >= track->required_evidence)
 			track->confirmed = true;
@@ -792,8 +1139,9 @@ static int g6ts_new_track(struct g6ts *ts,
 		track->output_y = contact->y;
 		track->strength = contact->strength;
 		track->pixels = contact->pixels;
+		track->shape_class = contact->shape_class;
 		track->age = 1;
-		track->evidence = 1;
+		track->evidence = contact->shape_allowed ? 1 : 0;
 		track->required_evidence =
 			g6ts_confirmation_requirement(ts, contact);
 		track->confirmed = track->required_evidence <= 1;

@@ -94,6 +94,21 @@ class WindowsClassifierTests(unittest.TestCase):
         expected_class1 = 1.0 - 1.0 - math.log(4.0) - expected_distance * 0.5
         self.assertEqual(scores[1], expected_class1)
 
+    def test_fixed_point_scorer_preserves_winning_class(self):
+        data, _ = make_test_dll()
+        classifier = ProjectClassifier.from_dll(data, 0x0C83)
+        for features in (
+            (2.0,) + (1.0,) * 9,
+            (6.0, 4.0, 3.0, 1.0, 1.0, 1.0, 2.0, 1.25, 0.8, 0.2),
+            (3.0, 3.0, 3.0, 3.0, 1.0, 1.0, 1.0, 2.0, 1.2, 100.0),
+        ):
+            floating = classifier.scores(features, 0)
+            fixed = classifier.fixed_scores(features, 0)
+            self.assertEqual(
+                max(range(4), key=lambda index: floating[index]),
+                max(range(4), key=lambda index: fixed[index]),
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

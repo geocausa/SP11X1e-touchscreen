@@ -59,6 +59,18 @@ make test
 python3 -m compileall -q tools tests
 ```
 
+The Phase 64 panel profile is checked in as generated configuration. To
+reproduce it from a locally supplied Windows component without copying the DLL
+into the repository:
+
+```bash
+python3 tools/generate_classifier_header.py \
+  /path/to/TouchPenProcessor0C83.dll \
+  > /tmp/g6ts_classifier_profile.h
+cmp /tmp/g6ts_classifier_profile.h \
+  phase55/modules/g6ts_classifier_profile.h
+```
+
 ## Device tree
 
 The Denali source enables QUP1 SE2, removes DMA properties for the isolated

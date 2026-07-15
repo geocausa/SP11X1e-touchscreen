@@ -77,11 +77,19 @@ The client-only build passed a short live one-finger/multitouch validation and
 is preserved in its own `sp11-phase63` GRUB entry; Phase 62 and the safe 7.1.3
 entry remain available for rollback.
 
-It is not yet production- or upstream-ready. Conservative broad-contact palm
-filtering remains while later shape classification still needs more recovery
-and labelled palm captures. Measured edge calibration, pressure, merged-contact
-separation, suspend/resume, and broader kernel compatibility remain open. Pen
-support is deliberately out of scope.
+Phase 64 completes the three peak-relative secondary detector passes and the
+two-ring halo-energy feature, then evaluates the recovered four-score panel
+profile in kernel-safe Q20.12 arithmetic. The fixed-point winner matches the
+floating-point oracle for every one of the 1,113 contacts in the Windows
+corpus. Only Windows output-allowed classes build tentative-track evidence;
+confirmation remains sticky so one anomalous shape frame cannot make a real
+finger flicker. See
+[docs/PHASE64_FIXED_POINT_CLASSIFIER.md](docs/PHASE64_FIXED_POINT_CLASSIFIER.md).
+
+It is not yet ready for a mainline submission. Labelled palm and physical-edge
+captures, measured edge calibration, pressure, merged-contact separation,
+suspend/resume hardware validation, and broader kernel compatibility remain
+open. Pen support is deliberately out of scope.
 
 ## Repository layout
 
@@ -107,6 +115,7 @@ docs/PHASE61_OFFLINE_GEOMETRY.md
 docs/PHASE62_PSDB_MODEL_EXTRACTOR.md
 docs/PHASE62_DEPLOYMENT.md
 docs/PHASE63_WINDOWS_LIFECYCLE.md
+docs/PHASE64_FIXED_POINT_CLASSIFIER.md
 phase55/
 tools/analyze_spb_etw_csv.py
 tools/decode_heat_frame.py
