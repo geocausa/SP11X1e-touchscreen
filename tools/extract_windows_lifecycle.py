@@ -290,6 +290,7 @@ class ProjectLifecycle:
     pen_force_enabled: bool
     normal_feature_point_limit: int
     context_feature_point_limit: int
+    descriptor_context_demotion_enabled: bool
     neighbor_bounds_rules: tuple[NeighborBoundsRule, ...]
     rules: tuple[TransitionRule, ...]
 
@@ -301,6 +302,7 @@ class ProjectLifecycle:
             table_in_blob + TRANSITION_COUNT * TRANSITION_STRIDE,
             PROJECT_CONFIG_OFFSET + 0xE9B,
             0xB9C,
+            0x1C85,
         )
         if required > blob_length:
             raise ValueError("PSDB is too short for the transition table")
@@ -359,6 +361,7 @@ class ProjectLifecycle:
             bool(data[config + 0xE6A]),
             struct.unpack_from("<H", data, config + 0xE80)[0],
             struct.unpack_from("<H", data, config + 0xE82)[0],
+            bool(data[blob_offset + 0x1C84]),
             neighbor_bounds,
             tuple(rules),
         )
@@ -406,6 +409,9 @@ class ProjectLifecycle:
             "pen_force_enabled": self.pen_force_enabled,
             "normal_feature_point_limit": self.normal_feature_point_limit,
             "context_feature_point_limit": self.context_feature_point_limit,
+            "descriptor_context_demotion_enabled": (
+                self.descriptor_context_demotion_enabled
+            ),
             "neighbor_bounds_rules": [
                 rule.__dict__ for rule in self.neighbor_bounds_rules
             ],
@@ -654,8 +660,8 @@ class FingerClassPolicyInput:
 
     ``fallback_feature_profile`` is candidate `+0x43`, set by FUN_180041fd8
     when ordinary component-feature extraction is bypassed at the recovered
-    point-count limits. The two final class-three inputs retain their proven
-    frame-level and runtime-descriptor origins.
+    point-count limits. The per-frame maximum remains an explicit input; the
+    other final class-three demotion bit is extracted from PSDB `+0x1c84`.
     """
 
     age: int
@@ -670,7 +676,6 @@ class FingerClassPolicyInput:
     special_pair_limit_active: bool = False
     fallback_feature_profile: bool = False
     frame_level_exceeds_limit: bool = False
-    descriptor_context_demotion_enabled: bool = False
 
 
 @dataclass(frozen=True)
@@ -779,7 +784,7 @@ def apply_finger_class_policy(
     if code == 3 and (
         inputs.frame_level_exceeds_limit
         or (
-            inputs.descriptor_context_demotion_enabled
+            lifecycle.descriptor_context_demotion_enabled
             and inputs.local_context_active
         )
     ):

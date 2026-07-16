@@ -199,14 +199,24 @@ The persistent input at processor `+0x166c9` is copied from frame `+0xb7f5`;
 `FUN_18003af68` proves that byte is the detector object's configured `+0x124`
 flag, not its dynamic detection result at frame `+0xb7f4`. The reset source at
 `+0x166b5` comes directly from frame `+0xb771`, while the per-frame direct flag
-at `+0x166b6` comes from frame `+0xb7ea`. Their upstream frame-parser meanings
-remain structurally named: a complete five-second-bounded decompile scan of all
-2,464 DLL functions found reads but no internal writers for either field, so
-they belong to the processor's caller-supplied frame contract. Caller-side
-provenance must be recovered outside this DLL rather than guessed here. This
-recovery is significant for typing behavior: Windows can keep a changed
-classification branch active for hundreds of scan frames after the event that
-armed it.
+at `+0x166b6` comes from frame `+0xb7ea`.
+
+Their parser provenance is now exact. `FUN_18008f828` passes the internal
+sensor-frame object to the tracker at offset `+0x217a`; tracker `+0xb771` is
+therefore internal `+0xd8eb`. Metadata type `0x07` handler `FUN_180069d20`
+accepts an exact four-byte payload and writes payload byte one to `+0xd8eb`.
+Tracker `+0xb7ea` is internal `+0xd964`; `FUN_18008f828` writes it from the
+zero-initialized global `DAT_180905ad6` before tracking. The only writer of
+that global is metadata type `0x94` handler `FUN_18006bff0`, whose counted
+subtype-zero record replaces the byte and whose value persists across frames.
+
+Every one of the 1,381 saved Windows frames contains type `0x07` with payload
+`00 00 00 00`. None contains type `0x94`. Consequently both `+0xb771` and
+`+0xb7ea` are proven zero throughout this capture. `ContextMetadataState` and
+`extract_context_sources` model the valid handlers, malformed-record boundary,
+and persistent subtype-zero state; the corpus regression now reports these
+facts directly. This matters for typing analysis: the 300-frame branch exists,
+but these two metadata sources did not arm it in the recorded session.
 
 `FUN_18004a1b8` also moves the current class-one/class-five track list count
 from `+0x16794` to previous-frame byte `+0x16795` before clearing the current
@@ -239,9 +249,18 @@ return the global context value.
   override, with structurally named external predicates;
 - final state/class output eligibility, release-counter ordering and output
   accounting in `FUN_1800426d8`;
-- unmatched-track state mutations and active-track count balancing in
-  `FUN_180043b10`;
-- the state-four shape/history selection predicate in `FUN_18003fbb8`.
+- exact 0x38-byte output-record fields, identifiers, split bounds, threshold
+  selection, outer four-byte frame header, and caller-owned unwritten bytes;
+- unmatched-track state mutations plus both common state-setter counters;
+- the state-four shape/history selection predicate in `FUN_18003fbb8`;
+- metadata provenance for tracker bytes `+0xb771/+0xb7ea` and their observed
+  all-zero corpus state;
+- exact direct-copy eight-bit Heat path and the disabled PSDB 16-bit
+  calibration record;
+- expanded centroid baseline ordering, one-cell halo, signed member weights,
+  exact float32 traversal order, and bounded far-edge snap;
+- the separate track-scalar blend, motion-limited alpha, fused arithmetic, and
+  project alpha extraction.
 
 ### Adapted in the current kernel
 
@@ -256,17 +275,15 @@ return the global context value.
 
 - retaining sensor-space centroids through Linux assignment and applying the
   recovered per-axis quantization before output normalization;
-- caller-side provenance for frame bytes `+0xb771` and `+0xb7ea` consumed
-  by the now-modelled global/local context helpers;
-- state-three cleanup integration through `FUN_180048e70`;
-- record serialization and identifier details after the now-modelled final
-  eligibility branches in `FUN_1800426d8`/`FUN_180049458`;
-- the expanded-window baseline/context branches of physical-edge centroid
-  behavior in `FUN_180047078`;
-- recovery of the non-coordinate scalar blend in `FUN_18004a330` if that
-  metric proves relevant to finger-only output policy;
-- runtime configuration provenance. KDNET did not observe a large panel HID
-  calibration report, so panel-supplied tuning is not assumed.
+- coherent frame-level orchestration of assignment, state-three cleanup,
+  classification, output collection, record construction, and duplicate merge;
+- live values for the provider-owned profile rectangles and remaining
+  per-frame flags that are not serialized PSDB constants;
+- intermediate Windows candidate/track/output ground truth for an end-to-end
+  oracle. Raw Heat frames alone do not expose those private stage outputs.
+
+KDNET did not observe a large panel HID calibration report, so panel-supplied
+tuning is not assumed.
 
 Pen-specific behavior remains out of scope by operator choice. Palm behavior
 that depends on pen proximity will not be copied into the finger-only path;
@@ -275,18 +292,63 @@ finger geometry and multi-contact palm rules remain in scope.
 ## Exact output-centroid edge rule
 
 `FUN_180047078` recomputes an accepted component's output centroid from a
-one-cell-expanded window. It uses calibrated signal above a selected baseline,
-temporarily admits qualifying adjacent cells belonging to the same component,
-and writes a weighted X/Y centroid. This is a later output-geometry pass, not
-coordinate smoothing.
+one-cell-expanded window. The all-function provenance scan closes its numeric
+inputs. `FUN_18008e5c8` passes project blob `+0xb84` to the processor
+constructor. Processor `+0xc570` points to that record's normal `+0x0c` or
+high-frame `+0x14` subrecord, whose following `u16` selects lookup index 171 or
+180. The SP11 admission multiplier is record `u16 +0x08` (20) times `0.01f`,
+or exact float32 `0.19999998807907104`.
+
+Processor `+0xc844` and `+0xc858` are not independent live calibration fields;
+they are entries 173 and 178 in the same 255-entry signal lookup initialized
+with ARM64 `FMADD`. The exact baselines are therefore:
+
+```text
+normal reference (index 171): 0.02031940221786499
+high-frame reference (180):   0.0003362298011779785
+alternate c844 (173):         0.015878677368164062
+profile c858 (178):           0.004776895046234131
+```
+
+While frame flag `+0x166b4` is clear, the profile predicate selects index 178;
+otherwise processor flag `+0x198c8` or output flag `+0x97` selects index 173.
+`FUN_18004a918` proves the processor flag is copied from PSDB byte `+0xbac`,
+which is zero for project 0x0c83; it is now extracted rather than caller-
+supplied. The reference baseline wins when none of those ordered branches
+applies.
+The remaining track/output flag `+0x97` is no longer an opaque live input
+either. `FUN_18004a330` sets it sticky when candidate byte `+0xb1` is one, the
+updated track age is greater than one, the track's maximum component point
+count is strictly below five, and the frame-maximum flag is clear.
+`update_track_centroid_override_flag` preserves those exact boundaries; only
+the earlier producer meaning of candidate `+0xb1` remains structurally named.
+`ExpandedCentroidPolicy.from_dll` extracts the record from a validated PSDB
+and preserves the fused multiply-add rounding used to build the lookup.
+The shared profile predicate `FUN_18004b280` is also bounded: a five-byte
+descriptor enables an inclusive byte-coordinate rectangle
+`min_x..max_x, min_y..max_y`. `ProfileRegion` models that comparison exactly;
+the DLL image initializes its backing global `DAT_180905c28` to five zero
+bytes. Initialization registers that address with the runtime provider through
+`FUN_1800632f0` at provider-object `+0x308`, so the image default is proven but
+cannot be assumed to remain zero after provider startup. Its live five bytes
+remain an external input.
+
+A component cell above candidate level times processor multiplier `+0xc580`
+temporarily admits zero-labelled orthogonal neighbors. Component members add
+their signed `level - baseline`; temporary halo cells add only a positive
+excess. Windows accumulates the interior first, then the right edge, bottom
+edge and corner. The offline helper preserves that order and each float32
+rounding stage rather than replacing it with mathematically similar row-major
+arithmetic. This is a later output-geometry pass, not coordinate smoothing.
 
 When and only when a component is one cell wide on the far X boundary, or one
 cell high on the far Y boundary, Windows calls `FUN_180054690`. The helper
 rounds to the nearest integer (C `roundf` semantics) and keeps that integer
 only if the centroid is within `0.0001f`; otherwise it returns the centroid
 unchanged. The exact bounded snap is represented in the offline geometry
-module. The expanded-window baseline/context branches still need recovery
-before the full centroid pass can replace kernel code.
+module. The remaining boundary is provenance and live values for the
+descriptor/profile predicates and end-to-end stage outputs, not centroid
+control flow or numeric policy.
 
 ## Windows does not exponentially smooth tracker X/Y
 
@@ -300,17 +362,56 @@ interpretation. On every matched update Windows:
 5. stores the exact candidate position in its ten-entry history ring.
 
 The exponential expression in that function blends candidate `+0x2c` into
-track scalar `+0x18`. It does not read or write the X/Y fields. A search of all
-2,464 decompiled DLL functions found only four users of the assignment scale
-fields and no hidden second coordinate filter. Finally, normal-contact builder
-`FUN_180041b80` copies the selected track/history X/Y floats directly into the
-output record.
+track scalar `+0x18`. It does not read or write the X/Y fields. The zero
+prior-class-four-counter path copies the candidate scalar directly. Otherwise
+project 0x0c83 alpha `0.10000000149011612` is optionally capped by
+`10 * (velocity_x^2 + velocity_y^2)` and Windows evaluates the blend with its
+ARM64 fused multiply-add. `TrackScalarBlendPolicy.from_dll` extracts alpha from
+PSDB config `+0xeac`, and `blend_track_scalar` preserves the exact scalar-only
+arithmetic. A search of all 2,464 decompiled DLL functions found only four
+users of the assignment scale fields and no hidden second coordinate filter.
+Finally, normal-contact builder `FUN_180041b80` copies the selected
+track/history X/Y floats directly into the output record and copies this scalar
+separately to record `+0x10`.
 
 `TrackKinematics` in `tools/windows_tracking_geometry.py` now represents the
 proven coordinate behavior. The Phase 68 Linux smoothing remains frozen only
 because it is part of the known-working baseline. It will be removed when the
 recovered lifecycle/output pipeline replaces that baseline as one coherent
 change, rather than being tuned further.
+
+## Exact output record and outer frame
+
+`FUN_180041b80` explicitly writes a 0x38-byte record. Assembly resolves two
+decompiler type traps: record `+0x14` is the zero-extended byte sensor index
+stored as a 32-bit integer, and `+0x30` is the 32-bit track index, not a float.
+The record contains raw X/Y, track scalar, component bounds and point count,
+the selected history-row identifier, source and group identifiers, normal or
+split record type, row-map result, threshold results, split flag and the
+fallback-profile byte. Normal records copy track bounds and scalar; split
+records use scalar `4.5`, type three, and clipped one-cell bounds.
+
+Project 0x0c83's extracted record thresholds are:
+
+```text
+recent-signal baseline (+0x0c): 0.054999999701976776
+ordinary level       (+0xe6c): 0.09000000357627869
+frame-flag level     (+0xe70): 0.07999999821186066
+frame-level gate     (+0xe74): 50
+```
+
+The profile branch uses direct DLL floats `0.06` and `0.075` with the exact
+strict comparisons and branch order. Record group byte `+0x27` is mutable by
+the later merge pass; `+0x28` preserves the original track group byte. The DLL
+does not write record bytes `+0x08..+0x0f`, `+0x2b`, `+0x2f`, or `+0x37`, so
+the serializer preserves caller contents rather than claiming they are zero.
+
+The outer buffer has a four-byte header followed by these records. Header byte
+zero is record count, byte one is global context, and byte two counts retained
+state-two records old enough to take the configured release step. Byte three
+is caller-owned. The builder stops at 34 records. `windows_output_record.py`
+models the complete explicit writes and extracts its project fields from a
+validated operator-supplied DLL.
 
 ## Exact post-output duplicate merge
 
@@ -422,8 +523,10 @@ The final demotion inputs are now proven too. `FUN_180044648` takes the maximum
 of the frame's unsigned-16-bit level array and sets the frame flag only when
 that maximum is strictly greater than PSDB `+0xe78`, which is 300 for project
 0x0c83. `frame_level_exceeds_limit` preserves the strict comparison. The other
-enable bit is copied once from runtime sensor descriptor `+0x69`; it demotes
-class three only in conjunction with the recovered local-context predicate.
+enable bit is copied to runtime sensor descriptor `+0x69` from PSDB `+0x1c84`;
+project 0x0c83 stores one. It demotes class three only in conjunction with the
+recovered local-context predicate. The extractor now owns this bit, so callers
+cannot substitute a guessed value.
 The same frame-level flag selects the already recovered alternate output-merge
 threshold, which is zero for this project.
 
@@ -447,9 +550,12 @@ values.
 
 ## Lifecycle and output graph recovered so far
 
-The state setter at `FUN_180048e70` maintains two global counts while writing
-track `+0x3c`. Assignment creates a track directly in state one and marks it
-matched at `+0x47`. The per-frame order is:
+The state setter at `FUN_180048e70` maintains two byte counts while writing
+track `+0x3c`: processor `+0x166a1` counts every nonzero track, while
+`+0x166a0` counts only states one and two. Decrements are guarded against
+underflow and increments wrap as byte stores. `apply_track_state_transition`
+models all 25 old/new state pairs. Assignment creates a track directly in
+state one and marks it matched at `+0x47`. The per-frame order is:
 
 ```text
 assignment -> unmatched-track lifecycle -> class policy ->
@@ -509,10 +615,13 @@ cells of its 3x3 neighborhood, and rejects when any byte is strictly below
 `advance_unmatched_track` represents the outer lifecycle mutations in
 `FUN_180043b10`. A free or matched track is unchanged. An unmatched state-one
 track either enters state four when `FUN_18003fbb8` accepts its suppression
-history, or closes in state three and balances the active-secondary count.
-Unmatched state-two/state-four tracks remain in place while their byte release
-counter is nonzero; at zero they enter state three, with only state two
-decrementing that active count.
+history, or closes in state three. Both edges leave states one/two and therefore
+decrement the `+0x166a0` count. This corrects an earlier offline-model omission
+on the state-one to state-four edge. Unmatched state-two/state-four tracks
+remain in place while their byte release counter is nonzero; at zero they enter
+state three, with only state two decrementing that count. `FUN_1800468c0`
+cleans state three to zero at the start of the following output-state
+collection, using the common setter to decrement the all-nonzero count.
 
 `evaluate_state4_suppression` now represents the larger `FUN_18003fbb8`
 predicate used by that state-one edge. Project 0x0c83's ordinary and special
@@ -555,10 +664,13 @@ level/age release and context rejection. Final-output tests cover normal,
 split, transition, low-score cleanup, state-two release, state-four retention,
 unmatched lifecycle closure, the full state-four history/score selector and
 all associated boundary/counter ordering. The complete suite currently passes
-88 tests.
+112 tests.
 
 The saved Windows corpus regression decodes all 1,381 frames with zero errors,
 scores 1,113 contacts with zero floating/fixed-point winner mismatches, and
-retains the previously recorded base-lifecycle distribution. That regression
-does not yet claim final Windows output parity because the remaining external
-context producers are not represented by that base corpus regression.
+retains the previously recorded base-lifecycle distribution. It also proves
+1,381 valid context metadata frames, zero type-`0x94` frames, and zero nonzero
+values for both tracker context inputs. That regression does not yet claim
+final Windows output parity because raw Heat captures do not contain the
+private intermediate candidate, track, or output records needed as a final
+stage-by-stage oracle.

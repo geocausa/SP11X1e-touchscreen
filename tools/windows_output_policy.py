@@ -173,9 +173,88 @@ class OutputEligibilityDecision:
 @dataclass(frozen=True)
 class UnmatchedLifecycleDecision:
     state: int
-    active_secondary_count: int
+    state_one_two_count: int
     state4_suppression_accepted: bool
     reason: str
+
+
+@dataclass(frozen=True)
+class TrackStateCounts:
+    """Processor bytes +0x166a1 and +0x166a0 maintained by the state setter."""
+
+    active_track_count: int
+    state_one_two_count: int
+
+
+@dataclass(frozen=True)
+class TrackStateTransitionDecision:
+    state: int
+    counts: TrackStateCounts
+
+
+@dataclass(frozen=True)
+class StateThreeCleanupDecision:
+    states: tuple[int, ...]
+    counts: TrackStateCounts
+    cleared_indexes: tuple[int, ...]
+
+
+def apply_track_state_transition(
+    old_state: int,
+    new_state: int,
+    counts: TrackStateCounts,
+) -> TrackStateTransitionDecision:
+    """Mirror ``FUN_180048e70`` without its telemetry side effects.
+
+    The first byte counts every nonzero track state.  The second counts only
+    states one and two.  Increments wrap as byte stores; inconsistent zero
+    counts are diagnosed by Windows telemetry but guarded against underflow.
+    """
+    if not 0 <= old_state <= 4 or not 0 <= new_state <= 4:
+        raise ValueError("track states must be in [0, 4]")
+    if not 0 <= counts.active_track_count <= 0xFF:
+        raise ValueError("active-track count must fit an unsigned byte")
+    if not 0 <= counts.state_one_two_count <= 0xFF:
+        raise ValueError("state-one/two count must fit an unsigned byte")
+
+    active = counts.active_track_count
+    one_two = counts.state_one_two_count
+    if old_state == 0 and new_state != 0:
+        active = (active + 1) & 0xFF
+    elif old_state != 0 and new_state == 0 and active:
+        active -= 1
+
+    old_one_two = old_state in (1, 2)
+    new_one_two = new_state in (1, 2)
+    if not old_one_two and new_one_two:
+        one_two = (one_two + 1) & 0xFF
+    elif old_one_two and not new_one_two and one_two:
+        one_two -= 1
+
+    return TrackStateTransitionDecision(
+        new_state, TrackStateCounts(active, one_two)
+    )
+
+
+def cleanup_state_three_tracks(
+    states: tuple[int, ...], counts: TrackStateCounts
+) -> StateThreeCleanupDecision:
+    """Mirror ``FUN_1800468c0``'s state-three cleanup before collection."""
+    if len(states) > 48:
+        raise ValueError("Windows tracker has at most 48 track slots")
+    current = counts
+    output = list(states)
+    cleared: list[int] = []
+    for index, state in enumerate(states):
+        if not 0 <= state <= 4:
+            raise ValueError("track states must be in [0, 4]")
+        if state != 3:
+            continue
+        decision = apply_track_state_transition(3, 0, current)
+        output[index] = decision.state
+        current = decision.counts
+        cleared.append(index)
+    return StateThreeCleanupDecision(tuple(output), current, tuple(cleared))
 
 
 @dataclass(frozen=True)
@@ -332,7 +411,7 @@ def advance_unmatched_track(
     state: int,
     matched_this_frame: bool,
     release_counter: int,
-    active_secondary_count: int,
+    state_one_two_count: int,
     state4_suppression_accepted: bool = False,
 ) -> UnmatchedLifecycleDecision:
     """Mirror FUN_180043b10's state mutations for one track.
@@ -345,33 +424,35 @@ def advance_unmatched_track(
         raise ValueError("track state must be in [0, 4]")
     if not 0 <= release_counter <= 0xFF:
         raise ValueError("release counter must fit an unsigned byte")
-    if not 0 <= active_secondary_count <= 0xFF:
-        raise ValueError("active-secondary count must fit an unsigned byte")
+    if not 0 <= state_one_two_count <= 0xFF:
+        raise ValueError("state-one/two count must fit an unsigned byte")
     if state == 0 or matched_this_frame:
         return UnmatchedLifecycleDecision(
-            state, active_secondary_count, False, "unchanged"
+            state, state_one_two_count, False, "unchanged"
         )
 
     if state == 1:
         if state4_suppression_accepted:
+            if state_one_two_count:
+                state_one_two_count -= 1
             return UnmatchedLifecycleDecision(
-                4, active_secondary_count, True, "state1_to_state4"
+                4, state_one_two_count, True, "state1_to_state4"
             )
-        if active_secondary_count:
-            active_secondary_count -= 1
+        if state_one_two_count:
+            state_one_two_count -= 1
         return UnmatchedLifecycleDecision(
-            3, active_secondary_count, False, "state1_to_state3"
+            3, state_one_two_count, False, "state1_to_state3"
         )
 
     if state in (2, 4) and release_counter == 0:
-        if state == 2 and active_secondary_count:
-            active_secondary_count -= 1
+        if state == 2 and state_one_two_count:
+            state_one_two_count -= 1
         return UnmatchedLifecycleDecision(
-            3, active_secondary_count, False, f"state{state}_to_state3"
+            3, state_one_two_count, False, f"state{state}_to_state3"
         )
 
     return UnmatchedLifecycleDecision(
-        state, active_secondary_count, False, "release_counter_active"
+        state, state_one_two_count, False, "release_counter_active"
     )
 
 

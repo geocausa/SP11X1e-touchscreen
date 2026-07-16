@@ -18,15 +18,19 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from tools.decode_heat_frame import (
+    ContextMetadataState,
+    HeatCalibrationPolicy,
     MIN_CONTACT_PIXELS,
     WINDOWS_NSR_CUTOFF,
     WINDOWS_STRONG_MAX,
     accepted_contacts,
     connected_components,
+    extract_context_sources,
     extract_heatmap,
     extract_nsr_bins,
     extract_report,
     modal_baseline,
+    parse_metadata_records,
     parse_sections,
     windows_classifier_features,
 )
@@ -70,10 +74,12 @@ def main() -> int:
 
     classifier = None
     lifecycle = None
+    calibration_policy = None
     if args.classifier_dll is not None:
         try:
             dll = args.classifier_dll.read_bytes()
             classifier = ProjectClassifier.from_dll(dll, 0x0C83)
+            calibration_policy = HeatCalibrationPolicy.from_dll(dll, 0x0C83)
             if args.base_lifecycle:
                 lifecycle = ProjectLifecycle.from_dll(dll, 0x0C83)
         except (OSError, ValueError) as error:
@@ -91,6 +97,12 @@ def main() -> int:
     nsr_rejections = 0
     nsr_value_max = 0
     nsr_values: Counter[int] = Counter()
+    context_metadata_frames = 0
+    context_b771_nonzero = 0
+    context_b7ea_nonzero = 0
+    type94_frames = 0
+    context_state = ContextMetadataState()
+    heat_encodings: Counter[tuple[int, int]] = Counter()
     errors: list[tuple[Path, str]] = []
     baselines: Counter[int] = Counter()
     contact_counts: Counter[int] = Counter()
@@ -128,6 +140,16 @@ def main() -> int:
             nsr_bins = (
                 extract_nsr_bins(metadata_sections[0]) if metadata_sections else None
             )
+            context_sources = None
+            frame_has_type94 = False
+            if metadata_sections:
+                metadata_records = parse_metadata_records(metadata_sections[0])
+                frame_has_type94 = any(
+                    record.kind == 0x94 for record in metadata_records
+                )
+                context_sources = extract_context_sources(
+                    metadata_sections[0], context_state
+                )
             grid = extract_heatmap(heat_sections[0])
             baseline, _ = modal_baseline(grid)
             components = connected_components(grid, baseline)
@@ -138,6 +160,13 @@ def main() -> int:
             continue
 
         baselines[baseline] += 1
+        heat_encodings[(heat_sections[0].mode, heat_sections[0].header_value)] += 1
+        if context_sources is not None:
+            context_state = context_sources.next_state
+            context_metadata_frames += 1
+            type94_frames += frame_has_type94
+            context_b771_nonzero += context_sources.frame_b771 != 0
+            context_b7ea_nonzero += context_sources.frame_b7ea != 0
         palm_rejections += rejected
         if nsr_bins is not None:
             nsr_metadata_frames += 1
@@ -212,6 +241,28 @@ def main() -> int:
         f"nsr_value_max={nsr_value_max} "
         "nsr_values="
         + ",".join(f"{value}:{count}" for value, count in sorted(nsr_values.items()))
+    )
+    print(
+        f"context_metadata_frames={context_metadata_frames} "
+        f"type94_frames={type94_frames} "
+        f"b771_nonzero={context_b771_nonzero} "
+        f"b7ea_nonzero={context_b7ea_nonzero} "
+        f"b7ea_final={context_state.type94_subtype0}"
+    )
+    calibration = "not_loaded"
+    if calibration_policy is not None:
+        calibration = (
+            f"enabled={int(calibration_policy.enabled)},"
+            f"gain={calibration_policy.gain:g},"
+            f"offset={calibration_policy.offset:g}"
+        )
+    print(
+        "heat_encodings="
+        + ",".join(
+            f"mode{mode}/width{width}:{count}"
+            for (mode, width), count in sorted(heat_encodings.items())
+        )
+        + f" project_u16_calibration={calibration}"
     )
     print(
         "baselines="

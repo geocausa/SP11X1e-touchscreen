@@ -67,6 +67,67 @@ class MetadataRecord:
     data: bytes
 
 
+@dataclass(frozen=True)
+class ContextMetadataState:
+    """Persistent byte written by metadata type 0x94, subtype zero.
+
+    TouchPenProcessor's image initializes the backing global to zero.  Unlike
+    type 0x07, this value persists across frames when a frame omits type 0x94.
+    """
+
+    type94_subtype0: int = 0
+
+
+@dataclass(frozen=True)
+class FrameContextSources:
+    """Exact metadata sources copied to tracker frame +0xb771/+0xb7ea."""
+
+    frame_b771: int
+    frame_b7ea: int
+    next_state: ContextMetadataState
+
+
+@dataclass(frozen=True)
+class HeatCalibrationPolicy:
+    """Optional 16-bit Heat conversion record consumed by ``FUN_18008f058``.
+
+    Heat sections with mode one and element width eight bypass this policy and
+    are copied byte-for-byte.  The policy is consulted only for the alternate
+    16-bit sparse encoding.
+    """
+
+    enabled: bool
+    gain: float
+    offset: float
+
+    @classmethod
+    def from_dll(cls, data: bytes, project_id: int) -> "HeatCalibrationPolicy":
+        from tools.extract_windows_classifier import find_project_blob
+
+        blob_offset, blob_length = find_project_blob(data, project_id)
+        required = 0x7A1
+        if required > blob_length:
+            raise ValueError("PSDB is too short for Heat calibration policy")
+        return cls(
+            enabled=data[blob_offset + 0x7A0] != 0,
+            gain=struct.unpack_from("<f", data, blob_offset + 0x798)[0],
+            offset=struct.unpack_from("<f", data, blob_offset + 0x79C)[0],
+        )
+
+    def convert_u16(self, sample: int) -> int:
+        """Mirror the optional ARM64 FMADD, truncation, and byte clamp."""
+        if not self.enabled:
+            raise ValueError("16-bit Heat calibration is disabled")
+        if not 0 <= sample <= 0xFFFF:
+            raise ValueError("16-bit Heat sample is outside unsigned range")
+        gain = struct.unpack("<f", struct.pack("<f", self.gain))[0]
+        offset = struct.unpack("<f", struct.pack("<f", self.offset))[0]
+        converted = struct.unpack(
+            "<f", struct.pack("<f", math.fma(float(sample), gain, offset))
+        )[0]
+        return min(0xFF, max(0, math.trunc(converted)))
+
+
 def u16(data: bytes, offset: int) -> int:
     return struct.unpack_from("<H", data, offset)[0]
 
@@ -190,6 +251,71 @@ def parse_metadata_records(section: Section) -> list[MetadataRecord]:
         )
         position = end
     return records
+
+
+def extract_context_sources(
+    section: Section,
+    state: ContextMetadataState = ContextMetadataState(),
+    *,
+    initial_type07_payload1: int = 0,
+) -> FrameContextSources:
+    """Apply the recovered type-0x07/type-0x94 context-byte handlers.
+
+    ``FUN_180069d20`` accepts only a four-byte type-0x07 payload and copies
+    payload byte one into internal sensor-frame +0xd8eb.  The tracker receives
+    that object shifted by +0x217a, making the same byte tracker-frame +0xb771.
+
+    ``FUN_18006bff0`` treats type 0x94 as a counted subrecord stream.  Subtype
+    zero replaces a process-global byte, which ``FUN_18008f828`` copies to
+    internal +0xd964 / tracker-frame +0xb7ea on every processed frame.  The
+    other recovered subtypes do not change this byte.
+
+    The DLL silently leaves the destination unchanged for a malformed type-7
+    length.  ``initial_type07_payload1`` exposes that existing value instead
+    of assuming how the enclosing frame object was initialized.
+    """
+    if not 0 <= state.type94_subtype0 <= 0xFF:
+        raise ValueError("type-0x94 state must fit an unsigned byte")
+    if not 0 <= initial_type07_payload1 <= 0xFF:
+        raise ValueError("type-0x07 initial value must fit an unsigned byte")
+
+    type07_payload1 = initial_type07_payload1
+    type94_subtype0 = state.type94_subtype0
+    for record in parse_metadata_records(section):
+        if record.kind == 0x07:
+            if len(record.data) == 4:
+                type07_payload1 = record.data[1]
+            continue
+        if record.kind != 0x94:
+            continue
+        if not record.data:
+            raise ValueError("metadata type 0x94 has no subrecord count")
+
+        count = record.data[0]
+        position = 1
+        for _ in range(count):
+            if position >= len(record.data):
+                raise ValueError("metadata type 0x94 has a truncated subtype")
+            subtype = record.data[position]
+            if subtype in (0, 2):
+                if position + 2 > len(record.data):
+                    raise ValueError(
+                        f"metadata type 0x94 subtype {subtype} is truncated"
+                    )
+                if subtype == 0:
+                    type94_subtype0 = record.data[position + 1]
+                position += 2
+            elif subtype == 1:
+                if position + 7 > len(record.data):
+                    raise ValueError("metadata type 0x94 subtype 1 is truncated")
+                position += 7
+            else:
+                raise ValueError(
+                    f"metadata type 0x94 has unsupported subtype {subtype:#04x}"
+                )
+
+    next_state = ContextMetadataState(type94_subtype0)
+    return FrameContextSources(type07_payload1, type94_subtype0, next_state)
 
 
 def extract_nsr_bins(section: Section) -> tuple[int, ...] | None:

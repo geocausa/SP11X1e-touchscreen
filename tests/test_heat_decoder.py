@@ -8,6 +8,8 @@ import struct
 import unittest
 
 from tools.decode_heat_frame import (
+    ContextMetadataState,
+    HeatCalibrationPolicy,
     GRID_COLS,
     GRID_ROWS,
     GRID_SAMPLES,
@@ -20,6 +22,7 @@ from tools.decode_heat_frame import (
     accepted_contacts,
     connected_components,
     extract_heatmap,
+    extract_context_sources,
     extract_nsr_bins,
     extract_report,
     modal_baseline,
@@ -97,6 +100,23 @@ class HeatDecoderTests(unittest.TestCase):
         self.assertEqual(extract_heatmap(sections[0]), grid)
         self.assertEqual(trailer, b"metadata")
 
+    def test_extracts_optional_u16_calibration_and_preserves_fmadd_path(self):
+        blob = bytearray(0x1000)
+        blob[0:4] = b"PSDB"
+        struct.pack_into("<HH", blob, 4, 4, 0x0C83)
+        struct.pack_into("<I", blob, 0x18, len(blob))
+        struct.pack_into("<ff", blob, 0x798, 0.5, 2.25)
+        blob[0x7A0] = 1
+        policy = HeatCalibrationPolicy.from_dll(bytes(blob), 0x0C83)
+        self.assertEqual(policy, HeatCalibrationPolicy(True, 0.5, 2.25))
+        self.assertEqual(policy.convert_u16(3), 3)
+        self.assertEqual(policy.convert_u16(0xFFFF), 0xFF)
+
+        blob[0x7A0] = 0
+        disabled = HeatCalibrationPolicy.from_dll(bytes(blob), 0x0C83)
+        with self.assertRaisesRegex(ValueError, "disabled"):
+            disabled.convert_u16(3)
+
     def test_overlap_and_incomplete_grid_are_rejected(self):
         overlap = make_section([(0, b"\xb5" * 10), (5, b"\xb5" * 10)])
         with self.assertRaisesRegex(ValueError, "overlaps prior data"):
@@ -124,6 +144,51 @@ class HeatDecoderTests(unittest.TestCase):
         parsed = parse_sections(self._report_with_section(section))[2][0]
         with self.assertRaisesRegex(ValueError, "truncated"):
             extract_nsr_bins(parsed)
+
+    def test_metadata_context_sources_and_persistent_type94_state(self):
+        records = (
+            struct.pack("<BBH", 0x07, 0x04, 4)
+            + bytes.fromhex("12 34 56 78")
+            + struct.pack("<BBH", 0x94, 0, 10)
+            + bytes.fromhex("02 01 11 22 33 44 55 66 00 a5")
+        )
+        section = struct.pack("<IHBB", 7 + len(records), 0xFF00, 0, records[0]) + records[1:]
+        parsed = parse_sections(self._report_with_section(section))[2][0]
+        sources = extract_context_sources(parsed)
+        self.assertEqual((sources.frame_b771, sources.frame_b7ea), (0x34, 0xA5))
+        self.assertEqual(sources.next_state, ContextMetadataState(0xA5))
+
+        type07_only = struct.pack("<BBH", 0x07, 0x04, 4) + b"\x00\x00\x00\x00"
+        section = (
+            struct.pack("<IHBB", 7 + len(type07_only), 0xFF00, 0, type07_only[0])
+            + type07_only[1:]
+        )
+        parsed = parse_sections(self._report_with_section(section))[2][0]
+        persisted = extract_context_sources(parsed, sources.next_state)
+        self.assertEqual((persisted.frame_b771, persisted.frame_b7ea), (0, 0xA5))
+
+    def test_metadata_context_malformed_records_do_not_invent_values(self):
+        malformed_type07 = struct.pack("<BBH", 0x07, 0x04, 3) + b"\x01\x02\x03"
+        section = (
+            struct.pack(
+                "<IHBB", 7 + len(malformed_type07), 0xFF00, 0, malformed_type07[0]
+            )
+            + malformed_type07[1:]
+        )
+        parsed = parse_sections(self._report_with_section(section))[2][0]
+        sources = extract_context_sources(
+            parsed, ContextMetadataState(7), initial_type07_payload1=9
+        )
+        self.assertEqual((sources.frame_b771, sources.frame_b7ea), (9, 7))
+
+        bad_type94 = struct.pack("<BBH", 0x94, 0, 2) + b"\x01\x00"
+        section = (
+            struct.pack("<IHBB", 7 + len(bad_type94), 0xFF00, 0, bad_type94[0])
+            + bad_type94[1:]
+        )
+        parsed = parse_sections(self._report_with_section(section))[2][0]
+        with self.assertRaisesRegex(ValueError, "subtype 0 is truncated"):
+            extract_context_sources(parsed)
 
     def test_windows_nsr_cutoff_is_strict_and_row_mapped(self):
         grid = make_grid([(16, 12, 0x80), (16, 13, 0x80), (17, 12, 0x80)])

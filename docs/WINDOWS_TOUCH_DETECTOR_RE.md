@@ -26,17 +26,22 @@ SurfaceHeatProcessor::ProcessHeatmap
 `SurfaceHeatProcessor::SanitizeHeatmap` at `0x180009820` is a stub returning
 success. It does not compute a frame MAD or another adaptive noise floor.
 
-When calibration is enabled, `FUN_18008f058` performs the following operation
-for each raw byte:
+For the alternate 16-bit sparse encoding, `FUN_18008f058` can perform the
+following operation before clamping to a byte:
 
 ```text
 calibrated = clamp(offset + gain * raw, 0, 255)
 ```
 
-The captured SP11 corpus is consistent with identity calibration, but the
-report/configuration field that proves the runtime gain and offset has not yet
-been recovered. Linux therefore consumes the panel byte grid directly and
-keeps this assumption explicit.
+The configuration provenance is now exact. `FUN_18008d2d8` points the parser
+at selected PSDB record `+0x784`; its enable byte is `+0x7a0`, gain is the
+float at `+0x798`, and offset is the float at `+0x79c`. Project 0x0c83 stores
+zero for all three, so its 16-bit conversion is disabled. More importantly,
+all 1,381 captured SP11 Heat sections use mode one with eight-bit elements.
+That branch copies every sample byte directly and never reads the calibration
+record. Linux's byte grid is therefore exact for the observed Windows path,
+not an assumed identity calibration. `HeatCalibrationPolicy.from_dll` keeps
+the unused 16-bit branch reproducible without applying it to byte reports.
 
 ## Candidate extraction
 
@@ -96,23 +101,36 @@ validates, applies, and reports it for Windows fidelity and future evidence.
 Malformed or duplicate type-`0x04` records fail the frame safely; a missing
 record leaves the optional filter disabled.
 
-The remaining metadata record semantics are not yet fully named. Linux does
-not invent behavior for those records.
+Two additional context-byte handlers are now structurally exact. Type `0x07`
+requires a four-byte payload and copies payload byte one to internal sensor
+frame `+0xd8eb`, which becomes tracker frame `+0xb771` after the caller's
+`+0x217a` object shift. Type `0x94` contains counted subrecords; subtype zero
+updates a zero-initialized process-global byte which is copied to internal
+`+0xd964` / tracker `+0xb7ea` every frame and persists when later frames omit
+type `0x94`.
+
+All 1,381 captured frames contain type `0x07` payload `00 00 00 00`, none
+contains type `0x94`, and both tracker context sources are therefore zero in
+the saved session. The decoder and corpus regression model and report this
+without assigning an unproven human-facing meaning to either byte. Other
+metadata record semantics are not yet fully named; Linux does not invent
+behavior for them.
 
 ## Deliberate remaining fallbacks
 
-This is a faithful port of the first candidate-extraction stage, not a source-
-equivalent replacement for the whole proprietary library. Windows still has:
+This is a faithful port of the first candidate-extraction stage, not yet the
+coherent kernel replacement for the whole proprietary library. The deployed
+Linux baseline still substitutes for later Windows stages with:
 
-- track lifecycle, matching, and motion prediction;
-- edge compensation and configuration-dependent coordinate transforms;
-- later shape/covariance classification and merged-contact handling;
-- pen-driven palm rejection.
+- `input_mt_assign_slots` plus a logical-space association gate;
+- fitted confirmation, missing-track, and coordinate-smoothing windows;
+- conservative size/span palm rejection; and
+- no pen-driven palm branch, by operator choice.
 
-Linux currently uses `input_mt_assign_slots`, bounded coordinate smoothing,
-a six-frame missing-contact hold, and conservative size/span rejection for
-those later stages. Those fallbacks remain isolated and documented rather
-than being described as Windows algorithms.
+Phase 69 now represents Windows assignment geometry, classification history,
+finger lifecycle, expanded centroid, output construction, and duplicate merge
+offline. Those pieces remain out of the live module until they can replace the
+fallbacks as one frame-ordered change.
 
 ## Offline validation
 

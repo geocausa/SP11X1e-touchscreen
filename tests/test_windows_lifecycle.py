@@ -89,6 +89,7 @@ def make_lifecycle_dll(project_id: int = 0x0C83) -> bytes:
             struct.pack_into("<bBBBBB", blob, record + 0x2A, 2, 5, 3, 1, 2, 0)
     # This field is also the absolute floor in the final transition record.
     struct.pack_into("<h", blob, PROJECT_CONFIG_OFFSET + 0xCB4, -20)
+    blob[0x1C84] = 1
     return bytes(blob)
 
 
@@ -140,6 +141,7 @@ class WindowsLifecycleTests(unittest.TestCase):
         self.assertFalse(lifecycle.pen_force_enabled)
         self.assertEqual(lifecycle.normal_feature_point_limit, 50)
         self.assertEqual(lifecycle.context_feature_point_limit, 30)
+        self.assertTrue(lifecycle.descriptor_context_demotion_enabled)
         self.assertFalse(lifecycle.neighbor_bounds_rules[0].enabled)
         self.assertEqual(
             lifecycle.neighbor_bounds_rules[3].min_x_adjustment, -30
@@ -321,7 +323,6 @@ class WindowsLifecycleTests(unittest.TestCase):
                 local_context_active=True,
                 counter_254=0,
                 output_override=self._override(100, 4),
-                descriptor_context_demotion_enabled=True,
             ),
         )
         self.assertEqual(descriptor_demoted.code, 4)
@@ -439,6 +440,23 @@ class WindowsLifecycleTests(unittest.TestCase):
         )
         self.assertEqual(after_boundary.code, 1)
         self.assertEqual(after_boundary.triggered, ("age_counter_code1",))
+
+        external_mode = apply_output_code_override(
+            lifecycle,
+            OutputOverrideInput(
+                age=36,
+                original_code=4,
+                current_scores=(0.0, 0.0, 0.0, 0.0),
+                previous_scores_newest_first=((0.0, 0.0, 0.0, 0.0),),
+                counter_250=10,
+                touches_sensor_edge=True,
+                external_mode=True,
+                external_predicate=True,
+            ),
+        )
+        # Its special delay requires project force age > 49; 0x0c83 uses 35.
+        self.assertEqual(external_mode.code, 1)
+        self.assertEqual(external_mode.triggered, ("age_counter_code1",))
 
     def test_extracts_unclassified_new_track_row(self):
         lifecycle = ProjectLifecycle.from_dll(make_lifecycle_dll(), 0x0C83)

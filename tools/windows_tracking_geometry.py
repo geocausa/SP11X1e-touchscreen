@@ -18,6 +18,10 @@ import struct
 # Direct float literals at 0x18003d970 and 0x180047760.
 WINDOWS_DESCRIPTOR_UNIT = 0.009999999776482582
 WINDOWS_EDGE_SNAP_EPSILON = 0.00009999999747378752
+WINDOWS_SIGNAL_LOOKUP_BASE = 0.6000000238418579
+WINDOWS_SIGNAL_LOOKUP_STEP = 0.002220354275777936
+WINDOWS_PROFILE_BASELINE_INDEX = 178
+WINDOWS_ALTERNATE_BASELINE_INDEX = 173
 
 
 @dataclass(frozen=True)
@@ -28,6 +32,32 @@ class CandidateEdgeFlags:
     touches_sensor_edge: bool
     touches_sensor_corner: bool
     near_sensor_edge: bool
+
+
+@dataclass(frozen=True)
+class ProfileRegion:
+    """Five-byte optional rectangle consumed by ``FUN_18004b280``."""
+
+    enabled: bool
+    min_x: int
+    max_x: int
+    min_y: int
+    max_y: int
+
+    @classmethod
+    def from_bytes(cls, data: bytes) -> "ProfileRegion":
+        if len(data) != 5:
+            raise ValueError("profile region must contain exactly five bytes")
+        return cls(data[0] == 1, data[1], data[2], data[3], data[4])
+
+    def contains(self, x: float, y: float) -> bool:
+        if not math.isfinite(x) or not math.isfinite(y):
+            raise ValueError("profile coordinates must be finite")
+        return bool(
+            self.enabled
+            and self.min_x <= x <= self.max_x
+            and self.min_y <= y <= self.max_y
+        )
 
 
 def candidate_edge_flags(
@@ -150,9 +180,84 @@ class TrackKinematics:
         self.max_y = max(float(self.max_y), candidate_y)
 
 
+@dataclass(frozen=True)
+class TrackScalarBlendPolicy:
+    """PSDB alpha used for track +0x18's non-coordinate scalar."""
+
+    base_alpha: float
+
+    @classmethod
+    def from_dll(cls, data: bytes, project_id: int) -> "TrackScalarBlendPolicy":
+        from tools.extract_windows_classifier import (
+            PROJECT_CONFIG_OFFSET,
+            find_project_blob,
+        )
+
+        blob_offset, blob_length = find_project_blob(data, project_id)
+        required = PROJECT_CONFIG_OFFSET + 0xEB0
+        if required > blob_length:
+            raise ValueError("PSDB is too short for track scalar blend policy")
+        return cls(
+            struct.unpack_from(
+                "<f", data, blob_offset + PROJECT_CONFIG_OFFSET + 0xEAC
+            )[0]
+        )
+
+
+def blend_track_scalar(
+    policy: TrackScalarBlendPolicy,
+    *,
+    previous_scalar: float,
+    candidate_scalar: float,
+    prior_class4_counter: int,
+    motion_limited: bool,
+    velocity_x: float,
+    velocity_y: float,
+) -> float:
+    """Mirror the scalar-only tail of ``FUN_18004a330``.
+
+    This value is later copied to output record +0x10.  It is independent of
+    track X/Y. ARM64 fused multiply-add operations are preserved explicitly.
+    """
+    if not 0 <= prior_class4_counter <= 0xFFFF:
+        raise ValueError("prior class-four counter must fit an unsigned short")
+    values = (
+        policy.base_alpha,
+        previous_scalar,
+        candidate_scalar,
+        velocity_x,
+        velocity_y,
+    )
+    if not all(math.isfinite(value) for value in values):
+        raise ValueError("track scalar inputs must be finite")
+    if prior_class4_counter == 0:
+        return _float32(candidate_scalar)
+
+    alpha = _float32(policy.base_alpha)
+    if motion_limited:
+        vx = _float32(velocity_x)
+        vy = _float32(velocity_y)
+        vx_squared = _float32(vx * vx)
+        squared_motion = _float32(math.fma(vy, vy, vx_squared))
+        motion_alpha = _float32(squared_motion * _float32(10.0))
+        if motion_alpha < alpha:
+            alpha = motion_alpha
+
+    old_weight = _float32(_float32(1.0) - alpha)
+    old_part = _float32(old_weight * _float32(previous_scalar))
+    return _float32(
+        math.fma(_float32(candidate_scalar), alpha, old_part)
+    )
+
+
 @dataclass
 class OutputContact:
-    """Fields used by FUN_180045228's post-output merge pass."""
+    """Fields used by FUN_180045228's post-output merge pass.
+
+    ``group_id`` is output-record byte +0x27.  The builder initially copies it
+    from track byte +0x37; the merge pass rewrites +0x27 while leaving the
+    original identifier at record +0x28 intact.
+    """
 
     x: float
     y: float
@@ -330,3 +435,245 @@ def snap_far_edge_centroid(
     if rounded + epsilon < value or value < rounded - epsilon:
         return value
     return rounded
+
+
+@dataclass(frozen=True)
+class ExpandedCentroidBaselineInputs:
+    """The three baseline branches selected near the top of FUN_180047078."""
+
+    reference_baseline: float
+    profile_baseline_c858: float
+    alternate_baseline_c844: float
+    frame_maximum_exceeded: bool
+    profile_predicate: bool
+    processor_flag_198c8: bool
+    output_flag_97: bool
+
+
+def _signal_lookup(index: int) -> float:
+    if not 0 <= index <= 0xFF:
+        raise ValueError("signal lookup index must fit an unsigned byte")
+    # ARM64 uses FMADD for base + index*step, so preserve its single rounding.
+    combined = _float32(
+        math.fma(
+            _float32(float(index)),
+            WINDOWS_SIGNAL_LOOKUP_STEP,
+            WINDOWS_SIGNAL_LOOKUP_BASE,
+        )
+    )
+    return _float32(1.0 - combined)
+
+
+@dataclass(frozen=True)
+class ExpandedCentroidPolicy:
+    """PSDB +0xb84 fields consumed by ``FUN_180047078``."""
+
+    admission_multiplier: float
+    normal_baseline_index: int
+    high_frame_baseline_index: int
+    processor_override_enabled: bool
+
+    @classmethod
+    def from_dll(cls, data: bytes, project_id: int) -> "ExpandedCentroidPolicy":
+        from tools.extract_windows_classifier import find_project_blob
+
+        blob_offset, blob_length = find_project_blob(data, project_id)
+        required = 0xBAD
+        if required > blob_length:
+            raise ValueError("PSDB is too short for expanded-centroid policy")
+        record = blob_offset + 0xB84
+        multiplier_source = struct.unpack_from("<H", data, record + 0x08)[0]
+        return cls(
+            admission_multiplier=_float32(
+                float(multiplier_source) * WINDOWS_DESCRIPTOR_UNIT
+            ),
+            normal_baseline_index=struct.unpack_from(
+                "<H", data, record + 0x10
+            )[0],
+            high_frame_baseline_index=struct.unpack_from(
+                "<H", data, record + 0x18
+            )[0],
+            processor_override_enabled=data[blob_offset + 0xBAC] != 0,
+        )
+
+    def baseline_inputs(
+        self,
+        *,
+        frame_maximum_exceeded: bool,
+        profile_predicate: bool,
+        output_flag_97: bool,
+    ) -> ExpandedCentroidBaselineInputs:
+        reference_index = (
+            self.high_frame_baseline_index
+            if frame_maximum_exceeded
+            else self.normal_baseline_index
+        )
+        return ExpandedCentroidBaselineInputs(
+            reference_baseline=_signal_lookup(reference_index),
+            profile_baseline_c858=_signal_lookup(WINDOWS_PROFILE_BASELINE_INDEX),
+            alternate_baseline_c844=_signal_lookup(
+                WINDOWS_ALTERNATE_BASELINE_INDEX
+            ),
+            frame_maximum_exceeded=frame_maximum_exceeded,
+            profile_predicate=profile_predicate,
+            processor_flag_198c8=self.processor_override_enabled,
+            output_flag_97=output_flag_97,
+        )
+
+
+def select_expanded_centroid_baseline(
+    inputs: ExpandedCentroidBaselineInputs,
+) -> float:
+    """Mirror FUN_180047078's ordered baseline override branches."""
+    if not inputs.frame_maximum_exceeded:
+        if inputs.profile_predicate:
+            return inputs.profile_baseline_c858
+        if inputs.processor_flag_198c8 or inputs.output_flag_97:
+            return inputs.alternate_baseline_c844
+    return inputs.reference_baseline
+
+
+def update_track_centroid_override_flag(
+    *,
+    current: bool,
+    candidate_flag_b1: bool,
+    updated_age: int,
+    maximum_point_count: int,
+    frame_maximum_exceeded: bool,
+) -> bool:
+    """Mirror the sticky track `+0x25c` writer in ``FUN_18004a330``.
+
+    The candidate producer remains structurally named by its `+0xb1` offset;
+    the track-side mutation and every numeric boundary are exact.
+    """
+    if updated_age < 0:
+        raise ValueError("updated track age must be non-negative")
+    if not 0 <= maximum_point_count <= 0xFFFF:
+        raise ValueError("maximum point count must fit an unsigned short")
+    return bool(
+        current
+        or (
+            candidate_flag_b1
+            and updated_age > 1
+            and maximum_point_count < 5
+            and not frame_maximum_exceeded
+        )
+    )
+
+
+@dataclass(frozen=True)
+class ExpandedCentroidResult:
+    x: float
+    y: float
+    admitted_halo_cells: tuple[tuple[int, int], ...]
+    weight: float
+
+
+def expanded_edge_centroid(
+    *,
+    label_grid: tuple[tuple[int, ...], ...],
+    level_index_grid: tuple[tuple[int, ...], ...],
+    label_owner: tuple[int, ...],
+    levels: tuple[float, ...],
+    component_owner: int,
+    min_x: int,
+    min_y: int,
+    max_x: int,
+    max_y: int,
+    candidate_level_index: int,
+    admission_multiplier: float,
+    baseline: float,
+    clamp_expanded_window: bool,
+) -> ExpandedCentroidResult:
+    """Represent FUN_180047078's weighted component-plus-halo centroid.
+
+    The DLL temporarily marks zero-labelled cells with 0xff while walking the
+    expanded rectangle.  A zero cell is admitted exactly when an orthogonally
+    adjacent member cell is above the candidate-level admission threshold.
+    Expressing that final set directly avoids mutating the caller's label grid.
+    Accumulation still follows the DLL's unusual interior, right-edge,
+    bottom-edge, corner order so float32 rounding remains faithful.
+    """
+    if not label_grid or not label_grid[0]:
+        raise ValueError("label grid must not be empty")
+    height = len(label_grid)
+    width = len(label_grid[0])
+    if any(len(row) != width for row in label_grid):
+        raise ValueError("label grid rows must have equal width")
+    if len(level_index_grid) != height or any(
+        len(row) != width for row in level_index_grid
+    ):
+        raise ValueError("level-index grid shape must match the label grid")
+    if not (0 <= min_x <= max_x < width and 0 <= min_y <= max_y < height):
+        raise ValueError("component bounds are outside the grids")
+    if not 0 <= candidate_level_index < len(levels):
+        raise ValueError("candidate level index is outside the level table")
+    if admission_multiplier < 0.0:
+        raise ValueError("admission multiplier must be non-negative")
+    for row in label_grid:
+        if any(not 0 <= label < len(label_owner) for label in row):
+            raise ValueError("label grid contains an unmapped label")
+    for row in level_index_grid:
+        if any(not 0 <= index < len(levels) for index in row):
+            raise ValueError("level-index grid contains an invalid index")
+
+    left, top = min_x - 1, min_y - 1
+    right, bottom = max_x + 1, max_y + 1
+    if clamp_expanded_window:
+        left, top = max(left, 0), max(top, 0)
+        right, bottom = min(right, width - 1), min(bottom, height - 1)
+    elif left < 0 or top < 0 or right >= width or bottom >= height:
+        raise ValueError("unclamped expanded window crosses a sensor edge")
+
+    def belongs(x: int, y: int) -> bool:
+        return label_owner[label_grid[y][x]] == component_owner
+
+    admission_threshold = _float32(
+        _float32(levels[candidate_level_index]) * _float32(admission_multiplier)
+    )
+    halo: set[tuple[int, int]] = set()
+    for y in range(top, bottom + 1):
+        for x in range(left, right + 1):
+            if label_grid[y][x] != 0 or belongs(x, y):
+                continue
+            for dx, dy in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+                nx, ny = x + dx, y + dy
+                if not (left <= nx <= right and top <= ny <= bottom):
+                    continue
+                adjacent_level = _float32(levels[level_index_grid[ny][nx]])
+                if belongs(nx, ny) and admission_threshold < adjacent_level:
+                    halo.add((x, y))
+                    break
+
+    traversal = [
+        *((x, y) for y in range(top, bottom) for x in range(left, right)),
+        *((right, y) for y in range(top, bottom)),
+        *((x, bottom) for x in range(left, right)),
+        (right, bottom),
+    ]
+    sum_x = _float32(0.0)
+    sum_y = _float32(0.0)
+    sum_weight = _float32(0.0)
+    for x, y in traversal:
+        member = belongs(x, y)
+        if not member and (x, y) not in halo:
+            continue
+        level = _float32(levels[level_index_grid[y][x]])
+        weight = _float32(level - _float32(baseline))
+        # The member branch adds its signed excess unconditionally.  Only the
+        # temporary 0xff halo branch tests baseline < level before adding.
+        if not member and weight <= 0.0:
+            continue
+        sum_x = _float32(sum_x + _float32(weight * float(x)))
+        sum_y = _float32(sum_y + _float32(weight * float(y)))
+        sum_weight = _float32(sum_weight + weight)
+    if sum_weight == 0.0:
+        raise ValueError("expanded centroid has zero total weight")
+
+    x = _float32(sum_x * _float32(1.0 / sum_weight))
+    y = _float32(sum_y * _float32(1.0 / sum_weight))
+    if min_x == max_x == width - 1:
+        x = snap_far_edge_centroid(x)
+    if min_y == max_y == height - 1:
+        y = snap_far_edge_centroid(y)
+    return ExpandedCentroidResult(x, y, tuple(sorted(halo)), sum_weight)

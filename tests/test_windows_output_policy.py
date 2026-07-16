@@ -11,7 +11,10 @@ from tools.windows_output_policy import (
     ProjectOutputPolicy,
     State4HistorySample,
     State4SuppressionInput,
+    TrackStateCounts,
     advance_unmatched_track,
+    apply_track_state_transition,
+    cleanup_state_three_tracks,
     evaluate_output_eligibility,
     evaluate_state4_suppression,
     state4_neighborhood_all_above,
@@ -291,55 +294,55 @@ class WindowsOutputPolicyTests(unittest.TestCase):
             state=1,
             matched_this_frame=False,
             release_counter=0,
-            active_secondary_count=2,
+            state_one_two_count=2,
             state4_suppression_accepted=True,
         )
         self.assertEqual(suppressed.state, 4)
-        self.assertEqual(suppressed.active_secondary_count, 2)
+        self.assertEqual(suppressed.state_one_two_count, 1)
 
         closed = advance_unmatched_track(
             state=1,
             matched_this_frame=False,
             release_counter=0,
-            active_secondary_count=2,
+            state_one_two_count=2,
         )
         self.assertEqual(closed.state, 3)
-        self.assertEqual(closed.active_secondary_count, 1)
+        self.assertEqual(closed.state_one_two_count, 1)
 
     def test_unmatched_state_two_or_four_waits_for_release_counter(self):
         waiting = advance_unmatched_track(
             state=2,
             matched_this_frame=False,
             release_counter=1,
-            active_secondary_count=2,
+            state_one_two_count=2,
         )
         self.assertEqual(waiting.state, 2)
-        self.assertEqual(waiting.active_secondary_count, 2)
+        self.assertEqual(waiting.state_one_two_count, 2)
 
         state2_closed = advance_unmatched_track(
             state=2,
             matched_this_frame=False,
             release_counter=0,
-            active_secondary_count=2,
+            state_one_two_count=2,
         )
         self.assertEqual(state2_closed.state, 3)
-        self.assertEqual(state2_closed.active_secondary_count, 1)
+        self.assertEqual(state2_closed.state_one_two_count, 1)
 
         state4_closed = advance_unmatched_track(
             state=4,
             matched_this_frame=False,
             release_counter=0,
-            active_secondary_count=2,
+            state_one_two_count=2,
         )
         self.assertEqual(state4_closed.state, 3)
-        self.assertEqual(state4_closed.active_secondary_count, 2)
+        self.assertEqual(state4_closed.state_one_two_count, 2)
 
     def test_matched_or_free_track_is_unchanged(self):
         matched = advance_unmatched_track(
             state=1,
             matched_this_frame=True,
             release_counter=0,
-            active_secondary_count=1,
+            state_one_two_count=1,
             state4_suppression_accepted=True,
         )
         self.assertEqual((matched.state, matched.reason), (1, "unchanged"))
@@ -347,9 +350,40 @@ class WindowsOutputPolicyTests(unittest.TestCase):
             state=0,
             matched_this_frame=False,
             release_counter=0,
-            active_secondary_count=1,
+            state_one_two_count=1,
         )
         self.assertEqual((free.state, free.reason), (0, "unchanged"))
+
+    def test_common_state_setter_maintains_both_exact_byte_counts(self):
+        for old_state in range(5):
+            for new_state in range(5):
+                decision = apply_track_state_transition(
+                    old_state, new_state, TrackStateCounts(20, 10)
+                )
+                expected_active = 20 + (new_state != 0) - (old_state != 0)
+                expected_one_two = (
+                    10
+                    + (new_state in (1, 2))
+                    - (old_state in (1, 2))
+                )
+                self.assertEqual(decision.state, new_state)
+                self.assertEqual(
+                    decision.counts,
+                    TrackStateCounts(expected_active, expected_one_two),
+                )
+
+        guarded = apply_track_state_transition(1, 0, TrackStateCounts(0, 0))
+        self.assertEqual(guarded.counts, TrackStateCounts(0, 0))
+        wrapped = apply_track_state_transition(0, 1, TrackStateCounts(0xFF, 0xFF))
+        self.assertEqual(wrapped.counts, TrackStateCounts(0, 0))
+
+    def test_state_three_cleanup_precedes_output_state_collection(self):
+        cleanup = cleanup_state_three_tracks(
+            (0, 3, 1, 4, 3, 2), TrackStateCounts(5, 2)
+        )
+        self.assertEqual(cleanup.states, (0, 0, 1, 4, 0, 2))
+        self.assertEqual(cleanup.cleared_indexes, (1, 4))
+        self.assertEqual(cleanup.counts, TrackStateCounts(3, 2))
 
     @staticmethod
     def _state4_sample(

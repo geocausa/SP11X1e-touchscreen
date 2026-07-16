@@ -63,7 +63,10 @@ additional facts:
 
 - the lifecycle status is an integer at track `+0x3c`, with values zero
   through four used by the state setter;
-- only lifecycle states one and two reach the output builder;
+- lifecycle states one, two and four have distinct output-builder paths;
+- processor byte `+0x166a1` counts all nonzero states and `+0x166a0` counts
+  only states one/two; the accepted state-one to state-four edge decrements
+  the latter through the common setter;
 - normal finger output is built for classes zero and two; the separate
   `+0x46` flag belongs to the class-one/class-five transition-output path and
   is not a prerequisite for normal class-zero/class-two output;
@@ -130,8 +133,10 @@ overrides: a previous-score-average branch within a project age window, a
 two-consecutive-low-score branch, and a final age/counter branch. Crucially,
 the second branch tests the output code captured at function entry, so it can
 overwrite a code-two decision made by the first branch. The offline evaluator
-preserves that ordering and all direct project constants while leaving
-external producer flags structurally named until their provenance is proven.
+preserves that ordering and all direct project constants. The remaining
+external-mode producer need not be guessed for project 0x0c83: its only age
+adjustment requires the configured force age to exceed 49, while this project
+stores 35, so both boolean outcomes have identical output behavior.
 
 Candidate `+0x49/+0x4a` are now proven outer-sensor-edge and sensor-corner
 flags, respectively. The external source point belongs to the pen-orientation
@@ -159,19 +164,19 @@ it closes, preventing normal shape jitter from making a real finger flicker.
 
 ## Calibration and palm classification boundary
 
-Heat-byte calibration is still consistent with identity gain/offset on this
-panel.  Changing it adaptively without a recovered configuration or labelled
-physical targets could make coordinates worse.  Coordinate edge compensation
-is a separate stage and will require measurements against known screen points.
+Heat-byte calibration is not active on the captured SP11 path. All 1,381
+Windows frames use the eight-bit direct-copy encoding; the separate PSDB
+16-bit calibration record is disabled. Coordinate edge compensation remains a
+separate output-centroid stage and must not be confused with sample gain.
 
 Windows computes blob shape/covariance and NSR features before classification.
 `FUN_180041fd8` derives covariance eigenvalues, an aspect-ratio feature, and a
-normalized spread feature after centroid creation. `FUN_18003c048` selects an
-NSR threshold from either a curve or a location-indexed table and clears the
-blob-valid flag when the measured feature fails it. The runtime table values
-are still unnamed and have not been recovered from a live initialized object.
-Its palm logic also accepts pen-proximity state.  This project is finger-only,
-so pen-dependent palm rejection will not be ported.  A conservative
-finger-only classifier can use the verified shape features once its runtime
-threshold table is recovered; Phase 57's broad size/span guard remains the
-safe fallback meanwhile.
+normalized spread feature after centroid creation. `FUN_18003c048` maps the
+preserved sensor row through the recovered 46-to-16 project table and rejects
+only when the selected firmware metadata value is strictly greater than the
+embedded cutoff 655. The captured values are only zero, one, and two, so that
+filter is a proven no-op for this corpus. Its palm logic also accepts
+pen-proximity state. This project is finger-only, so the pen-dependent branch
+will not be ported; Phase 57's broad size/span guard remains only as the
+deployed fallback until the recovered finger pipeline is integrated
+coherently.
