@@ -186,6 +186,8 @@ tools/generate_lifecycle_header.py
 tools/windows_tracking_geometry.py
 tools/regress_heat_frames.py
 tools/track_heat_contacts.py
+scripts/deploy_phase70.sh
+boot/57_sp11_711_phase70_orchestrator
 tests/test_heat_decoder.py
 tests/test_contact_tracker.py
 tests/test_windows_classifier.py

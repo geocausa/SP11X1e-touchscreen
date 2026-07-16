@@ -86,5 +86,32 @@ Validation performed for this checkpoint:
 - `g6ts_biosref.ko` exposes the opt-in parameter with the expected target
   vermagic.
 
-No Phase 70 module was installed, hot-loaded, added to an initramfs, or made a
-GRUB default while creating this checkpoint.
+## Isolated deployment checkpoint
+
+Phase 70 is installed as a one-shot GRUB entry on the target Surface:
+
+```text
+entry id:                  sp11-phase70
+command-line marker:       sp11_entry=7.1.1-phase70
+orchestrator parameter:    g6ts_biosref.windows_orchestrator=1
+client source version:     10F4292E88026583399E030
+controller source version: 393A6B36EC5A67BDDC47040
+GPI source version:        24B1195ED15A417793F5F0E
+```
+
+The installed GENI controller and GPI module source versions matched the
+Phase 70 build, so only the touchscreen client was temporarily staged while
+constructing the isolated initramfs. The root-filesystem client was restored
+afterward and the running Phase 68 module was not hot-reloaded.
+
+```text
+0c0dcc4d059fb5bbc7b0156d7a9f0e593fcaab6290f1b74087c3f3395c5dfd47  initrd.img-7.1.1-sp11-gpicmp1+-phase70
+fcefdc928b6e45a8212722c9132b9da2dc1c197fc4890f7a9bab3c31d1584b94  sp11-7.1.1-phase70-hybrid.dtb
+6f263da75052c54b16d9be21b315beab6b45a2c27c08710d5362b033b4aebf30  vmlinuz-7.1.1-sp11-gpicmp1+
+```
+
+The saved GRUB default remains the 7.1.3 baseline. `grub-reboot` selected
+Phase 70 for the next boot only. The proven Phase 68 initramfs, DTB, kernel,
+entry, and their hashes remain unchanged. `scripts/deploy_phase70.sh`
+reproduces the checked transaction and refuses to overwrite an existing Phase
+70 slot.
