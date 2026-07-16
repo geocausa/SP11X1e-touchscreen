@@ -195,11 +195,26 @@ proximity tests when project `+0xe99` is enabled (it is one for 0x0c83), using
 project distance ten from `+0xe9a`.
 
 `ContextWindow` represents the proven global update and wrap behavior offline.
-The three producer flags remain structurally named until their frame-object
-provenance is finished, so the oracle does not silently label them as pen,
-palm, or finger state. This recovery is significant for typing behavior:
-Windows can keep a changed classification branch active for hundreds of scan
-frames after the event that armed it.
+The persistent input at processor `+0x166c9` is copied from frame `+0xb7f5`;
+`FUN_18003af68` proves that byte is the detector object's configured `+0x124`
+flag, not its dynamic detection result at frame `+0xb7f4`. The reset source at
+`+0x166b5` comes directly from frame `+0xb771`, while the per-frame direct flag
+at `+0x166b6` comes from frame `+0xb7ea`. Their upstream frame-parser meanings
+remain structurally named: a complete five-second-bounded decompile scan of all
+2,464 DLL functions found reads but no internal writers for either field, so
+they belong to the processor's caller-supplied frame contract. Caller-side
+provenance must be recovered outside this DLL rather than guessed here. This
+recovery is significant for typing behavior: Windows can keep a changed
+classification branch active for hundreds of scan frames after the event that
+armed it.
+
+`FUN_18004a1b8` also moves the current class-one/class-five track list count
+from `+0x16794` to previous-frame byte `+0x16795` before clearing the current
+list. `resolve_local_context` now mirrors both track and candidate helpers: an
+immediate `b771/b7ea` source wins, otherwise a nonzero previous special-track
+count returns its region lookup result, otherwise descriptor mode uses a
+strict `Y < 10` edge test followed by its region mask, and all other cases
+return the global context value.
 
 ## Evidence boundary
 
@@ -241,8 +256,8 @@ frames after the event that armed it.
 
 - retaining sensor-space centroids through Linux assignment and applying the
   recovered per-axis quantization before output normalization;
-- producer provenance for the remaining global-context and region-map flags
-  consumed by the now-modelled `FUN_180049880` output-code override;
+- caller-side provenance for frame bytes `+0xb771` and `+0xb7ea` consumed
+  by the now-modelled global/local context helpers;
 - state-three cleanup integration through `FUN_180048e70`;
 - record serialization and identifier details after the now-modelled final
   eligibility branches in `FUN_1800426d8`/`FUN_180049458`;
@@ -540,7 +555,7 @@ level/age release and context rejection. Final-output tests cover normal,
 split, transition, low-score cleanup, state-two release, state-four retention,
 unmatched lifecycle closure, the full state-four history/score selector and
 all associated boundary/counter ordering. The complete suite currently passes
-87 tests.
+88 tests.
 
 The saved Windows corpus regression decodes all 1,381 frames with zero errors,
 scores 1,113 contacts with zero floating/fixed-point winner mismatches, and

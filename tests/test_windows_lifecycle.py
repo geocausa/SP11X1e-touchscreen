@@ -12,6 +12,7 @@ from tools.extract_windows_lifecycle import (
     ContactBounds,
     ContextWindow,
     FingerClassPolicyInput,
+    LocalContextInput,
     NeighborBoundsInput,
     OLD_CLASS_COUNT,
     OutputOverrideInput,
@@ -22,6 +23,7 @@ from tools.extract_windows_lifecycle import (
     apply_finger_class_policy,
     apply_output_code_override,
     frame_level_exceeds_limit,
+    resolve_local_context,
     uses_fallback_feature_profile,
 )
 
@@ -567,6 +569,63 @@ class WindowsLifecycleTests(unittest.TestCase):
             source_resets_window=False,
         )
         self.assertTrue(direct.active)
+
+    def test_local_context_preserves_windows_source_region_order(self):
+        lifecycle = ProjectLifecycle.from_dll(make_lifecycle_dll(), 0x0C83)
+        base = dict(
+            global_context_active=True,
+            object_present=True,
+            region_parameter_valid=True,
+            immediate_source_active=False,
+            previous_special_track_count=0,
+            previous_track_region_contains=False,
+            descriptor_mode=False,
+            object_y=100.0,
+            descriptor_region_contains=False,
+        )
+        self.assertTrue(resolve_local_context(lifecycle, LocalContextInput(**base)))
+        self.assertTrue(
+            resolve_local_context(
+                lifecycle,
+                LocalContextInput(**{**base, "immediate_source_active": True}),
+            )
+        )
+        self.assertFalse(
+            resolve_local_context(
+                lifecycle,
+                LocalContextInput(
+                    **{
+                        **base,
+                        "previous_special_track_count": 1,
+                        "previous_track_region_contains": False,
+                    }
+                ),
+            )
+        )
+        self.assertTrue(
+            resolve_local_context(
+                lifecycle,
+                LocalContextInput(
+                    **{
+                        **base,
+                        "descriptor_mode": True,
+                        "object_y": 9.999,
+                    }
+                ),
+            )
+        )
+        at_edge = resolve_local_context(
+            lifecycle,
+            LocalContextInput(
+                **{
+                    **base,
+                    "descriptor_mode": True,
+                    "object_y": 10.0,
+                    "descriptor_region_contains": False,
+                }
+            ),
+        )
+        self.assertFalse(at_edge)
 
     def test_rejects_bad_score_lengths_and_truncated_table(self):
         lifecycle = ProjectLifecycle.from_dll(make_lifecycle_dll(), 0x0C83)

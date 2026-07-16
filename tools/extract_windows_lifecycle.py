@@ -878,6 +878,43 @@ class ContextWindow:
 
 
 @dataclass(frozen=True)
+class LocalContextInput:
+    global_context_active: bool
+    object_present: bool
+    region_parameter_valid: bool
+    immediate_source_active: bool
+    previous_special_track_count: int
+    previous_track_region_contains: bool
+    descriptor_mode: bool
+    object_y: float
+    descriptor_region_contains: bool
+
+
+def resolve_local_context(
+    lifecycle: ProjectLifecycle, inputs: LocalContextInput
+) -> bool:
+    """Mirror FUN_180044918/FUN_180044a30's shared context ordering."""
+    if inputs.previous_special_track_count < 0:
+        raise ValueError("previous special-track count must not be negative")
+    if not (
+        lifecycle.context_regions_enabled
+        and inputs.object_present
+        and inputs.region_parameter_valid
+        and inputs.global_context_active
+    ):
+        return inputs.global_context_active
+    if inputs.immediate_source_active:
+        return True
+    if inputs.previous_special_track_count:
+        return inputs.previous_track_region_contains
+    if inputs.descriptor_mode:
+        if inputs.object_y < lifecycle.context_region_distance:
+            return True
+        return inputs.descriptor_region_contains
+    return inputs.global_context_active
+
+
+@dataclass(frozen=True)
 class BaseTransitionDecision:
     """Result of only the two recovered score gates in FUN_180041150.
 

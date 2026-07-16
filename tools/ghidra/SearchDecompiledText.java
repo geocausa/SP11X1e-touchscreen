@@ -35,8 +35,11 @@ public class SearchDecompiledText extends GhidraScript {
                     continue;
                 }
                 searched++;
+                // Broad provenance scans must not stall for a minute on each
+                // pathological runtime/helper function. Five seconds is ample
+                // for the processor policy functions and failures are skipped.
                 DecompileResults result = decompiler.decompileFunction(
-                    function, 60, monitor
+                    function, 5, monitor
                 );
                 if (!result.decompileCompleted() ||
                     result.getDecompiledFunction() == null) {
