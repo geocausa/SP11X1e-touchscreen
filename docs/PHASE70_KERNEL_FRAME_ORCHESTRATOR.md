@@ -62,6 +62,10 @@ This distinction is intentional: the exact geometry and base transition
 pieces are compiled and reviewable, while unproven provider values remain
 visibly outside the active policy.
 
+Phase 71 subsequently recovered the `+0x4d/+0x4e` producers themselves and
+corrected this omission. Phase 70 is retained as the live failure checkpoint;
+see `PHASE71_SCORE3_PRODUCER.md` for the exact producer and score adjustment.
+
 ## Reproduction and validation
 
 Regenerate or verify the committed profile from a local DLL:

@@ -118,6 +118,23 @@ class SourceInvariantTests(unittest.TestCase):
                 )
         self.assertIn("G6TS_WINDOWS_HISTORY_CAPACITY 10U", self.lifecycle_profile)
         self.assertIn("G6TS_WINDOWS_ASSIGN_RADIUS 5U", self.lifecycle_profile)
+        self.assertIn(
+            "G6TS_WINDOWS_SCORE3_PRIMARY_Q24 838860800LL",
+            self.lifecycle_profile,
+        )
+
+    def test_windows_score_three_postprocessor_uses_recovered_peak_counts(self):
+        peak_body = function_body(self.source, "g6ts_local_peak_counts")
+        scorer_body = function_body(self.source, "g6ts_classify_contact")
+        for token in (
+            "local_peak_count",
+            "strong_local_peak_count",
+            "G6TS_LOCAL_PEAK_CAPACITY",
+            "G6TS_LOCAL_PEAK_FLOOR_Q12",
+        ):
+            self.assertIn(token, peak_body)
+        self.assertIn("G6TS_WINDOWS_SCORE3_PRIMARY_Q24", scorer_body)
+        self.assertIn("G6TS_WINDOWS_SCORE3_SINGLE_Q24", scorer_body)
 
 
 if __name__ == "__main__":

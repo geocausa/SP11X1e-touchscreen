@@ -74,6 +74,8 @@
 #define G6TS_SECONDARY_A_Q12		645663
 #define G6TS_SECONDARY_NOISE_Q12	36895
 #define G6TS_SECONDARY_SEED_Q12		225
+#define G6TS_LOCAL_PEAK_FLOOR_Q12	164
+#define G6TS_LOCAL_PEAK_CAPACITY	10U
 #define G6TS_AXIS_SCALE_Q12		18919
 #define G6TS_SPREAD_SCALE_Q12		25736
 #define G6TS_HALO_RATIO_Q12		614
@@ -138,6 +140,8 @@ struct g6ts_contact {
 	u8 max_row;
 	s32 features_q12[G6TS_FEATURE_COUNT];
 	s64 scores_q24[G6TS_CLASS_COUNT];
+	u8 local_peak_count;
+	u8 strong_local_peak_count;
 	u8 shape_class;
 	bool shape_allowed;
 };
@@ -542,6 +546,72 @@ static s32 g6ts_signal_q12(u8 value)
 		G6TS_CLASSIFIER_SHIFT;
 }
 
+/*
+ * Mirror FUN_180040438's candidate +0x4d local-maximum producer and
+ * FUN_180041fd8's +0x4e strict 0.04 filter.  The DLL's equality epsilon is
+ * 0.0001 while adjacent byte lookup values differ by about 0.00222, so Q12
+ * ordering is identical for this byte-input path.
+ */
+static void g6ts_local_peak_counts(const struct g6ts *ts,
+				   struct g6ts_contact *contact)
+{
+	static const s8 neighbours[][2] = {
+		{ -1, 0 }, { 1, 0 }, { 0, -1 }, { 0, 1 },
+	};
+	unsigned int index;
+
+	contact->local_peak_count = 0;
+	contact->strong_local_peak_count = 0;
+	for (index = 0; index < G6TS_HEAT_SAMPLES; index++) {
+		unsigned int row, col, equal_index = UINT_MAX;
+		s32 current_signal, equal_signal = 0;
+		unsigned int lower = 0, near_equal = 0, n;
+		bool selected;
+
+		if (!ts->heat_component[index])
+			continue;
+		row = index / G6TS_HEAT_COLS;
+		col = index % G6TS_HEAT_COLS;
+		current_signal = g6ts_signal_q12(ts->heatmap[index]);
+		for (n = 0; n < ARRAY_SIZE(neighbours); n++) {
+			int neighbour_col = col + neighbours[n][0];
+			int neighbour_row = row + neighbours[n][1];
+			unsigned int neighbour_index;
+			s32 neighbour_signal;
+
+			if (neighbour_row < 0 || neighbour_row >= G6TS_HEAT_ROWS ||
+			    neighbour_col < 0 || neighbour_col >= G6TS_HEAT_COLS) {
+				neighbour_index = UINT_MAX;
+				neighbour_signal = 0;
+			} else {
+				neighbour_index = neighbour_row * G6TS_HEAT_COLS +
+						  neighbour_col;
+				neighbour_signal =
+					g6ts_signal_q12(ts->heatmap[neighbour_index]);
+			}
+			if (current_signal > neighbour_signal) {
+				lower++;
+			} else if (current_signal == neighbour_signal) {
+				near_equal++;
+				equal_index = neighbour_index;
+				equal_signal = neighbour_signal;
+			}
+		}
+
+		selected = lower == 4;
+		if (lower == 3 && near_equal == 1)
+			selected = equal_signal < current_signal ||
+				   (equal_signal == current_signal &&
+				    index < equal_index);
+		if (!selected ||
+		    contact->local_peak_count >= G6TS_LOCAL_PEAK_CAPACITY)
+			continue;
+		contact->local_peak_count++;
+		if (current_signal > G6TS_LOCAL_PEAK_FLOOR_Q12)
+			contact->strong_local_peak_count++;
+	}
+}
+
 static u8 g6ts_secondary_cutoff(u8 peak_value, unsigned int pass)
 {
 	static const u16 fractions_q12[] = { 2048, 3072, 3584 };
@@ -840,10 +910,21 @@ static u8 g6ts_classify_contact(struct g6ts_contact *contact)
 
 			contact->scores_q24[class] = score;
 
-			if (score > best_score) {
-				best_score = score;
-				best_class = class;
-			}
+		}
+	}
+	if (g6ts_windows_orchestrator) {
+		/* FUN_180049638 applies these in strict if/else-if order. */
+		if (contact->local_peak_count == 1)
+			contact->scores_q24[3] -=
+				G6TS_WINDOWS_SCORE3_PRIMARY_Q24;
+		else if (contact->strong_local_peak_count == 1)
+			contact->scores_q24[3] -=
+				G6TS_WINDOWS_SCORE3_SINGLE_Q24;
+	}
+	for (class = 0; class < G6TS_CLASS_COUNT; class++) {
+		if (contact->scores_q24[class] > best_score) {
+			best_score = contact->scores_q24[class];
+			best_class = class;
 		}
 	}
 	return best_class;
@@ -943,6 +1024,7 @@ static unsigned int g6ts_find_contacts(struct g6ts *ts)
 		memset(ts->heat_component, 0, sizeof(ts->heat_component));
 		while (tail)
 			ts->heat_component[ts->heat_queue[--tail]] = 1;
+		g6ts_local_peak_counts(ts, &contact);
 		contact.features_q12[0] =
 			contact.pixels << G6TS_CLASSIFIER_SHIFT;
 		g6ts_secondary_features(ts, &contact);
@@ -953,9 +1035,12 @@ static unsigned int g6ts_find_contacts(struct g6ts *ts)
 		contact.shape_allowed = contact.shape_class == 0 ||
 					contact.shape_class == 2;
 		dev_dbg(&ts->spi->dev,
-			"candidate class=%u allowed=%u pixels=%u halo_q12=%d\n",
+			"candidate class=%u allowed=%u pixels=%u peaks=%u/%u halo_q12=%d scores=[%lld,%lld,%lld,%lld]\n",
 			contact.shape_class, contact.shape_allowed, contact.pixels,
-			contact.features_q12[9]);
+			contact.local_peak_count, contact.strong_local_peak_count,
+			contact.features_q12[9], contact.scores_q24[0],
+			contact.scores_q24[1], contact.scores_q24[2],
+			contact.scores_q24[3]);
 		memset(ts->heat_component, 0, sizeof(ts->heat_component));
 		g6ts_store_contact(ts, &contact, &contact_count);
 	}

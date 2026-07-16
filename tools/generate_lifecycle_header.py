@@ -38,6 +38,7 @@ def generate(dll: bytes, project_id: int) -> str:
         "#define G6TS_WINDOWS_HISTORY_CAPACITY 10U",
         "#define G6TS_WINDOWS_SCORE_SHIFT 24U",
         f"#define G6TS_WINDOWS_RUNTIME_OFFSET_Q24 {round(classifier.runtime_offset * q24)}LL",
+        f"#define G6TS_WINDOWS_SCORE3_PRIMARY_Q24 {round(classifier.primary_score3_penalty * q24)}LL",
         f"#define G6TS_WINDOWS_SCORE3_SINGLE_Q24 {round(classifier.single_group_score3_penalty * q24)}LL",
         f"#define G6TS_WINDOWS_ASSIGN_X_SCALE_Q24 {round(x_scale * (1 << 24))}U",
         f"#define G6TS_WINDOWS_ASSIGN_Y_SCALE_Q24 {round(y_scale * (1 << 24))}U",

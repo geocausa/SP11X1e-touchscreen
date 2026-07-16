@@ -29,6 +29,7 @@ from tools.decode_heat_frame import (
     extract_heatmap,
     extract_nsr_bins,
     extract_report,
+    local_peak_counts,
     modal_baseline,
     parse_metadata_records,
     parse_sections,
@@ -122,6 +123,7 @@ def main() -> int:
     normalized_spreads: list[float] = []
     classifier_classes: Counter[int] = Counter()
     classifier_mismatches = 0
+    peak_count_distribution: Counter[tuple[int, int]] = Counter()
     assignment_q24_mismatches = 0
     base_history: BaseClassHistory | None = None
     base_selected_classes: Counter[int] = Counter()
@@ -228,11 +230,13 @@ def main() -> int:
             if classifier is not None:
                 features = windows_classifier_features(grid, contact)
                 floating = classifier.scores(features, 0)
+                peaks = local_peak_counts(grid, contact)
                 lifecycle_scores = classifier.apply_basic_score_postprocessing(
                     floating,
-                    primary_flag=False,
-                    secondary_count=1,
+                    primary_flag=peaks[0] == 1,
+                    secondary_count=peaks[1],
                 )
+                peak_count_distribution[peaks] += 1
                 fixed = classifier.fixed_scores(features, 0)
                 floating_class = max(range(len(floating)), key=floating.__getitem__)
                 fixed_class = max(range(len(fixed)), key=fixed.__getitem__)
@@ -321,6 +325,13 @@ def main() -> int:
             )
             + f" fixed_point_mismatches={classifier_mismatches}"
             + f" assignment_q24_mismatches={assignment_q24_mismatches}"
+        )
+        print(
+            "local_peaks="
+            + ",".join(
+                f"{raw}/{strong}:{count}"
+                for (raw, strong), count in sorted(peak_count_distribution.items())
+            )
         )
     if lifecycle is not None:
         delay_counts = Counter(base_onset_delays)

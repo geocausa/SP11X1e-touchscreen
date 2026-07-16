@@ -141,6 +141,15 @@ the module default because later Windows lifecycle branches still require
 provider-owned frame/context values not present in raw Heat reports. See
 [docs/PHASE70_KERNEL_FRAME_ORCHESTRATOR.md](docs/PHASE70_KERNEL_FRAME_ORCHESTRATOR.md).
 
+The first Phase 70 boot kept the panel, DMA transport, detector, and
+multi-candidate extraction healthy but emitted no Linux contacts. Phase 71
+uses live score vectors and Ghidra to close the cause: it ports the exact
+`+0x4d/+0x4e` local-maximum producers and applies the recovered class-three
+50/20 score adjustment before lifecycle admission. The corpus now computes
+these fields directly with zero fixed-point or assignment mismatch. Phase 71
+remains an isolated one-shot hardware experiment; see
+[docs/PHASE71_SCORE3_PRODUCER.md](docs/PHASE71_SCORE3_PRODUCER.md).
+
 It is not yet ready for a mainline submission. Labelled palm and physical-edge
 captures, measured edge calibration, pressure, merged-contact separation,
 suspend/resume hardware validation, and broader kernel compatibility remain
@@ -177,6 +186,7 @@ docs/PHASE67_STATIC_AUDIT.md
 docs/PHASE68_PROVEN_RECOVERY.md
 docs/PHASE69_WINDOWS_PROCESSING_PARITY.md
 docs/PHASE70_KERNEL_FRAME_ORCHESTRATOR.md
+docs/PHASE71_SCORE3_PRODUCER.md
 phase55/
 tools/analyze_spb_etw_csv.py
 tools/decode_heat_frame.py
@@ -187,7 +197,9 @@ tools/windows_tracking_geometry.py
 tools/regress_heat_frames.py
 tools/track_heat_contacts.py
 scripts/deploy_phase70.sh
+scripts/deploy_phase71.sh
 boot/57_sp11_711_phase70_orchestrator
+boot/58_sp11_711_phase71_score3
 tests/test_heat_decoder.py
 tests/test_contact_tracker.py
 tests/test_windows_classifier.py
