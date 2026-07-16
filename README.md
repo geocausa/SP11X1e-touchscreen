@@ -100,14 +100,21 @@ keyboard pauses, but its cold-start replay mixed a complete ETW trace with a
 second report-09 pair seen only in a partial KD recovery capture. The hardware
 timed out at that added stage and did not start touch.
 
-Phase 67 removes that unsupported replay and pins the cold path to the one
-complete, end-to-end Windows trace for the installed firmware. It also fixes
-an independently found uninitialized contact-to-slot array, validates the
-exact installed firmware/profile before entering Heat mode, checks every DMA
-configuration and submission error, and adds source-order regression tests.
-The complete 1,381-frame corpus, current Windows classifier extraction, GCC,
-Clang, sparse, cppcheck, and strict client checkpatch passes are recorded in
-[docs/PHASE67_STATIC_AUDIT.md](docs/PHASE67_STATIC_AUDIT.md).
+Phase 67 removed the unsupported second report-09 pair and passed a complete
+static audit, but its first hardware boot still stopped after the report-0x73
+exchange: no Heat frame followed. A control boot proved that the Phase 65
+transport and minimal mode-entry sequence still worked on the same machine.
+
+Phase 68 therefore removes the Windows collection/application setup from the
+kernel reset path and restores the seven-stage sequence already validated by
+Phase 55 through Phase 65. It retains the Phase 67 uninitialized-slot fix,
+DMA failure cleanup, ACPI error propagation, classifier, tracking, and parser
+hardening. Ghidra and import-table checks confirm that the Windows
+TouchPenProcessor component is a processing library, not the HID-SPI
+transport owner. The dedicated Phase 68 entry has now cold-booted successfully
+on the target Surface, initialized after one bounded recovery, and delivered
+working touch with active GPIO51 interrupts. See
+[docs/PHASE68_PROVEN_RECOVERY.md](docs/PHASE68_PROVEN_RECOVERY.md).
 
 It is not yet ready for a mainline submission. Labelled palm and physical-edge
 captures, measured edge calibration, pressure, merged-contact separation,
@@ -142,6 +149,7 @@ docs/PHASE64_FIXED_POINT_CLASSIFIER.md
 docs/PHASE65_KEYBOARD_LATENCY.md
 docs/PHASE66_WINDOWS_RECOVERY.md
 docs/PHASE67_STATIC_AUDIT.md
+docs/PHASE68_PROVEN_RECOVERY.md
 phase55/
 tools/analyze_spb_etw_csv.py
 tools/decode_heat_frame.py

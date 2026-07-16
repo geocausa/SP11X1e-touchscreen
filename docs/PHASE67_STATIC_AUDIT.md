@@ -1,5 +1,10 @@
 # Phase 67 evidence-constrained static audit
 
+> **Superseded by Phase 68.** The first Phase 67 cold boot reached stage 13
+> but timed out waiting for Heat. The exact Windows trace was valid evidence,
+> but replaying its collection/application setup in the Linux reset path was
+> an invalid architectural assumption. See `PHASE68_PROVEN_RECOVERY.md`.
+
 ## Result
 
 Phase 66 is not a valid cold-start implementation. On the target Surface it

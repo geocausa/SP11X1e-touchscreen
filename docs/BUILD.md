@@ -66,7 +66,7 @@ python3 -m compileall -q tools tests
 ```
 
 With a locally mounted Windows installation and saved Heat corpus, the full
-Phase 67 fidelity regression is:
+Phase 68 fidelity regression is:
 
 ```bash
 python3 tools/regress_heat_frames.py \
@@ -81,7 +81,7 @@ After committing a verified tree and building the matched GCC modules, create
 the redistributable source/module artifact with:
 
 ```bash
-scripts/package_phase67.sh
+scripts/package_phase68.sh
 ```
 
 The packager refuses dirty source, missing modules, or a mismatched vermagic.
