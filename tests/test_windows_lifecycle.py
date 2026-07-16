@@ -9,13 +9,20 @@ from tools.extract_windows_classifier import PROJECT_CONFIG_OFFSET
 from tools.extract_windows_lifecycle import (
     BaseClassHistory,
     CLASS_COUNT,
+    ContactBounds,
     ContextWindow,
+    FingerClassPolicyInput,
+    NeighborBoundsInput,
     OLD_CLASS_COUNT,
     OutputOverrideInput,
     ProjectLifecycle,
     TRANSITION_STRIDE,
     TRANSITION_TABLE_OFFSET,
+    adjust_young_track_bounds,
+    apply_finger_class_policy,
     apply_output_code_override,
+    frame_level_exceeds_limit,
+    uses_fallback_feature_profile,
 )
 
 
@@ -33,6 +40,23 @@ def make_lifecycle_dll(project_id: int = 0x0C83) -> bytes:
     )
     struct.pack_into("<HH", blob, PROJECT_CONFIG_OFFSET + 0xE78, 300, 300)
     struct.pack_into("<BBB", blob, PROJECT_CONFIG_OFFSET + 0xE98, 1, 1, 10)
+    struct.pack_into("<fH", blob, PROJECT_CONFIG_OFFSET + 0x8E8, 7.5, 100)
+    struct.pack_into("<HHB", blob, PROJECT_CONFIG_OFFSET + 0xE66, 100, 215, 0)
+    struct.pack_into("<HH", blob, PROJECT_CONFIG_OFFSET + 0xE80, 50, 30)
+    # FUN_180049dd0 class-three rule: subtract (-30, 5, 0, -30),
+    # enabled, for a current age through three; double after neighbor age ten.
+    struct.pack_into(
+        "<4hBBB",
+        blob,
+        PROJECT_CONFIG_OFFSET + 0xD84 + 3 * 0x10,
+        -30,
+        5,
+        0,
+        -30,
+        1,
+        3,
+        10,
+    )
     struct.pack_into("<f", blob, 0xB90, 36.0)
     struct.pack_into("<f", blob, 0xB98, 0.0)
     struct.pack_into("<fff", blob, PROJECT_CONFIG_OFFSET + 0xE00, -17.0, -10.0, 215.0)
@@ -87,6 +111,7 @@ class WindowsLifecycleTests(unittest.TestCase):
         self.assertEqual(lifecycle.class_point_count_minimums, (0, 6, 4, 4))
         self.assertEqual(lifecycle.class_point_count_maximums, (20, 9999, 50, 100))
         self.assertEqual(lifecycle.context_window_frames, 300)
+        self.assertEqual(lifecycle.frame_level_limit, 300)
         self.assertTrue(lifecycle.context_source_resets_window)
         self.assertTrue(lifecycle.context_regions_enabled)
         self.assertEqual(lifecycle.context_region_distance, 10)
@@ -106,6 +131,250 @@ class WindowsLifecycleTests(unittest.TestCase):
         self.assertEqual(lifecycle.override_pen_margin, 0)
         self.assertEqual(lifecycle.override_minimum_counter, 4)
         self.assertEqual(lifecycle.override_score3_floor, -20)
+        self.assertEqual(lifecycle.unclassified_code3_level_threshold, 7.5)
+        self.assertEqual(lifecycle.unclassified_code3_age_release, 100)
+        self.assertEqual(lifecycle.pen_force_age_maximum, 100)
+        self.assertEqual(lifecycle.pen_force_distance_squared, 215)
+        self.assertFalse(lifecycle.pen_force_enabled)
+        self.assertEqual(lifecycle.normal_feature_point_limit, 50)
+        self.assertEqual(lifecycle.context_feature_point_limit, 30)
+        self.assertFalse(lifecycle.neighbor_bounds_rules[0].enabled)
+        self.assertEqual(
+            lifecycle.neighbor_bounds_rules[3].min_x_adjustment, -30
+        )
+        self.assertEqual(
+            lifecycle.neighbor_bounds_rules[3].enclosing_age_double_after, 10
+        )
+
+    @staticmethod
+    def _override(age: int, old_class: int) -> OutputOverrideInput:
+        previous = ()
+        if old_class == 4 and age > 2:
+            previous = ((0.0, 0.0, 0.0, 0.0),)
+        return OutputOverrideInput(
+            age=age,
+            original_code=old_class,
+            current_scores=(0.0, 0.0, 0.0, 0.0),
+            previous_scores_newest_first=previous,
+        )
+
+    def test_neighbor_bounds_uses_previous_sample_and_strict_enclosure(self):
+        lifecycle = ProjectLifecycle.from_dll(make_lifecycle_dll(), 0x0C83)
+        candidate = ContactBounds(10.0, 20.0, 12.0, 22.0)
+        neighbor = NeighborBoundsInput(
+            state=1,
+            age=11,
+            current_class=0,
+            previous_class=3,
+            current_bounds=ContactBounds(100.0, 100.0, 110.0, 110.0),
+            previous_bounds=ContactBounds(0.0, 0.0, 30.0, 30.0),
+        )
+        decision = adjust_young_track_bounds(
+            lifecycle,
+            current_age=3,
+            current_class=3,
+            candidate_bounds=candidate,
+            neighbors=(neighbor,),
+        )
+        self.assertEqual(decision.adjusted_by_index, 0)
+        self.assertEqual(decision.multiplier, 2)
+        self.assertEqual(decision.bounds, ContactBounds(70.0, 10.0, 12.0, 82.0))
+
+        touching = NeighborBoundsInput(
+            **{**neighbor.__dict__, "previous_bounds": ContactBounds(10.0, 0.0, 30.0, 30.0)}
+        )
+        decision = adjust_young_track_bounds(
+            lifecycle,
+            current_age=3,
+            current_class=3,
+            candidate_bounds=candidate,
+            neighbors=(touching,),
+        )
+        self.assertIsNone(decision.adjusted_by_index)
+
+    def test_neighbor_bounds_obeys_current_class_age_limit(self):
+        lifecycle = ProjectLifecycle.from_dll(make_lifecycle_dll(), 0x0C83)
+        candidate = ContactBounds(10.0, 20.0, 12.0, 22.0)
+        neighbor = NeighborBoundsInput(
+            state=3,
+            age=20,
+            current_class=3,
+            previous_class=0,
+            current_bounds=ContactBounds(0.0, 0.0, 30.0, 30.0),
+            previous_bounds=ContactBounds(0.0, 0.0, 30.0, 30.0),
+        )
+        decision = adjust_young_track_bounds(
+            lifecycle,
+            current_age=4,
+            current_class=3,
+            candidate_bounds=candidate,
+            neighbors=(neighbor,),
+        )
+        self.assertEqual(decision.bounds, candidate)
+        self.assertIsNone(decision.adjusted_by_index)
+
+    def test_finger_policy_rejects_small_new_code_one_at_exact_boundary(self):
+        lifecycle = ProjectLifecycle.from_dll(make_lifecycle_dll(), 0x0C83)
+        decision = apply_finger_class_policy(
+            lifecycle,
+            FingerClassPolicyInput(
+                age=2,
+                old_class=4,
+                proposed_class=1,
+                score_gate_accepted=True,
+                point_count=10,
+                level_signal=10.0,
+                local_context_active=False,
+                counter_254=0,
+                output_override=self._override(2, 4),
+                special_pair_limit_active=True,
+            ),
+        )
+        self.assertFalse(decision.transition_accepted)
+        self.assertEqual(decision.code, 4)
+        self.assertIn("new_code1_too_small", decision.reasons)
+
+        accepted = apply_finger_class_policy(
+            lifecycle,
+            FingerClassPolicyInput(
+                age=2,
+                old_class=4,
+                proposed_class=1,
+                score_gate_accepted=True,
+                point_count=11,
+                level_signal=10.0,
+                local_context_active=False,
+                counter_254=0,
+                output_override=self._override(2, 4),
+                special_pair_limit_active=True,
+            ),
+        )
+        self.assertTrue(accepted.transition_accepted)
+        self.assertEqual(accepted.code, 1)
+
+    def test_finger_policy_applies_level_context_and_final_demote_order(self):
+        lifecycle = ProjectLifecycle.from_dll(make_lifecycle_dll(), 0x0C83)
+        low_level = apply_finger_class_policy(
+            lifecycle,
+            FingerClassPolicyInput(
+                age=99,
+                old_class=4,
+                proposed_class=3,
+                score_gate_accepted=True,
+                point_count=4,
+                level_signal=7.49,
+                local_context_active=False,
+                counter_254=0,
+                output_override=self._override(99, 4),
+            ),
+        )
+        self.assertFalse(low_level.transition_accepted)
+        self.assertIn("new_code3_level_age", low_level.reasons)
+
+        context = apply_finger_class_policy(
+            lifecycle,
+            FingerClassPolicyInput(
+                age=2,
+                old_class=4,
+                proposed_class=0,
+                score_gate_accepted=True,
+                point_count=1,
+                level_signal=10.0,
+                local_context_active=True,
+                counter_254=2,
+                output_override=self._override(2, 4),
+            ),
+        )
+        self.assertFalse(context.transition_accepted)
+        self.assertIn("new_code0_context_counter", context.reasons)
+
+        demoted = apply_finger_class_policy(
+            lifecycle,
+            FingerClassPolicyInput(
+                age=100,
+                old_class=4,
+                proposed_class=3,
+                score_gate_accepted=True,
+                point_count=4,
+                level_signal=7.49,
+                local_context_active=False,
+                counter_254=0,
+                output_override=self._override(100, 4),
+                frame_level_exceeds_limit=True,
+            ),
+        )
+        self.assertTrue(demoted.transition_accepted)
+        self.assertEqual(demoted.code, 4)
+        self.assertEqual(demoted.reasons, ("class3_demoted",))
+
+        descriptor_demoted = apply_finger_class_policy(
+            lifecycle,
+            FingerClassPolicyInput(
+                age=100,
+                old_class=4,
+                proposed_class=3,
+                score_gate_accepted=True,
+                point_count=4,
+                level_signal=10.0,
+                local_context_active=True,
+                counter_254=0,
+                output_override=self._override(100, 4),
+                descriptor_context_demotion_enabled=True,
+            ),
+        )
+        self.assertEqual(descriptor_demoted.code, 4)
+
+    def test_fallback_feature_profile_uses_exact_point_boundaries(self):
+        lifecycle = ProjectLifecycle.from_dll(make_lifecycle_dll(), 0x0C83)
+        self.assertFalse(
+            uses_fallback_feature_profile(
+                lifecycle, point_count=49, local_context_active=False
+            )
+        )
+        self.assertTrue(
+            uses_fallback_feature_profile(
+                lifecycle, point_count=50, local_context_active=False
+            )
+        )
+        self.assertFalse(
+            uses_fallback_feature_profile(
+                lifecycle, point_count=29, local_context_active=True
+            )
+        )
+        self.assertTrue(
+            uses_fallback_feature_profile(
+                lifecycle, point_count=30, local_context_active=True
+            )
+        )
+        with self.assertRaisesRegex(ValueError, "point count"):
+            uses_fallback_feature_profile(
+                lifecycle, point_count=-1, local_context_active=False
+            )
+        forced = apply_finger_class_policy(
+            lifecycle,
+            FingerClassPolicyInput(
+                age=2,
+                old_class=4,
+                proposed_class=0,
+                score_gate_accepted=True,
+                point_count=20,
+                level_signal=10.0,
+                local_context_active=False,
+                counter_254=3,
+                output_override=self._override(2, 4),
+                fallback_feature_profile=True,
+            ),
+        )
+        self.assertEqual(forced.code, 1)
+        self.assertIn("fallback_profile_code1", forced.reasons)
+
+    def test_frame_level_limit_is_strict_and_unsigned(self):
+        lifecycle = ProjectLifecycle.from_dll(make_lifecycle_dll(), 0x0C83)
+        self.assertFalse(frame_level_exceeds_limit(lifecycle, (100, 300, 20)))
+        self.assertTrue(frame_level_exceeds_limit(lifecycle, (100, 301, 20)))
+        self.assertFalse(frame_level_exceeds_limit(lifecycle, ()))
+        with self.assertRaisesRegex(ValueError, "unsigned short"):
+            frame_level_exceeds_limit(lifecycle, (0x10000,))
 
     def test_output_override_history_branch_changes_code_four_to_two(self):
         lifecycle = ProjectLifecycle.from_dll(make_lifecycle_dll(), 0x0C83)

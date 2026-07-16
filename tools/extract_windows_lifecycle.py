@@ -53,6 +53,20 @@ OVERRIDE_AVERAGE_METRIC_LIMIT = 2.4000000953674316
 OVERRIDE_LEVEL_SIGNAL_MINIMUM = 0.11999999731779099
 OVERRIDE_LOW_SCORE_LIMIT = -100.0
 
+# Direct float literals at 0x180041a28..0x180041a34.  Names stay structural
+# because the guarded runtime mode is outside the ordinary finger path.
+SPECIAL_TRACK_METRIC_MINIMUM = 0.15000000596046448
+EXTERNAL_NEW_TRACK_HISTORY_SPREAD_LIMIT = 0.6000000238418579
+EXTERNAL_DISABLED_CANDIDATE_METRIC = -9999.0
+EXTERNAL_EXISTING_TRACK_HISTORY_SPREAD_LIMIT = 0.30000001192092896
+
+# Direct non-project limits in FUN_180041150.  The four-point limit is the
+# ordinary project-0x0c83 path; ten is selected only by the separately gated
+# single-pair mode.  Fourteen applies to an established class-zero track.
+NEW_CONTACT_CODE1_POINT_LIMIT = 4
+SINGLE_PAIR_CODE1_POINT_LIMIT = 10
+ESTABLISHED_CODE1_POINT_MINIMUM = 14
+
 
 def _class_index(value: int) -> int:
     if not 0 <= value < CLASS_COUNT:
@@ -208,6 +222,37 @@ class TransitionRule:
 
 
 @dataclass(frozen=True)
+class NeighborBoundsRule:
+    """One class record consumed by FUN_180049dd0.
+
+    The four signed values are deliberately named by the bounds they modify.
+    They are not coordinate-filter coefficients: the helper subtracts them
+    from a young track's current classification window only when another
+    active track strictly encloses the candidate component.
+    """
+
+    min_x_adjustment: int
+    min_y_adjustment: int
+    max_x_adjustment: int
+    max_y_adjustment: int
+    enabled: bool
+    current_age_maximum: int
+    enclosing_age_double_after: int
+
+    @classmethod
+    def from_bytes(cls, data: bytes, offset: int) -> "NeighborBoundsRule":
+        if offset < 0 or offset + 0x0F > len(data):
+            raise ValueError("neighbor-bounds record is outside the PSDB blob")
+        adjustments = struct.unpack_from("<4h", data, offset)
+        return cls(
+            *adjustments,
+            bool(data[offset + 0x08]),
+            data[offset + 0x09],
+            data[offset + 0x0A],
+        )
+
+
+@dataclass(frozen=True)
 class ProjectLifecycle:
     project_id: int
     psdb_offset: int
@@ -218,6 +263,7 @@ class ProjectLifecycle:
     class_point_count_minimums: tuple[int, int, int, int]
     class_point_count_maximums: tuple[int, int, int, int]
     context_window_frames: int
+    frame_level_limit: int
     context_source_resets_window: bool
     context_regions_enabled: bool
     context_region_distance: int
@@ -237,6 +283,14 @@ class ProjectLifecycle:
     override_pen_margin: int
     override_minimum_counter: int
     override_score3_floor: int
+    unclassified_code3_level_threshold: float
+    unclassified_code3_age_release: int
+    pen_force_age_maximum: int
+    pen_force_distance_squared: int
+    pen_force_enabled: bool
+    normal_feature_point_limit: int
+    context_feature_point_limit: int
+    neighbor_bounds_rules: tuple[NeighborBoundsRule, ...]
     rules: tuple[TransitionRule, ...]
 
     @classmethod
@@ -264,6 +318,10 @@ class ProjectLifecycle:
                     )
                 )
         config = blob_offset + PROJECT_CONFIG_OFFSET
+        neighbor_bounds = tuple(
+            NeighborBoundsRule.from_bytes(data, config + 0xD84 + index * 0x10)
+            for index in range(CLASS_COUNT)
+        )
         return cls(
             project_id,
             blob_offset,
@@ -274,6 +332,7 @@ class ProjectLifecycle:
             struct.unpack_from("<4H", data, config + 0xDE4),
             struct.unpack_from("<4H", data, config + 0xDF4),
             struct.unpack_from("<H", data, config + 0xE7A)[0],
+            struct.unpack_from("<H", data, config + 0xE78)[0],
             bool(data[config + 0xE98]),
             bool(data[config + 0xE99]),
             data[config + 0xE9A],
@@ -293,6 +352,14 @@ class ProjectLifecycle:
             struct.unpack_from("<b", data, config + 0xE14)[0],
             data[config + 0xE15],
             struct.unpack_from("<h", data, config + 0xCB4)[0],
+            struct.unpack_from("<f", data, config + 0x8E8)[0],
+            struct.unpack_from("<H", data, config + 0x8EC)[0],
+            struct.unpack_from("<H", data, config + 0xE66)[0],
+            struct.unpack_from("<H", data, config + 0xE68)[0],
+            bool(data[config + 0xE6A]),
+            struct.unpack_from("<H", data, config + 0xE80)[0],
+            struct.unpack_from("<H", data, config + 0xE82)[0],
+            neighbor_bounds,
             tuple(rules),
         )
 
@@ -312,6 +379,7 @@ class ProjectLifecycle:
             "class_point_count_minimums": self.class_point_count_minimums,
             "class_point_count_maximums": self.class_point_count_maximums,
             "context_window_frames": self.context_window_frames,
+            "frame_level_limit": self.frame_level_limit,
             "context_source_resets_window": self.context_source_resets_window,
             "context_regions_enabled": self.context_regions_enabled,
             "context_region_distance": self.context_region_distance,
@@ -331,8 +399,105 @@ class ProjectLifecycle:
             "override_pen_margin": self.override_pen_margin,
             "override_minimum_counter": self.override_minimum_counter,
             "override_score3_floor": self.override_score3_floor,
+            "unclassified_code3_level_threshold": self.unclassified_code3_level_threshold,
+            "unclassified_code3_age_release": self.unclassified_code3_age_release,
+            "pen_force_age_maximum": self.pen_force_age_maximum,
+            "pen_force_distance_squared": self.pen_force_distance_squared,
+            "pen_force_enabled": self.pen_force_enabled,
+            "normal_feature_point_limit": self.normal_feature_point_limit,
+            "context_feature_point_limit": self.context_feature_point_limit,
+            "neighbor_bounds_rules": [
+                rule.__dict__ for rule in self.neighbor_bounds_rules
+            ],
             "rules": [rule.summary() for rule in self.rules],
         }
+
+
+@dataclass(frozen=True)
+class ContactBounds:
+    min_x: float
+    min_y: float
+    max_x: float
+    max_y: float
+
+
+@dataclass(frozen=True)
+class NeighborBoundsInput:
+    """Only the neighboring-track fields read by FUN_180049dd0."""
+
+    state: int
+    age: int
+    current_class: int
+    previous_class: int
+    current_bounds: ContactBounds
+    previous_bounds: ContactBounds
+
+
+@dataclass(frozen=True)
+class NeighborBoundsDecision:
+    bounds: ContactBounds
+    adjusted_by_index: int | None
+    multiplier: int
+
+
+def adjust_young_track_bounds(
+    lifecycle: ProjectLifecycle,
+    *,
+    current_age: int,
+    current_class: int,
+    candidate_bounds: ContactBounds,
+    neighbors: Sequence[NeighborBoundsInput],
+) -> NeighborBoundsDecision:
+    """Mirror FUN_180049dd0's first-enclosing-neighbor adjustment."""
+    if current_age < 0:
+        raise ValueError("track age must be non-negative")
+    current_class = _class_index(current_class)
+    if (
+        candidate_bounds.min_x > candidate_bounds.max_x
+        or candidate_bounds.min_y > candidate_bounds.max_y
+    ):
+        raise ValueError("candidate bounds are inverted")
+
+    current_rule = lifecycle.neighbor_bounds_rules[current_class]
+    if current_age > current_rule.current_age_maximum:
+        return NeighborBoundsDecision(candidate_bounds, None, 0)
+
+    for index, neighbor in enumerate(neighbors):
+        if neighbor.age < 0:
+            raise ValueError("neighbor age must be non-negative")
+        if neighbor.state == 0:
+            continue
+        if neighbor.state != 3 and neighbor.age <= 1:
+            continue
+        selected_class = (
+            neighbor.current_class if neighbor.state == 3 else neighbor.previous_class
+        )
+        selected_class = _class_index(selected_class)
+        selected_bounds = (
+            neighbor.current_bounds if neighbor.state == 3 else neighbor.previous_bounds
+        )
+        rule = lifecycle.neighbor_bounds_rules[selected_class]
+        if not rule.enabled:
+            continue
+        if not (
+            selected_bounds.min_x < candidate_bounds.min_x
+            and candidate_bounds.max_x < selected_bounds.max_x
+            and selected_bounds.min_y < candidate_bounds.min_y
+            and candidate_bounds.max_y < selected_bounds.max_y
+        ):
+            continue
+        multiplier = 2 if rule.enclosing_age_double_after < neighbor.age else 1
+        return NeighborBoundsDecision(
+            ContactBounds(
+                candidate_bounds.min_x - rule.min_x_adjustment * multiplier,
+                candidate_bounds.min_y - rule.min_y_adjustment * multiplier,
+                candidate_bounds.max_x - rule.max_x_adjustment * multiplier,
+                candidate_bounds.max_y - rule.max_y_adjustment * multiplier,
+            ),
+            index,
+            multiplier,
+        )
+    return NeighborBoundsDecision(candidate_bounds, None, 0)
 
 
 @dataclass(frozen=True)
@@ -481,6 +646,176 @@ def apply_output_code_override(
         triggered.append("age_counter_code1")
 
     return OutputOverrideDecision(code, tuple(triggered))
+
+
+@dataclass(frozen=True)
+class FingerClassPolicyInput:
+    """Proven non-pen inputs to FUN_180041150 after its score gate.
+
+    ``fallback_feature_profile`` is candidate `+0x43`, set by FUN_180041fd8
+    when ordinary component-feature extraction is bypassed at the recovered
+    point-count limits. The two final class-three inputs retain their proven
+    frame-level and runtime-descriptor origins.
+    """
+
+    age: int
+    old_class: int
+    proposed_class: int
+    score_gate_accepted: bool
+    point_count: int
+    level_signal: float
+    local_context_active: bool
+    counter_254: int
+    output_override: OutputOverrideInput
+    special_pair_limit_active: bool = False
+    fallback_feature_profile: bool = False
+    frame_level_exceeds_limit: bool = False
+    descriptor_context_demotion_enabled: bool = False
+
+
+@dataclass(frozen=True)
+class FingerClassPolicyDecision:
+    code: int
+    score_gate_accepted: bool
+    transition_accepted: bool
+    reasons: tuple[str, ...]
+    override_triggers: tuple[str, ...]
+
+
+def apply_finger_class_policy(
+    lifecycle: ProjectLifecycle, inputs: FingerClassPolicyInput
+) -> FingerClassPolicyDecision:
+    """Mirror FUN_180041150's ordinary finger-only post-score policy.
+
+    The optional external-mode and pen-proximity branches are intentionally
+    outside this function. Project 0x0c83 disables the later pen-proximity
+    force in its PSDB, and the external policy is guarded by a separate
+    runtime mode. Everything from the class point-count gate through the
+    final class-three demotion is retained here in Windows order.
+    """
+    if inputs.age < 0:
+        raise ValueError("track age must be non-negative")
+    old_class = _old_class_index(inputs.old_class)
+    proposed = _class_index(inputs.proposed_class)
+    if inputs.point_count < 0:
+        raise ValueError("point count must not be negative")
+    if inputs.counter_254 < 0:
+        raise ValueError("counter must not be negative")
+    if inputs.output_override.age != inputs.age:
+        raise ValueError("override age does not match policy age")
+    if inputs.output_override.original_code != old_class:
+        raise ValueError("override entry code does not match old class")
+    if inputs.output_override.pen_source_mode != 0:
+        raise ValueError("finger-only policy cannot consume a pen source")
+    if inputs.output_override.external_mode:
+        raise ValueError("finger-only policy cannot consume external mode")
+
+    accepted = bool(inputs.score_gate_accepted)
+    reasons: list[str] = []
+    minimum = lifecycle.class_point_count_minimums[proposed]
+    maximum = lifecycle.class_point_count_maximums[proposed]
+    if accepted and not minimum <= inputs.point_count <= maximum:
+        accepted = False
+        reasons.append("class_point_count")
+
+    point_limit = (
+        SINGLE_PAIR_CODE1_POINT_LIMIT
+        if inputs.special_pair_limit_active
+        else NEW_CONTACT_CODE1_POINT_LIMIT
+    )
+    if (
+        accepted
+        and inputs.age >= 2
+        and old_class == UNCLASSIFIED
+        and proposed == 1
+        and inputs.point_count <= point_limit
+    ):
+        accepted = False
+        reasons.append("new_code1_too_small")
+    elif (
+        accepted
+        and inputs.age >= 2
+        and old_class == 0
+        and proposed == 1
+        and inputs.point_count < ESTABLISHED_CODE1_POINT_MINIMUM
+    ):
+        accepted = False
+        reasons.append("class0_code1_too_small")
+
+    if (
+        accepted
+        and inputs.age >= 2
+        and old_class == UNCLASSIFIED
+        and proposed == 3
+        and inputs.level_signal < lifecycle.unclassified_code3_level_threshold
+        and inputs.age < lifecycle.unclassified_code3_age_release
+    ):
+        accepted = False
+        reasons.append("new_code3_level_age")
+
+    if (
+        accepted
+        and inputs.local_context_active
+        and old_class == UNCLASSIFIED
+        and proposed == 0
+        and inputs.counter_254 < 3
+    ):
+        accepted = False
+        reasons.append("new_code0_context_counter")
+
+    override_triggers: tuple[str, ...] = ()
+    if accepted:
+        code = proposed
+    else:
+        code = old_class
+        override = apply_output_code_override(lifecycle, inputs.output_override)
+        code = override.code
+        override_triggers = override.triggered
+        reasons.append("output_override")
+
+    if inputs.fallback_feature_profile:
+        code = 1
+        reasons.append("fallback_profile_code1")
+    if code == 3 and (
+        inputs.frame_level_exceeds_limit
+        or (
+            inputs.descriptor_context_demotion_enabled
+            and inputs.local_context_active
+        )
+    ):
+        code = UNCLASSIFIED
+        reasons.append("class3_demoted")
+
+    return FingerClassPolicyDecision(
+        code,
+        inputs.score_gate_accepted,
+        accepted,
+        tuple(reasons),
+        override_triggers,
+    )
+
+
+def uses_fallback_feature_profile(
+    lifecycle: ProjectLifecycle, *, point_count: int, local_context_active: bool
+) -> bool:
+    """Mirror FUN_180041fd8's candidate-+0x43 point-count predicate."""
+    if point_count < 0:
+        raise ValueError("point count must not be negative")
+    return point_count >= lifecycle.normal_feature_point_limit or (
+        local_context_active
+        and point_count >= lifecycle.context_feature_point_limit
+    )
+
+
+def frame_level_exceeds_limit(
+    lifecycle: ProjectLifecycle, frame_levels: Sequence[int]
+) -> bool:
+    """Mirror FUN_180044648's strict frame-wide maximum predicate."""
+    for value in frame_levels:
+        if not 0 <= value <= 0xFFFF:
+            raise ValueError("frame level must fit an unsigned short")
+    maximum = max(frame_levels, default=0)
+    return lifecycle.frame_level_limit < maximum
 
 
 @dataclass(frozen=True)

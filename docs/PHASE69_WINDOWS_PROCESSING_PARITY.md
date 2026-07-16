@@ -338,6 +338,73 @@ The remaining context/region inputs stay structurally named. Synthetic tests
 lock branch ordering, equality behavior, and the code-two-to-code-one
 overwrite.
 
+## Exact neighboring-contact bounds correction
+
+`FUN_180049dd0` is now represented by `adjust_young_track_bounds`. It is not a
+coordinate smoothing stage. Before classification, it may replace the four
+working component bounds of a sufficiently young track when another active
+track's selected historical bounds strictly enclose the current component.
+The first qualifying neighbor wins. Equality at any enclosing edge does not
+qualify, and a live neighbor uses its previous ring entry while a state-three
+neighbor uses its current entry.
+
+The project stores one 16-byte rule per class. Project 0x0c83 disables the
+rule for classes zero through two and enables only class three:
+
+```text
+bound adjustments:               -30, 5, 0, -30
+current-track age maximum:                       3
+enclosing-track double-after age:               10
+```
+
+The four adjustments are subtracted from the working min-X, min-Y, max-X and
+max-Y respectively. The multiplier becomes two only when the enclosing
+track's age is strictly greater than ten. Tests preserve the historical-ring
+selection, first-match ordering, strict enclosure boundary, signed
+arithmetic, age boundary and multiplier boundary.
+
+## Ordinary finger post-score policy
+
+The non-pen portion of `FUN_180041150` after its current/history score gate is
+now represented by `apply_finger_class_policy`. It applies, in DLL order:
+
+1. the proposed class's inclusive point-count range;
+2. the four/ten-point new-contact class-one guard;
+3. the 14-point established class-zero to class-one guard;
+4. the unclassified-to-class-three level/age guard;
+5. the short unclassified-to-class-zero context/counter guard;
+6. `FUN_180049880` when the transition was rejected;
+7. the candidate `+0x43` fallback-feature-profile force-to-one byte; and
+8. the final frame-level/descriptor-context class-three demotion.
+
+For project 0x0c83 the recovered unclassified-to-class-three threshold is the
+exact float `0.07000000029802322`, and the guard releases at age 100. The
+Windows inequalities are intentionally preserved: the new class-one guard
+rejects at or below its selected point limit, the established guard rejects
+below 14, the level comparison is strict, and the age release occurs exactly
+at 100.
+
+The helper rejects pen-source or external-mode inputs instead of silently
+approximating those branches. The direct DLL literals used only by the latter
+path were also recovered as `0.15`, `0.6`, `-9999.0`, and `0.3`; they are not
+finger tuning constants.
+
+The `+0x43` producer is now proven in `FUN_180041fd8`. Normal component feature
+extraction is bypassed at 50 or more component points, or at 30 or more while
+local context is active. The fallback profile is marked and the final policy
+forces it to class one. `uses_fallback_feature_profile` preserves the two
+inclusive project thresholds. This is an oversize/context suppression path,
+not coordinate calibration.
+
+The final demotion inputs are now proven too. `FUN_180044648` takes the maximum
+of the frame's unsigned-16-bit level array and sets the frame flag only when
+that maximum is strictly greater than PSDB `+0xe78`, which is 300 for project
+0x0c83. `frame_level_exceeds_limit` preserves the strict comparison. The other
+enable bit is copied once from runtime sensor descriptor `+0x69`; it demotes
+class three only in conjunction with the recovered local-context predicate.
+The same frame-level flag selects the already recovered alternate output-merge
+threshold, which is zero for this project.
+
 ## Candidate edge flags and pen-context boundary
 
 `FUN_1800489a0` proves the candidate flags consumed by the override. Candidate
@@ -393,7 +460,11 @@ project matching/point-count fields. Geometry tests cover runtime assignment
 scales, quantization, the strict radius boundary, direct coordinate updates,
 far-edge snapping, and ordered duplicate merging. The output-override tests
 cover project extraction, history averaging, code-two-to-code-one overwrite,
-and the strict age boundary. The complete suite currently passes 64 tests.
+and the strict age boundary. Neighbor-bounds and ordinary finger-policy tests
+cover strict enclosure, age/multiplier boundaries, point limits, fallback
+feature thresholds, strict frame-level maximum, descriptor/context demotion,
+level/age release and context rejection. The complete suite currently passes
+70 tests.
 
 The saved Windows corpus regression decodes all 1,381 frames with zero errors,
 scores 1,113 contacts with zero floating/fixed-point winner mismatches, and
