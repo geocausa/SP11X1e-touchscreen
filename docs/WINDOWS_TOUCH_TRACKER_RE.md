@@ -45,7 +45,7 @@ recovered Windows setting.  In the 1,381-frame Windows corpus, all consecutive
 single-contact motion is below 900 logical units, so the selected gate has
 substantial margin while still separating unrelated blobs.
 
-## Lifecycle and smoothing
+## Lifecycle and coordinate updates
 
 The Windows code maintains history, active/pre-active/closing state, missing
 track handling, and optional forward prediction. Track updates preserve the
@@ -57,8 +57,10 @@ additional facts:
 
 - the lifecycle status is an integer at track `+0x3c`, with values zero
   through four used by the state setter;
-- only lifecycle states one and two are eligible for final finger output;
-- a separate output-eligibility flag and allowed-class test must also pass;
+- only lifecycle states one and two reach the output builder;
+- normal finger output is built for classes zero and two; the separate
+  `+0x46` flag belongs to the class-one/class-five transition-output path and
+  is not a prerequisite for normal class-zero/class-two output;
 - one output transition requires more than one historical sample;
 - classification history is stored in a ten-entry ring;
 - class changes use transition-specific score and history requirements rather
@@ -66,8 +68,10 @@ additional facts:
 
 The project-0x0c83 transition blocks start at classifier configuration
 `+0x8d8`, use a `0x30` byte stride, and are selected by
-`new_class + old_class * 4`. The byte at block `+0x4f` is the minimum history
-used by the recovered score-history loop. Its 4 by 4 values are:
+`new_class + old_class * 4`. There are five old states: classes zero through
+three plus unclassified/new-track state four. The byte at block `+0x4f` is the
+minimum history used by the recovered score-history loop. The classified
+4-by-4 subset is:
 
 ```text
 old 0: 0, 5, 2, 1
@@ -75,6 +79,8 @@ old 1: 8, 0, 4, 30
 old 2: 2, 5, 0, 4
 old 3: 1, 5, 3, 0
 ```
+
+The previously omitted new-track row has history depths `2, 2, 4, 3`.
 
 The associated signed score thresholds are respectively:
 
@@ -85,21 +91,41 @@ old 2:  -25, -500,   0, -15
 old 3:  -25,  -40, -25,   0
 ```
 
+The new-track row floors are `-3, -9999, -8, -20`. Complete margins and early
+age limits are extracted by `tools/extract_windows_lifecycle.py`.
+
 The four human-facing class labels are not yet proven. These values therefore
 describe the recovered temporal mechanism but are not sufficient, on their
 own, to drive the exact Microsoft statistical model in Linux.
 
-The recovered smoothing form is an exponential blend:
+`FUN_18004a330` does not smooth track X/Y. It stores the matched candidate's
+coordinates directly, saves new-minus-old displacement as velocity, expands
+the running coordinate bounds, and records the exact candidate point in the
+ten-entry ring. Its exponential blend operates on a separate component scalar
+at candidate `+0x2c` / track `+0x18`. `FUN_180041b80` then copies the selected
+track/history X/Y directly into a normal output record.
 
-```text
-output = alpha * previous_output + (1 - alpha) * input
-```
+The Phase 58 offline reference and current Linux module still contain two
+conservative fitted coordinate-smoothing bands. Those are Linux baseline
+policy, not recovered Windows behavior. They must be removed as part of the
+coherent lifecycle/output replacement, not tuned as though they were Windows
+project parameters. Windows does use current point plus last displacement for
+one-frame assignment prediction; that prediction is separate from output X/Y.
 
-Windows selects `alpha` through runtime project tuning and motion state.  The
-offline reference uses named, conservative fitted bands so the formula can be
-tested without presenting guessed values as proprietary facts.  Missing
-contacts are held at the last output point; optional Windows forward
-extrapolation is deliberately disabled until its activation policy is known.
+After normal output construction, `FUN_180045228` performs a separate merge
+pass over output types one and three. It groups different identifiers when
+their raw output X/Y squared distance is strictly below the selected project
+limit, relabels paired type-one records to type seven, and marks both tracks.
+Project 0x0c83 stores an ordinary squared limit of 36 and an alternate disabled
+limit of zero. This is output grouping, not coordinate filtering.
+
+`FUN_180049880` is also represented offline. It has three ordered output-code
+overrides: a previous-score-average branch within a project age window, a
+two-consecutive-low-score branch, and a final age/counter branch. Crucially,
+the second branch tests the output code captured at function entry, so it can
+overwrite a code-two decision made by the first branch. The offline evaluator
+preserves that ordering and all direct project constants while leaving
+external producer flags structurally named until their provenance is proven.
 
 ## Linux lifecycle equivalent
 

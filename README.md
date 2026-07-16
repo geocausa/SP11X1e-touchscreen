@@ -37,7 +37,9 @@ Windows corpus. See
 Phase 57 replaces the earlier guessed adaptive detector with the recovered
 Windows fixed-threshold, four-connected candidate extractor. Phase 58 adds
 predicted-position global assignment, finite match gating, explicit track
-lifecycle state, and the recovered exponential smoothing form. See
+lifecycle state, and a conservative Linux-fitted coordinate filter. Later
+Phase 69 analysis proves that the Windows tracker copies X/Y directly and that
+its exponential blend applies to a separate component metric. See
 [docs/WINDOWS_TOUCH_DETECTOR_RE.md](docs/WINDOWS_TOUCH_DETECTOR_RE.md),
 [docs/WINDOWS_TOUCH_TRACKER_RE.md](docs/WINDOWS_TOUCH_TRACKER_RE.md), and
 [docs/PHASE58_TRACKING_PIPELINE.md](docs/PHASE58_TRACKING_PIPELINE.md).
@@ -116,6 +118,17 @@ on the target Surface, initialized after one bounded recovery, and delivered
 working touch with active GPIO51 interrupts. See
 [docs/PHASE68_PROVEN_RECOVERY.md](docs/PHASE68_PROVEN_RECOVERY.md).
 
+Phase 69 freezes that hardware-proven driver while reconstructing the missing
+Windows post-detector policy offline. It now extracts all 20 class-transition
+records, exact context-window and output-code override parameters, association
+radii, point-count limits, and output-merge distances from an operator-supplied
+DLL. Testable helpers cover direct X/Y kinematics, strict scaled assignment,
+far-edge snapping, the ordered three-branch output override, and chained
+duplicate-output merging. No Phase 69 behavior has been deployed yet; kernel
+replacement remains deferred until the remaining external flag provenance and
+special/release output branches are proven. See
+[docs/PHASE69_WINDOWS_PROCESSING_PARITY.md](docs/PHASE69_WINDOWS_PROCESSING_PARITY.md).
+
 It is not yet ready for a mainline submission. Labelled palm and physical-edge
 captures, measured edge calibration, pressure, merged-contact separation,
 suspend/resume hardware validation, and broader kernel compatibility remain
@@ -150,15 +163,20 @@ docs/PHASE65_KEYBOARD_LATENCY.md
 docs/PHASE66_WINDOWS_RECOVERY.md
 docs/PHASE67_STATIC_AUDIT.md
 docs/PHASE68_PROVEN_RECOVERY.md
+docs/PHASE69_WINDOWS_PROCESSING_PARITY.md
 phase55/
 tools/analyze_spb_etw_csv.py
 tools/decode_heat_frame.py
 tools/extract_windows_classifier.py
+tools/extract_windows_lifecycle.py
+tools/windows_tracking_geometry.py
 tools/regress_heat_frames.py
 tools/track_heat_contacts.py
 tests/test_heat_decoder.py
 tests/test_contact_tracker.py
 tests/test_windows_classifier.py
+tests/test_windows_lifecycle.py
+tests/test_windows_tracking_geometry.py
 tests/test_source_invariants.py
 packaging/initramfs-tools/hooks/sp11-g6ts
 ```

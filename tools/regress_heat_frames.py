@@ -31,6 +31,7 @@ from tools.decode_heat_frame import (
     windows_classifier_features,
 )
 from tools.extract_windows_classifier import ProjectClassifier
+from tools.extract_windows_lifecycle import BaseClassHistory, ProjectLifecycle, UNCLASSIFIED
 
 
 def iter_frames(paths: list[Path]):
@@ -57,16 +58,28 @@ def main() -> int:
         type=Path,
         help="verify floating-point and Q20.12 class winners against this DLL",
     )
+    parser.add_argument(
+        "--base-lifecycle",
+        action="store_true",
+        help=(
+            "run the recovered context-neutral score-gate ordering; this is "
+            "not the final Windows lifecycle/output decision"
+        ),
+    )
     args = parser.parse_args()
 
     classifier = None
+    lifecycle = None
     if args.classifier_dll is not None:
         try:
-            classifier = ProjectClassifier.from_dll(
-                args.classifier_dll.read_bytes(), 0x0C83
-            )
+            dll = args.classifier_dll.read_bytes()
+            classifier = ProjectClassifier.from_dll(dll, 0x0C83)
+            if args.base_lifecycle:
+                lifecycle = ProjectLifecycle.from_dll(dll, 0x0C83)
         except (OSError, ValueError) as error:
             parser.error(f"cannot load classifier: {error}")
+    elif args.base_lifecycle:
+        parser.error("--base-lifecycle requires --classifier-dll")
 
     frame_count = 0
     contact_frames = 0
@@ -88,6 +101,14 @@ def main() -> int:
     normalized_spreads: list[float] = []
     classifier_classes: Counter[int] = Counter()
     classifier_mismatches = 0
+    base_history: BaseClassHistory | None = None
+    base_selected_classes: Counter[int] = Counter()
+    base_gate_counts: Counter[str] = Counter()
+    base_accepted = 0
+    base_rejected = 0
+    base_sequence_age = 0
+    base_onset_delays: list[int] = []
+    base_sequence_reported = False
 
     for path in iter_frames(args.paths):
         frame_count += 1
@@ -136,6 +157,10 @@ def main() -> int:
             contact_frames += 1
         else:
             idle_frames += 1
+        if lifecycle is not None and len(contacts) != 1:
+            base_history = None
+            base_sequence_age = 0
+            base_sequence_reported = False
         for contact in contacts:
             largest_pixels = max(largest_pixels, int(contact["pixels"]))
             x_values.append(contact["x32767"])
@@ -145,11 +170,35 @@ def main() -> int:
             if classifier is not None:
                 features = windows_classifier_features(grid, contact)
                 floating = classifier.scores(features, 0)
+                lifecycle_scores = classifier.apply_basic_score_postprocessing(
+                    floating,
+                    primary_flag=False,
+                    secondary_count=1,
+                )
                 fixed = classifier.fixed_scores(features, 0)
                 floating_class = max(range(len(floating)), key=floating.__getitem__)
                 fixed_class = max(range(len(fixed)), key=fixed.__getitem__)
                 classifier_classes[fixed_class] += 1
                 classifier_mismatches += floating_class != fixed_class
+                if lifecycle is not None and len(contacts) == 1:
+                    if base_history is None:
+                        base_history = BaseClassHistory(lifecycle)
+                    base_sequence_age += 1
+                    decision = base_history.update(
+                        lifecycle_scores, point_count=int(contact["pixels"])
+                    )
+                    base_selected_classes[decision.selected_class] += 1
+                    base_gate_counts[decision.gate] += 1
+                    if decision.accepted:
+                        base_accepted += 1
+                    else:
+                        base_rejected += 1
+                    if (
+                        not base_sequence_reported
+                        and decision.selected_class in (0, 2)
+                    ):
+                        base_onset_delays.append(base_sequence_age)
+                        base_sequence_reported = True
 
     print(f"frames={frame_count} decoded={frame_count - len(errors)} errors={len(errors)}")
     print(
@@ -191,6 +240,25 @@ def main() -> int:
                 for value, count in sorted(classifier_classes.items())
             )
             + f" fixed_point_mismatches={classifier_mismatches}"
+        )
+    if lifecycle is not None:
+        delay_counts = Counter(base_onset_delays)
+        print(
+            "base_lifecycle_selected="
+            + ",".join(
+                f"{value}:{count}"
+                for value, count in sorted(base_selected_classes.items())
+            )
+            + " gates="
+            + ",".join(
+                f"{value}:{count}" for value, count in sorted(base_gate_counts.items())
+            )
+            + f" accepted={base_accepted} rejected={base_rejected} "
+            + f"unclassified={base_selected_classes[UNCLASSIFIED]} "
+            + "finger_onset_delay="
+            + ",".join(
+                f"{value}:{count}" for value, count in sorted(delay_counts.items())
+            )
         )
 
     for path, message in errors[:20]:

@@ -72,6 +72,7 @@ Phase 68 fidelity regression is:
 python3 tools/regress_heat_frames.py \
   --expect-frames 1381 \
   --classifier-dll /path/to/TouchPenProcessor0C83.dll \
+  --base-lifecycle \
   /path/to/etw_3636_frames_20260506
 ```
 

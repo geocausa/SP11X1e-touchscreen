@@ -16,10 +16,12 @@ from tools.extract_windows_classifier import (
     MODEL_BIAS_OFFSET,
     MODEL_DECISIONS_OFFSET,
     MODEL_MEANS_OFFSET,
+    PRIMARY_SCORE3_PENALTY_OFFSET,
     PROJECT_CONFIG_OFFSET,
     ProjectClassifier,
     RUNTIME_EXPONENT_OFFSET,
     STATE_FEATURE_MASK_OFFSET,
+    SINGLE_GROUP_SCORE3_PENALTY_OFFSET,
     TRANSFORM_ROW_STRIDE,
     find_project_blob,
 )
@@ -35,6 +37,8 @@ def make_test_dll(project_id=0x0C83):
     config = PROJECT_CONFIG_OFFSET
     struct.pack_into("<4I", blob, config + MAX_POINT_COUNTS_OFFSET, 5, 10, 15, 20)
     struct.pack_into("<H", blob, config + RUNTIME_EXPONENT_OFFSET, 0)
+    struct.pack_into("<f", blob, config + PRIMARY_SCORE3_PENALTY_OFFSET, 50.0)
+    struct.pack_into("<f", blob, config + SINGLE_GROUP_SCORE3_PENALTY_OFFSET, 20.0)
     for class_index in range(4):
         base = config + CLASSIFIER_OFFSET + class_index * CLASSIFIER_STRIDE
         for row in range(FEATURE_COUNT):
@@ -108,6 +112,40 @@ class WindowsClassifierTests(unittest.TestCase):
                 max(range(4), key=lambda index: floating[index]),
                 max(range(4), key=lambda index: fixed[index]),
             )
+
+    def test_runtime_offset_uses_dll_two_pi_constant(self):
+        data, _ = make_test_dll()
+        mutable = bytearray(data)
+        blob = data.find(b"PSDB")
+        struct.pack_into(
+            "<H", mutable, blob + PROJECT_CONFIG_OFFSET + RUNTIME_EXPONENT_OFFSET, 10
+        )
+        classifier = ProjectClassifier.from_dll(bytes(mutable), 0x0C83)
+        expected = math.log(0.25) - 5.0 * math.log(math.tau)
+        self.assertAlmostEqual(classifier.runtime_offset, expected)
+
+    def test_basic_score_postprocessing_matches_class_three_penalties(self):
+        data, _ = make_test_dll()
+        classifier = ProjectClassifier.from_dll(data, 0x0C83)
+        scores = (10.0, 9.0, 8.0, 7.0)
+        self.assertEqual(
+            classifier.apply_basic_score_postprocessing(
+                scores, primary_flag=True, secondary_count=1
+            ),
+            (10.0, 9.0, 8.0, -43.0),
+        )
+        self.assertEqual(
+            classifier.apply_basic_score_postprocessing(
+                scores, primary_flag=False, secondary_count=1
+            ),
+            (10.0, 9.0, 8.0, -13.0),
+        )
+        self.assertEqual(
+            classifier.apply_basic_score_postprocessing(
+                scores, primary_flag=False, secondary_count=2
+            ),
+            scores,
+        )
 
 
 if __name__ == "__main__":

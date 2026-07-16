@@ -33,7 +33,12 @@ MAX_POINT_COUNTS_OFFSET = 0x870
 BASE_FEATURE_MASK_OFFSET = 0x10C
 STATE_FEATURE_MASK_OFFSET = 0x11C
 RUNTIME_EXPONENT_OFFSET = 0xE76
-WINDOWS_LOG_BASE = 3370280550400.0
+PRIMARY_SCORE3_PENALTY_OFFSET = 0x8D0
+SINGLE_GROUP_SCORE3_PENALTY_OFFSET = 0x8D4
+# DAT_180044508 is the little-endian double 0x401921fb54442d18: 2*pi.
+# An earlier decompiler transcription treated its decimal text as a large
+# integer, which did not affect class winners but invalidated absolute scores.
+WINDOWS_LOG_BASE = math.tau
 DISABLED_SCORE = -9999.0
 FIXED_SHIFT = 12
 FIXED_ONE = 1 << FIXED_SHIFT
@@ -97,6 +102,8 @@ class ProjectClassifier:
     feature_masks: tuple[int, ...]
     state_feature_masks: tuple[int, ...]
     runtime_offset: float
+    primary_score3_penalty: float
+    single_group_score3_penalty: float
     models: tuple[StatisticalModel, ...]
 
     @classmethod
@@ -167,8 +174,35 @@ class ProjectClassifier:
                 for index in range(FEATURE_COUNT)
             ),
             runtime_offset=runtime_offset,
+            primary_score3_penalty=f32(
+                data, config + PRIMARY_SCORE3_PENALTY_OFFSET
+            ),
+            single_group_score3_penalty=f32(
+                data, config + SINGLE_GROUP_SCORE3_PENALTY_OFFSET
+            ),
             models=tuple(models),
         )
+
+    def apply_basic_score_postprocessing(
+        self,
+        scores: tuple[float, ...],
+        *,
+        primary_flag: bool,
+        secondary_count: int,
+    ) -> tuple[float, ...]:
+        """Mirror FUN_180049638's unconditional class-three adjustment.
+
+        The remainder of FUN_180049638 contains context/region overrides and
+        is deliberately outside this basic helper.
+        """
+        if len(scores) != CLASS_COUNT:
+            raise ValueError(f"expected {CLASS_COUNT} scores, got {len(scores)}")
+        adjusted = list(scores)
+        if primary_flag:
+            adjusted[3] -= self.primary_score3_penalty
+        elif secondary_count == 1:
+            adjusted[3] -= self.single_group_score3_penalty
+        return tuple(adjusted)
 
     def scores(
         self,
@@ -273,6 +307,8 @@ class ProjectClassifier:
             "feature_masks": self.feature_masks,
             "state_feature_masks": self.state_feature_masks,
             "runtime_offset": self.runtime_offset,
+            "primary_score3_penalty": self.primary_score3_penalty,
+            "single_group_score3_penalty": self.single_group_score3_penalty,
             "models": [
                 {
                     "max_points": model.max_points,
