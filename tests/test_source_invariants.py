@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-import re
 import unittest
 
 
@@ -30,37 +29,36 @@ class SourceInvariantTests(unittest.TestCase):
     def setUpClass(cls):
         cls.source = CLIENT.read_text(encoding="utf-8")
 
-    def test_cold_start_matches_complete_etw_order(self):
+    def test_recovery_uses_hardware_validated_minimal_order(self):
         body = function_body(self.source, "g6ts_full_reinitialize_locked")
         ordered = (
-            "g6ts_dma_report09(ts, false)",
-            "g6ts_dma_report09(ts, true)",
             "g6ts_dma_feature_exchange(ts, SET_FEATURE, 0x05",
-            "g6ts_dma_feature_exchange(ts, GET_FEATURE, 0x73",
-            "g6ts_recovery_read_expected(ts, DATA, G6TS_HEATMAP_REPORT_ID",
+            "g6ts_dma_feature_exchange(ts, GET_FEATURE, 0x70",
+            "g6ts_dma_feature_exchange(ts, SET_FEATURE, 0x70",
+            "g6ts_dma_feature_exchange(ts, SET_FEATURE, 0x56",
         )
         positions = [body.index(item) for item in ordered]
         self.assertEqual(positions, sorted(positions))
-        self.assertEqual(body.count("g6ts_dma_report09(ts, false)"), 1)
-        self.assertEqual(body.count("g6ts_dma_report09(ts, true)"), 1)
 
-    def test_complete_etw_firmware_and_profile_are_pinned(self):
-        self.assertRegex(
-            self.source, r"#define G6TS_ETW_PROFILE_LO\s+0x1a\b"
+    def test_windows_collection_setup_is_not_replayed_during_recovery(self):
+        body = function_body(self.source, "g6ts_full_reinitialize_locked")
+        forbidden = (
+            "GET_FEATURE, 0x60",
+            "OUTPUT_REPORT, 0x65",
+            "GET_FEATURE, 0x06",
+            "OUTPUT_REPORT, 0x09",
+            "GET_FEATURE, 0x73",
         )
-        self.assertRegex(
-            self.source, r"#define G6TS_ETW_PROFILE_HI\s+0x03\b"
-        )
-        version = re.search(
-            r"g6ts_etw_firmware_version\[\]\s*=\s*\{([^}]*)\}",
-            self.source,
-            re.DOTALL,
-        )
-        self.assertIsNotNone(version)
-        self.assertEqual(
-            re.findall(r"0x[0-9a-f]+", version.group(1)),
-            ["0x89", "0x14", "0x00", "0x3f"],
-        )
+        for command in forbidden:
+            self.assertNotIn(command, body)
+
+        for removed_symbol in (
+            "g6ts_output65",
+            "g6ts_output09_a1_template",
+            "g6ts_output09_a5_template",
+            "g6ts_etw_firmware_version",
+        ):
+            self.assertNotIn(removed_symbol, self.source)
 
     def test_assignment_initializes_every_output_slot(self):
         body = function_body(self.source, "g6ts_assign_tracks")
