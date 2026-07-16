@@ -19,6 +19,80 @@ WINDOWS_DESCRIPTOR_UNIT = 0.009999999776482582
 WINDOWS_EDGE_SNAP_EPSILON = 0.00009999999747378752
 
 
+@dataclass(frozen=True)
+class CandidateEdgeFlags:
+    """Candidate boundary fields written by FUN_1800489a0."""
+
+    edge_kind: int
+    touches_sensor_edge: bool
+    touches_sensor_corner: bool
+    near_sensor_edge: bool
+
+
+def candidate_edge_flags(
+    *,
+    min_x: int,
+    max_x: int,
+    min_y: int,
+    max_y: int,
+    centroid_x: float,
+    centroid_y: float,
+    x_node_count: int,
+    y_node_count: int,
+    edge_margin: float,
+    context_active: bool = False,
+) -> CandidateEdgeFlags:
+    """Mirror FUN_1800489a0's ordinary grid-edge and margin predicates.
+
+    The separate layout-specific seam flag at candidate +0x4b is intentionally
+    excluded because it depends on descriptor mode fields not represented by
+    this bounded helper.
+    """
+    if x_node_count <= 0 or y_node_count <= 0:
+        raise ValueError("sensor node counts must be positive")
+    if not (0 <= min_x <= max_x < x_node_count):
+        raise ValueError("candidate X bounds are outside the sensor grid")
+    if not (0 <= min_y <= max_y < y_node_count):
+        raise ValueError("candidate Y bounds are outside the sensor grid")
+    if edge_margin < 0.0:
+        raise ValueError("edge margin must be non-negative")
+
+    edge_count = 0
+    edge_kind = 0
+    if min_x == 0:
+        edge_kind = 1
+        edge_count = 1
+    elif max_x == x_node_count - 1:
+        edge_kind = 3
+        edge_count = 1
+
+    if min_y == 0:
+        edge_kind = 2
+        edge_count += 1
+    elif max_y == y_node_count - 1:
+        edge_kind = 4
+        edge_count += 1
+
+    touches_sensor_edge = edge_count != 0
+    touches_sensor_corner = edge_count >= 2
+    if touches_sensor_corner:
+        edge_kind = 5
+
+    selected_margin = edge_margin + (0.5 if context_active else 0.0)
+    near_sensor_edge = (
+        centroid_x <= selected_margin
+        or centroid_y <= selected_margin
+        or float(x_node_count - 1) - selected_margin <= centroid_x
+        or float(y_node_count - 1) - selected_margin <= centroid_y
+    )
+    return CandidateEdgeFlags(
+        edge_kind,
+        touches_sensor_edge,
+        touches_sensor_corner,
+        near_sensor_edge,
+    )
+
+
 @dataclass
 class TrackKinematics:
     """Exact coordinate state maintained by FUN_18004a330.

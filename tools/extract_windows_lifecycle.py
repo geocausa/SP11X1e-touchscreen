@@ -223,9 +223,9 @@ class ProjectLifecycle:
     context_region_distance: int
     output_merge_squared_limit: float
     output_merge_disabled_limit: float
-    override_score2_floor_without_source: float
-    override_score2_floor_with_source: float
-    override_source_distance_squared: float
+    override_score2_floor_without_pen: float
+    override_score2_floor_with_pen: float
+    override_pen_distance_squared: float
     override_context_age_adjustment: int
     override_age_minimum: int
     override_age_maximum: int
@@ -234,7 +234,7 @@ class ProjectLifecycle:
     override_candidate_margin: int
     override_default_margin: int
     override_context_margin: int
-    override_source_margin: int
+    override_pen_margin: int
     override_minimum_counter: int
     override_score3_floor: int
     rules: tuple[TransitionRule, ...]
@@ -317,9 +317,9 @@ class ProjectLifecycle:
             "context_region_distance": self.context_region_distance,
             "output_merge_squared_limit": self.output_merge_squared_limit,
             "output_merge_disabled_limit": self.output_merge_disabled_limit,
-            "override_score2_floor_without_source": self.override_score2_floor_without_source,
-            "override_score2_floor_with_source": self.override_score2_floor_with_source,
-            "override_source_distance_squared": self.override_source_distance_squared,
+            "override_score2_floor_without_pen": self.override_score2_floor_without_pen,
+            "override_score2_floor_with_pen": self.override_score2_floor_with_pen,
+            "override_pen_distance_squared": self.override_pen_distance_squared,
             "override_context_age_adjustment": self.override_context_age_adjustment,
             "override_age_minimum": self.override_age_minimum,
             "override_age_maximum": self.override_age_maximum,
@@ -328,7 +328,7 @@ class ProjectLifecycle:
             "override_candidate_margin": self.override_candidate_margin,
             "override_default_margin": self.override_default_margin,
             "override_context_margin": self.override_context_margin,
-            "override_source_margin": self.override_source_margin,
+            "override_pen_margin": self.override_pen_margin,
             "override_minimum_counter": self.override_minimum_counter,
             "override_score3_floor": self.override_score3_floor,
             "rules": [rule.summary() for rule in self.rules],
@@ -344,10 +344,10 @@ class OutputOverrideInput:
     current_scores: tuple[float, float, float, float]
     previous_scores_newest_first: tuple[tuple[float, float, float, float], ...]
     context_range_active: bool = False
-    source_mode: int = 0
-    source_distance_squared: float = 0.0
-    candidate_flag_49: bool = False
-    candidate_flag_4a: bool = False
+    pen_source_mode: int = 0
+    pen_distance_squared: float = 0.0
+    touches_sensor_edge: bool = False
+    touches_sensor_corner: bool = False
     global_context_active: bool = False
     accumulated_metric_50: float = 0.0
     counter_254: int = 0
@@ -410,22 +410,22 @@ def apply_output_code_override(
             average_score2 = score2_sum / divisor
             average_score3 = score3_sum / divisor
             score2_floor = (
-                lifecycle.override_score2_floor_without_source
-                if inputs.source_mode == 0
-                else lifecycle.override_score2_floor_with_source
+                lifecycle.override_score2_floor_without_pen
+                if inputs.pen_source_mode == 0
+                else lifecycle.override_score2_floor_with_pen
             )
-            source_distance_ok = (
-                inputs.source_mode != 1
-                or lifecycle.override_source_distance_squared
-                < inputs.source_distance_squared
+            pen_distance_ok = (
+                inputs.pen_source_mode != 1
+                or lifecycle.override_pen_distance_squared
+                < inputs.pen_distance_squared
             )
             margin = lifecycle.override_default_margin
-            if inputs.candidate_flag_4a:
+            if inputs.touches_sensor_corner:
                 margin = lifecycle.override_candidate_margin + 5
-            elif inputs.candidate_flag_49:
+            elif inputs.touches_sensor_edge:
                 margin = lifecycle.override_candidate_margin
-            elif inputs.source_mode == 1:
-                margin = lifecycle.override_source_margin
+            elif inputs.pen_source_mode == 1:
+                margin = lifecycle.override_pen_margin
             elif inputs.global_context_active:
                 margin = lifecycle.override_context_margin
             if (
@@ -437,7 +437,7 @@ def apply_output_code_override(
 
             if (
                 score2_floor <= average_score2
-                and source_distance_ok
+                and pen_distance_ok
                 and average_score3 < average_score2
                 and margin < average_score2 - average_score1
                 and lifecycle.override_minimum_counter <= inputs.counter_254
@@ -469,7 +469,7 @@ def apply_output_code_override(
         inputs.external_mode
         and inputs.external_predicate
         and original == 4
-        and inputs.candidate_flag_49
+        and inputs.touches_sensor_edge
         and 49 < force_age
     ):
         force_age = 50

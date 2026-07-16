@@ -124,9 +124,10 @@ records, exact context-window and output-code override parameters, association
 radii, point-count limits, and output-merge distances from an operator-supplied
 DLL. Testable helpers cover direct X/Y kinematics, strict scaled assignment,
 far-edge snapping, the ordered three-branch output override, and chained
-duplicate-output merging. No Phase 69 behavior has been deployed yet; kernel
-replacement remains deferred until the remaining external flag provenance and
-special/release output branches are proven. See
+duplicate-output merging. Candidate boundary/corner flags and the pen-only
+orientation source are now distinguished. No Phase 69 behavior has been
+deployed yet; kernel replacement remains deferred until the remaining
+context/region flag provenance and special/release output branches are proven. See
 [docs/PHASE69_WINDOWS_PROCESSING_PARITY.md](docs/PHASE69_WINDOWS_PROCESSING_PARITY.md).
 
 It is not yet ready for a mainline submission. Labelled palm and physical-edge

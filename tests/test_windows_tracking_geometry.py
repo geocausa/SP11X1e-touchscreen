@@ -6,18 +6,61 @@ import unittest
 
 from tools.windows_tracking_geometry import (
     AssignmentScaleInputs,
+    CandidateEdgeFlags,
     OutputContact,
     TrackKinematics,
     WINDOWS_DESCRIPTOR_UNIT,
     WINDOWS_EDGE_SNAP_EPSILON,
     assignment_coordinate,
     assignment_pair_is_valid,
+    candidate_edge_flags,
     merge_nearby_output_contacts,
     snap_far_edge_centroid,
 )
 
 
 class WindowsTrackingGeometryTests(unittest.TestCase):
+    def test_candidate_edge_flags_distinguish_edge_corner_and_margin(self):
+        interior = candidate_edge_flags(
+            min_x=3,
+            max_x=4,
+            min_y=5,
+            max_y=6,
+            centroid_x=3.5,
+            centroid_y=5.5,
+            x_node_count=12,
+            y_node_count=20,
+            edge_margin=1.0,
+        )
+        self.assertEqual(interior, CandidateEdgeFlags(0, False, False, False))
+
+        edge = candidate_edge_flags(
+            min_x=0,
+            max_x=1,
+            min_y=5,
+            max_y=6,
+            centroid_x=0.5,
+            centroid_y=5.5,
+            x_node_count=12,
+            y_node_count=20,
+            edge_margin=0.25,
+        )
+        self.assertEqual(edge, CandidateEdgeFlags(1, True, False, False))
+
+        corner = candidate_edge_flags(
+            min_x=0,
+            max_x=1,
+            min_y=0,
+            max_y=1,
+            centroid_x=0.5,
+            centroid_y=0.5,
+            x_node_count=12,
+            y_node_count=20,
+            edge_margin=0.0,
+            context_active=True,
+        )
+        self.assertEqual(corner, CandidateEdgeFlags(5, True, True, True))
+
     def test_track_coordinates_are_direct_and_velocity_is_separate(self):
         track = TrackKinematics(10.25, 20.5)
         track.update(13.0, 18.0)

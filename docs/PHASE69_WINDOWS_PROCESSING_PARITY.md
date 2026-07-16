@@ -217,7 +217,7 @@ frames after the event that armed it.
   integer units;
 - exact placement of the recovered point-count ranges among the remaining
   post-score class-specific exceptions;
-- producer provenance for the external source, region, and candidate flags
+- producer provenance for the remaining global-context and region-map flags
   consumed by the now-modelled `FUN_180049880` output-code override;
 - all five lifecycle-state transitions in `FUN_180043b10` and
   `FUN_180048e70`;
@@ -301,28 +301,44 @@ rather than inferred from live tuning. For project 0x0c83 they include:
 ordinary age window:       6..8
 context age adjustment:       +2
 score-two floors:          -17 / -10
-source distance squared:    215
+pen distance squared:       215
 candidate/default margins:    6 / -10
-context/source margins:     -10 / 0
+context/pen margins:        -10 / 0
 minimum branch counter:       4
 forced-output age/counter:    35 / 10
 score-three low floor:       -20
 ```
 
 The first branch can change ring output code four to code two from averages of
-the previous, non-disabled score samples. It applies the recovered source
-distance, candidate flags, global context, region exclusion, accumulated
+the previous, non-disabled score samples. It applies the recovered pen-source
+distance, sensor-edge flags, global context, region exclusion, accumulated
 metric, counter, and signal predicates with the DLL's exact strict/inclusive
 comparisons. The second branch deliberately tests the code captured at
 function entry, so two consecutive low-score samples can overwrite that new
 code two with code one. The final age/counter branch is not restricted to an
 entry code of four and can set code one after age 35.
 
-The evaluator keeps the still-unmapped inputs structurally named. This is an
-intentional evidence boundary: the control flow and constants are exact, but a
-flag will not be called “palm,” “pen,” or “finger” until its producer has been
-traced. Synthetic tests lock branch ordering, equality behavior, and the
-code-two-to-code-one overwrite.
+The remaining context/region inputs stay structurally named. Synthetic tests
+lock branch ordering, equality behavior, and the code-two-to-code-one
+overwrite.
+
+## Candidate edge flags and pen-context boundary
+
+`FUN_1800489a0` proves the candidate flags consumed by the override. Candidate
+`+0x49` is set when its component bounds touch any outer sensor row or column;
+`+0x4a` is set when two boundaries are touched and the component is therefore
+at a sensor corner. Candidate `+0x48` is a separate centroid-near-edge flag,
+using the project edge margin plus `0.5` while local context is active.
+`candidate_edge_flags` models the ordinary grid predicates. The descriptor-
+specific seam flag at `+0x4b` remains separate.
+
+The source point at frame `+0xb85c` is passed to `FUN_180046578`, which computes
+a transformed 0..359-degree candidate-to-source angle. `FUN_180048548` compares
+that angle with the orientation fields at frame `+0xb938/+0xb93a` and the
+project orientation windows. This is the pen-orientation/proximity path, not a
+second finger tracker. Because pen support is explicitly out of scope, the
+finger-only oracle uses the no-source branch instead of inventing source
+values.
 
 ## Lifecycle and output graph recovered so far
 
@@ -361,7 +377,7 @@ project matching/point-count fields. Geometry tests cover runtime assignment
 scales, quantization, the strict radius boundary, direct coordinate updates,
 far-edge snapping, and ordered duplicate merging. The output-override tests
 cover project extraction, history averaging, code-two-to-code-one overwrite,
-and the strict age boundary. The complete suite currently passes 62 tests.
+and the strict age boundary. The complete suite currently passes 63 tests.
 
 The saved Windows corpus regression decodes all 1,381 frames with zero errors,
 scores 1,113 contacts with zero floating/fixed-point winner mismatches, and

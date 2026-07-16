@@ -127,6 +127,12 @@ overwrite a code-two decision made by the first branch. The offline evaluator
 preserves that ordering and all direct project constants while leaving
 external producer flags structurally named until their provenance is proven.
 
+Candidate `+0x49/+0x4a` are now proven outer-sensor-edge and sensor-corner
+flags, respectively. The external source point belongs to the pen-orientation
+path: downstream code derives a candidate-to-source angle and compares it with
+orientation windows. The finger-only port can therefore select the no-pen
+branch explicitly; it does not need tuned substitutes for those fields.
+
 ## Linux lifecycle equivalent
 
 The Phase 63 Linux client implements the recovered control-flow boundary
