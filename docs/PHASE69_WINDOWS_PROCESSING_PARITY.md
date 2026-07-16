@@ -250,7 +250,6 @@ frames after the event that armed it.
   behavior in `FUN_180047078`;
 - recovery of the non-coordinate scalar blend in `FUN_18004a330` if that
   metric proves relevant to finger-only output policy;
-- the raw-grid producer predicate used by state-four release retention;
 - runtime configuration provenance. KDNET did not observe a large panel HID
   calibration report, so panel-supplied tuning is not assumed.
 
@@ -484,10 +483,13 @@ record:
   separate branches on every pass.
 
 The low-score cleanup comparisons are strict, and transition age equality is
-outside its output window. The state-four raw-neighborhood predicate is an
-explicit oracle input for now; its direct literals are recovered as
-`0.6000000238418579` and `0.002220354275777936`, but its project baseline input
-still needs to be connected to the saved raw grid before kernel replacement.
+outside its output window. `state4_neighborhood_all_above` now supplies the
+raw-neighborhood predicate exactly. Project baseline
+`0.054999999701976776` and direct DLL literals `0.6000000238418579` and
+`0.002220354275777936`, evaluated with float32 rounding, produce byte threshold
+155. Windows rounds the retained historical X/Y, samples only the in-bounds
+cells of its 3x3 neighborhood, and rejects when any byte is strictly below
+155; equality passes.
 
 `advance_unmatched_track` represents the outer lifecycle mutations in
 `FUN_180043b10`. A free or matched track is unchanged. An unmatched state-one
@@ -538,11 +540,10 @@ level/age release and context rejection. Final-output tests cover normal,
 split, transition, low-score cleanup, state-two release, state-four retention,
 unmatched lifecycle closure, the full state-four history/score selector and
 all associated boundary/counter ordering. The complete suite currently passes
-86 tests.
+87 tests.
 
 The saved Windows corpus regression decodes all 1,381 frames with zero errors,
 scores 1,113 contacts with zero floating/fixed-point winner mismatches, and
 retains the previously recorded base-lifecycle distribution. That regression
 does not yet claim final Windows output parity because the remaining external
-context producers and raw state-four grid predicate are not represented by
-that base corpus regression.
+context producers are not represented by that base corpus regression.

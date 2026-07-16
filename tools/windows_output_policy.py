@@ -72,6 +72,7 @@ class State4SuppressionRule:
 class ProjectOutputPolicy:
     project_id: int
     state2_release_step_source: int
+    state4_signal_baseline: float
     special_state4_rule: State4SuppressionRule
     ordinary_state4_rule: State4SuppressionRule
 
@@ -85,6 +86,7 @@ class ProjectOutputPolicy:
         return cls(
             project_id,
             data[config + 0xE61],
+            struct.unpack_from("<f", data, config + 0x0C)[0],
             State4SuppressionRule.from_bytes(data, config + 0xE30),
             State4SuppressionRule.from_bytes(data, config + 0xE44),
         )
@@ -93,6 +95,45 @@ class ProjectOutputPolicy:
     def state2_release_step(self) -> int:
         """Return the DLL's byte-wrapped `(project[e61] - 1)` value."""
         return (self.state2_release_step_source - 1) & 0xFF
+
+    @property
+    def state4_signal_threshold(self) -> int:
+        """Return FUN_1800426d8's float32-derived neighborhood byte floor."""
+        value = _float32(1.0 - self.state4_signal_baseline)
+        value = _float32(value - STATE4_SIGNAL_OFFSET)
+        value = _float32(value / STATE4_SIGNAL_STEP)
+        return int(_float32(value + 0.5)) & 0xFF
+
+
+def _float32(value: float) -> float:
+    return struct.unpack("<f", struct.pack("<f", value))[0]
+
+
+def state4_neighborhood_all_above(
+    policy: ProjectOutputPolicy,
+    grid: tuple[tuple[int, ...], ...],
+    *,
+    x: float,
+    y: float,
+) -> bool:
+    """Mirror the bounded 3x3 raw-grid predicate in FUN_1800426d8."""
+    if not grid or not grid[0]:
+        raise ValueError("grid must not be empty")
+    width = len(grid[0])
+    if any(len(row) != width for row in grid):
+        raise ValueError("grid rows must have equal width")
+    if any(not 0 <= value <= 0xFF for row in grid for value in row):
+        raise ValueError("grid values must fit an unsigned byte")
+    center_x = int(x + 0.5) & 0xFF
+    center_y = int(y + 0.5) & 0xFF
+    threshold = policy.state4_signal_threshold
+    for row in range(center_y - 1, center_y + 2):
+        if not 0 <= row < len(grid):
+            continue
+        for column in range(center_x - 1, center_x + 2):
+            if 0 <= column < width and grid[row][column] < threshold:
+                return False
+    return True
 
 
 @dataclass(frozen=True)

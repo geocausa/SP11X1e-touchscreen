@@ -14,6 +14,7 @@ from tools.windows_output_policy import (
     advance_unmatched_track,
     evaluate_output_eligibility,
     evaluate_state4_suppression,
+    state4_neighborhood_all_above,
 )
 
 
@@ -23,6 +24,7 @@ def make_output_policy_dll(project_id: int = 0x0C83) -> bytes:
     blob[0:4] = b"PSDB"
     struct.pack_into("<HH", blob, 4, 4, project_id)
     struct.pack_into("<I", blob, 0x18, blob_length)
+    struct.pack_into("<f", blob, PROJECT_CONFIG_OFFSET + 0x0C, 0.055)
     blob[PROJECT_CONFIG_OFFSET + 0xE61] = 2
     rule = bytes.fromhex("f4ffefff02000400190002040dfdfbfc0b1e0204")
     blob[PROJECT_CONFIG_OFFSET + 0xE30 : PROJECT_CONFIG_OFFSET + 0xE44] = rule
@@ -37,6 +39,8 @@ class WindowsOutputPolicyTests(unittest.TestCase):
     def test_extracts_byte_wrapped_release_step(self):
         self.assertEqual(self.policy.state2_release_step_source, 2)
         self.assertEqual(self.policy.state2_release_step, 1)
+        self.assertEqual(self.policy.state4_signal_baseline, 0.054999999701976776)
+        self.assertEqual(self.policy.state4_signal_threshold, 155)
         wrapped = bytearray(make_output_policy_dll())
         wrapped[PROJECT_CONFIG_OFFSET + 0xE61] = 0
         policy = ProjectOutputPolicy.from_dll(bytes(wrapped), 0x0C83)
@@ -224,6 +228,34 @@ class WindowsOutputPolicyTests(unittest.TestCase):
         self.assertEqual(excluded.new_state, 0)
         self.assertEqual(excluded.release_counter, 0)
         self.assertEqual(excluded.records, 0)
+
+    def test_state_four_grid_neighborhood_uses_strict_floor_and_bounds(self):
+        grid = tuple(tuple(155 for _ in range(5)) for _ in range(4))
+        self.assertTrue(
+            state4_neighborhood_all_above(
+                self.policy, grid, x=2.49, y=1.49
+            )
+        )
+        low = [list(row) for row in grid]
+        low[2][3] = 154
+        self.assertFalse(
+            state4_neighborhood_all_above(
+                self.policy,
+                tuple(tuple(row) for row in low),
+                x=2.49,
+                y=1.49,
+            )
+        )
+        # At a corner Windows samples only the four in-bounds cells.
+        low[2][3] = 0
+        self.assertTrue(
+            state4_neighborhood_all_above(
+                self.policy,
+                tuple(tuple(row) for row in low),
+                x=0.0,
+                y=0.0,
+            )
+        )
 
     def test_output_frame_and_class_counters_follow_path_taken(self):
         emitted = evaluate_output_eligibility(
