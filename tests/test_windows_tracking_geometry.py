@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import unittest
+import struct
 
 from tools.windows_tracking_geometry import (
     AssignmentScaleInputs,
     CandidateEdgeFlags,
     OutputContact,
     TrackKinematics,
-    WINDOWS_DESCRIPTOR_UNIT,
     WINDOWS_EDGE_SNAP_EPSILON,
     assignment_coordinate,
     assignment_pair_is_valid,
@@ -20,6 +20,23 @@ from tools.windows_tracking_geometry import (
 
 
 class WindowsTrackingGeometryTests(unittest.TestCase):
+    def test_extracts_project_sensor_assignment_inputs(self):
+        blob = bytearray(0x1000)
+        blob[0:4] = b"PSDB"
+        struct.pack_into("<HH", blob, 4, 4, 0x0C83)
+        struct.pack_into("<I", blob, 0x18, len(blob))
+        struct.pack_into("<HH", blob, 0x38 + 0x04, 46, 68)
+        struct.pack_into("<HHh", blob, 0x3C, 46, 68, 0)
+        struct.pack_into("<II", blob, 0x54, 18053, 27189)
+        struct.pack_into("<I", blob, 0x64, 0)
+
+        inputs = AssignmentScaleInputs.from_dll(bytes(blob), 0x0C83)
+        self.assertEqual(
+            inputs,
+            AssignmentScaleInputs(27189, 18053, 68, 46, 0, 0, 0),
+        )
+        self.assertEqual(inputs.scales(), (4.0580596923828125, 4.011777877807617))
+
     def test_candidate_edge_flags_distinguish_edge_corner_and_margin(self):
         interior = candidate_edge_flags(
             min_x=3,
@@ -87,12 +104,12 @@ class WindowsTrackingGeometryTests(unittest.TestCase):
             x_node_count=11,
             y_node_count=21,
             y_inset_count=0,
-            y_inset_pitch=3.5,
+            y_inset_pitch=3,
             layout_mode=0,
         )
         x_scale, y_scale = inputs.scales()
-        self.assertAlmostEqual(x_scale, 10000 * WINDOWS_DESCRIPTOR_UNIT / 10)
-        self.assertAlmostEqual(y_scale, 20000 * WINDOWS_DESCRIPTOR_UNIT / 20)
+        self.assertEqual(x_scale, 10.0)
+        self.assertEqual(y_scale, 10.0)
 
     def test_descriptor_scales_remove_two_y_insets(self):
         inputs = AssignmentScaleInputs(
@@ -101,13 +118,13 @@ class WindowsTrackingGeometryTests(unittest.TestCase):
             x_node_count=12,
             y_node_count=30,
             y_inset_count=2,
-            y_inset_pitch=1.25,
+            y_inset_pitch=2,
             layout_mode=1,
         )
         x_scale, y_scale = inputs.scales()
-        self.assertAlmostEqual(x_scale, 12000 * WINDOWS_DESCRIPTOR_UNIT / 12)
+        self.assertEqual(x_scale, 10.0)
         self.assertAlmostEqual(
-            y_scale, (24000 * WINDOWS_DESCRIPTOR_UNIT - 5.0) / 26
+            y_scale, (240.0 - 8.0) / 26, places=6
         )
 
     def test_descriptor_rejects_impossible_denominators(self):

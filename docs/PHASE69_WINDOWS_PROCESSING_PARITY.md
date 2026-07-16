@@ -144,8 +144,23 @@ Track predictions and candidate positions are converted with
 `(short)(int)(position * scale + 0.5)`. The assignment is rejected when
 `radius_squared <= distance_squared`, so equality is outside the gate.
 `tools/windows_tracking_geometry.py` now makes this exact arithmetic
-regression-testable. Mapping the runtime descriptor source fields to the
-Linux panel geometry is still required before substituting the kernel gate.
+regression-testable.
+
+`FUN_18008f3f8` maps the runtime fields back to the selected PSDB sensor
+record. For project 0x0c83 sensor zero, the record contains 68 X nodes, 46 Y
+nodes, X/Y extents 27189/18053 hundredths, zero Y insets, and layout mode zero.
+With the DLL's float32 rounding, the exact assignment factors are:
+
+```text
+x_scale = 4.0580596923828125
+y_scale = 4.011777877807617
+```
+
+`AssignmentScaleInputs.from_dll` extracts those inputs from an operator-
+supplied DLL and reproduces each float32 arithmetic stage. The correct kernel
+port must retain sensor-space centroids through assignment and quantize X and Y
+separately; replacing this with one circular radius in the 0..32767 output
+space would change the anisotropic Windows gate.
 
 The post-score point-count ranges at project offsets `+0xde4` and `+0xdf4`
 are:
@@ -197,6 +212,7 @@ frames after the event that armed it.
   ten-sample history capacity;
 - new-track unclassified source state;
 - project association radii and class metric ranges;
+- project sensor geometry and exact float32 assignment scales;
 - direct X/Y track updates, separate velocity, running coordinate bounds, and
   direct normal-contact X/Y output;
 - the complete arithmetic and ordering of `FUN_180049880`'s output-code
@@ -213,8 +229,8 @@ frames after the event that armed it.
 
 ### Still required before kernel replacement
 
-- exact assignment coordinate scaling and strict boundary semantics in Linux
-  integer units;
+- retaining sensor-space centroids through Linux assignment and applying the
+  recovered per-axis quantization before output normalization;
 - exact placement of the recovered point-count ranges among the remaining
   post-score class-specific exceptions;
 - producer provenance for the remaining global-context and region-map flags
@@ -377,7 +393,7 @@ project matching/point-count fields. Geometry tests cover runtime assignment
 scales, quantization, the strict radius boundary, direct coordinate updates,
 far-edge snapping, and ordered duplicate merging. The output-override tests
 cover project extraction, history averaging, code-two-to-code-one overwrite,
-and the strict age boundary. The complete suite currently passes 63 tests.
+and the strict age boundary. The complete suite currently passes 64 tests.
 
 The saved Windows corpus regression decodes all 1,381 frames with zero errors,
 scores 1,113 contacts with zero floating/fixed-point winner mismatches, and

@@ -123,7 +123,8 @@ Windows post-detector policy offline. It now extracts all 20 class-transition
 records, exact context-window and output-code override parameters, association
 radii, point-count limits, and output-merge distances from an operator-supplied
 DLL. Testable helpers cover direct X/Y kinematics, strict scaled assignment,
-far-edge snapping, the ordered three-branch output override, and chained
+including the exact 68-by-46 panel factors, far-edge snapping, the ordered
+three-branch output override, and chained
 duplicate-output merging. Candidate boundary/corner flags and the pen-only
 orientation source are now distinguished. No Phase 69 behavior has been
 deployed yet; kernel replacement remains deferred until the remaining

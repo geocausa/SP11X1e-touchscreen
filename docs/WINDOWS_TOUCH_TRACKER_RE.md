@@ -45,6 +45,12 @@ recovered Windows setting.  In the 1,381-frame Windows corpus, all consecutive
 single-contact motion is below 900 logical units, so the selected gate has
 substantial margin while still separating unrelated blobs.
 
+Project 0x0c83's sensor record is now mapped: 68 by 46 nodes, extents 27189 by
+18053 hundredths, and zero insets produce float32 assignment scales
+4.0580596923828125 and 4.011777877807617. Windows quantizes predicted and
+candidate X/Y independently in that space and applies its strict radius-five
+test. A single 0..32767 Linux radius is not equivalent.
+
 ## Lifecycle and coordinate updates
 
 The Windows code maintains history, active/pre-active/closing state, missing

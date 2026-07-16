@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import math
+import struct
 
 
 # Direct float literals at 0x18003d970 and 0x180047760.
@@ -219,8 +220,37 @@ class AssignmentScaleInputs:
     x_node_count: int
     y_node_count: int
     y_inset_count: int
-    y_inset_pitch: float
+    y_inset_pitch: int
     layout_mode: int
+
+    @classmethod
+    def from_dll(
+        cls, data: bytes, project_id: int, sensor_index: int = 0
+    ) -> "AssignmentScaleInputs":
+        """Extract FUN_18008f3f8's inputs from a validated project PSDB."""
+        if sensor_index < 0:
+            raise ValueError("sensor index must be non-negative")
+        from tools.extract_windows_classifier import find_project_blob
+
+        blob_offset, blob_length = find_project_blob(data, project_id)
+        sensor_offset = 0x38 + sensor_index * 0x34
+        required = max(sensor_offset + 8, 0x6C)
+        if required > blob_length:
+            raise ValueError("PSDB is too short for the sensor descriptor")
+        sensor = blob_offset + sensor_offset
+        return cls(
+            x_extent_hundredths=struct.unpack_from(
+                "<I", data, blob_offset + 0x58
+            )[0],
+            y_extent_hundredths=struct.unpack_from(
+                "<I", data, blob_offset + 0x54
+            )[0],
+            x_node_count=struct.unpack_from("<H", data, sensor + 0x06)[0],
+            y_node_count=struct.unpack_from("<H", data, sensor + 0x04)[0],
+            y_inset_count=struct.unpack_from("<H", data, blob_offset + 0x40)[0],
+            y_inset_pitch=struct.unpack_from("<I", data, blob_offset + 0x64)[0],
+            layout_mode=struct.unpack_from("<h", data, blob_offset + 0x42)[0],
+        )
 
     def scales(self) -> tuple[float, float]:
         """Return the exact X/Y factors stored at context +0x167e0/+0x167e4."""
@@ -232,14 +262,26 @@ class AssignmentScaleInputs:
         if x_denominator <= 0 or y_denominator <= 0:
             raise ValueError("sensor descriptor produces a non-positive scale denominator")
 
-        x_scale = (
+        x_extent = _float32(
             float(self.x_extent_hundredths) * WINDOWS_DESCRIPTOR_UNIT
-        ) / float(x_denominator)
-        y_scale = (
+        )
+        y_extent = _float32(
             float(self.y_extent_hundredths) * WINDOWS_DESCRIPTOR_UNIT
-            - 2.0 * float(self.y_inset_count) * float(self.y_inset_pitch)
-        ) / float(y_denominator)
+        )
+        x_scale = _float32(x_extent / float(x_denominator))
+        y_scale = _float32(
+            (
+                float(y_extent)
+                - 2.0 * float(self.y_inset_count) * float(self.y_inset_pitch)
+            )
+            / float(y_denominator)
+        )
         return x_scale, y_scale
+
+
+def _float32(value: float) -> float:
+    """Round one arithmetic stage to the DLL's IEEE-754 float precision."""
+    return struct.unpack("<f", struct.pack("<f", value))[0]
 
 
 def assignment_coordinate(position: float, scale: float) -> int:
