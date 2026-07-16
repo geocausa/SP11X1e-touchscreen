@@ -105,8 +105,10 @@ finger onset age 8:        1 sequence
 This is a base score-gate diagnostic, not claimed final Windows output. It
 resets its one-track history on an idle frame and treats each saved ordinary
 connected component as candidate `+0x4e == 1`. The class-specific point-count
-range is applied, but the remaining class exceptions, class override,
-five-state lifecycle, and final output builder can still change those results.
+range is applied. The subsequently recovered class exceptions, override,
+five-state lifecycle and final output policy are intentionally not folded into
+this older base diagnostic because its saved frames do not carry every runtime
+context/descriptor input required by those stages.
 It nevertheless proves why a universal three-frame
 Linux confirmation window cannot be called Windows-equivalent: the recovered
 base policy accepts most ordinary sequence onsets on their first frame and
@@ -215,8 +217,16 @@ frames after the event that armed it.
 - project sensor geometry and exact float32 assignment scales;
 - direct X/Y track updates, separate velocity, running coordinate bounds, and
   direct normal-contact X/Y output;
+- neighboring-contact bounds correction and its per-class PSDB records;
+- ordinary finger post-score exceptions, fallback-profile suppression,
+  frame-level maximum and descriptor/context class-three demotion;
 - the complete arithmetic and ordering of `FUN_180049880`'s output-code
-  override, with structurally named external predicates.
+  override, with structurally named external predicates;
+- final state/class output eligibility, release-counter ordering and output
+  accounting in `FUN_1800426d8`;
+- unmatched-track state mutations and active-track count balancing in
+  `FUN_180043b10`;
+- the state-four shape/history selection predicate in `FUN_18003fbb8`.
 
 ### Adapted in the current kernel
 
@@ -231,18 +241,16 @@ frames after the event that armed it.
 
 - retaining sensor-space centroids through Linux assignment and applying the
   recovered per-axis quantization before output normalization;
-- exact placement of the recovered point-count ranges among the remaining
-  post-score class-specific exceptions;
 - producer provenance for the remaining global-context and region-map flags
   consumed by the now-modelled `FUN_180049880` output-code override;
-- all five lifecycle-state transitions in `FUN_180043b10` and
-  `FUN_180048e70`;
-- final eligibility and output construction in `FUN_180049458`;
-- physical-edge centroid/clamp behavior in `FUN_180047078`;
+- state-three cleanup integration through `FUN_180048e70`;
+- record serialization and identifier details after the now-modelled final
+  eligibility branches in `FUN_1800426d8`/`FUN_180049458`;
+- the expanded-window baseline/context branches of physical-edge centroid
+  behavior in `FUN_180047078`;
 - recovery of the non-coordinate scalar blend in `FUN_18004a330` if that
   metric proves relevant to finger-only output policy;
-- the remaining special/release branches in `FUN_1800426d8` and their project
-  counters;
+- the raw-grid producer predicate used by state-four release retention;
 - runtime configuration provenance. KDNET did not observe a large panel HID
   calibration report, so panel-supplied tuning is not assumed.
 
@@ -444,11 +452,74 @@ The proven state edges are:
 3 -> 0 during the following cleanup pass
 ```
 
-State four is excluded from normal output. States one and two enter the final
-builder, but primary finger records are emitted only for classes zero and two.
-The flag at track `+0x46` is set for a previous class-zero/class-two to current
-class-one/class-five transition and controls that special transition-output
-path; it is not a universal normal-output eligibility flag.
+States one, two and four have distinct branches in the final builder. State
+one emits classes zero and two normally; class three uses either one normal
+record or the recovered multi-subcontact split path. The flag at track `+0x46`
+is set for a previous class-zero/class-two to current class-one/class-five
+transition and controls that bounded transition-output path; it is not a
+universal normal-output eligibility flag.
+
+## Exact final output eligibility and release ordering
+
+`evaluate_output_eligibility` now represents the state/class control flow and
+counter mutations in `FUN_1800426d8` before `FUN_180041b80` serializes each
+record:
+
+- state one emits class zero or two as an ordinary primary record;
+- state-one class three emits one record below two configured subcontacts,
+  otherwise it emits the enabled split subcontacts from the bounded list;
+- state-one class one or five emits only in descriptor mode or while the
+  transition flag is active and age is strictly below its runtime limit;
+- state two gives that transition-release branch priority over every score
+  cleanup, including three scores below `-200.0`;
+- other state-two class zero/two/three tracks emit retained release records,
+  decrementing their byte counter by project byte `+0xe61 - 1`; project
+  0x0c83 stores two, so its decrement is one;
+- state-two tracks with fewer than three prior output frames use a zero
+  decrement, exactly as Windows does;
+- state four decrements its byte counter first, then retains only when the
+  3x3 raw neighborhood passes and the region helper does not exclude it;
+- a taken output path increments the 16-bit output-frame count, while a silent
+  path resets it; class four and non-four accounting counters are updated in
+  separate branches on every pass.
+
+The low-score cleanup comparisons are strict, and transition age equality is
+outside its output window. The state-four raw-neighborhood predicate is an
+explicit oracle input for now; its direct literals are recovered as
+`0.6000000238418579` and `0.002220354275777936`, but its project baseline input
+still needs to be connected to the saved raw grid before kernel replacement.
+
+`advance_unmatched_track` represents the outer lifecycle mutations in
+`FUN_180043b10`. A free or matched track is unchanged. An unmatched state-one
+track either enters state four when `FUN_18003fbb8` accepts its suppression
+history, or closes in state three and balances the active-secondary count.
+Unmatched state-two/state-four tracks remain in place while their byte release
+counter is nonzero; at zero they enter state three, with only state two
+decrementing that active count.
+
+`evaluate_state4_suppression` now represents the larger `FUN_18003fbb8`
+predicate used by that state-one edge. Project 0x0c83's ordinary and special
+20-byte rule records are identical:
+
+```text
+score-two / score-zero thresholds:          -12 / -17
+ordinary / context counter thresholds:         2 / 4
+counter maximum:                                  25
+average score-one maximum:                        -3
+score-two / score-zero margins:              -5 / -4
+fallback score adjustments:                  11 / 30
+history scalar range maximum:                       2
+release counter maximum:                            4
+```
+
+The predicate retains at most ten newest samples, validates the current and
+previous class pattern, requires every older ordinary-mode sample to be class
+four, enforces both scalar-history ranges, averages scores zero/one/two, then
+applies the two margin alternatives in DLL order. Exact direct float limits
+`0.15000000596046448`, `2.4000000953674316`, and ordinary-mode
+`1.4399999380111694` are preserved. Fallback-profile adjustments and the
+ordinary local-region exclusion remain in their original positions. On
+success, the release byte is the smaller of retained history length and four.
 
 ## Validation checkpoint
 
@@ -463,11 +534,15 @@ cover project extraction, history averaging, code-two-to-code-one overwrite,
 and the strict age boundary. Neighbor-bounds and ordinary finger-policy tests
 cover strict enclosure, age/multiplier boundaries, point limits, fallback
 feature thresholds, strict frame-level maximum, descriptor/context demotion,
-level/age release and context rejection. The complete suite currently passes
-70 tests.
+level/age release and context rejection. Final-output tests cover normal,
+split, transition, low-score cleanup, state-two release, state-four retention,
+unmatched lifecycle closure, the full state-four history/score selector and
+all associated boundary/counter ordering. The complete suite currently passes
+86 tests.
 
 The saved Windows corpus regression decodes all 1,381 frames with zero errors,
 scores 1,113 contacts with zero floating/fixed-point winner mismatches, and
 retains the previously recorded base-lifecycle distribution. That regression
 does not yet claim final Windows output parity because the remaining external
-flag producers and special/release output branches are not represented.
+context producers and raw state-four grid predicate are not represented by
+that base corpus regression.
