@@ -78,3 +78,23 @@ client, the Phase 68 or Phase 70 images, or the saved 7.1.3 GRUB default.
 Hardware validation must confirm Linux contact emission, one/two/three-finger
 continuity, release behavior, and recovery before this branch can replace the
 proven profile.
+
+The isolated image was built from commit
+`e6802c77b0f56d2498f83b9eaf59dfe115c8c39f`:
+
+```text
+entry id:                  sp11-phase71
+command-line marker:       sp11_entry=7.1.1-phase71
+client source version:     AB8E656F6CD477A5D5F3319
+controller source version: 393A6B36EC5A67BDDC47040
+GPI source version:        24B1195ED15A417793F5F0E
+
+f65e637f7ad0e34882c662d91f16e61489c911a642e9cc18e8db6b0b3ab6aa71  initrd
+fcefdc928b6e45a8212722c9132b9da2dc1c197fc4890f7a9bab3c31d1584b94  DTB
+6f263da75052c54b16d9be21b315beab6b45a2c27c08710d5362b033b4aebf30  kernel
+```
+
+After image construction the root-filesystem client was restored to the
+Phase 68 source version `E7A094AA381F6556CE14985`. The saved GRUB default
+remained `Ubuntu SP11 7.1.3 Baseline 1 (Touch+Audio+WiFi+BT+GPU)` and only the
+one-shot `next_entry` was set to `sp11-phase71`.
