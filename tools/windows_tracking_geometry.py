@@ -399,6 +399,29 @@ def assignment_coordinate(position: float, scale: float) -> int:
     return value
 
 
+def kernel_q24_assignment_coordinate(
+    weighted_position: int, strength: int, scale: float
+) -> int:
+    """Mirror Phase 70's integer centroid and assignment quantization.
+
+    ``weighted_position / strength`` is the connected component centroid.
+    Both the centroid and recovered float32 scale are represented in Q8.24;
+    the final half-up rounding is the unsigned-positive Windows operation.
+    """
+    if weighted_position < 0:
+        raise ValueError("weighted position must be non-negative")
+    if strength <= 0:
+        raise ValueError("strength must be positive")
+    if scale < 0.0 or not math.isfinite(scale):
+        raise ValueError("assignment scale must be finite and non-negative")
+    position_q24 = (weighted_position << 24) // strength
+    scale_q24 = round(scale * (1 << 24))
+    value = (position_q24 * scale_q24 + (1 << 47)) >> 48
+    if value > 0x7FFF:
+        raise ValueError("assignment coordinate does not fit the Windows signed short")
+    return value
+
+
 def assignment_pair_is_valid(
     track_x: int,
     track_y: int,

@@ -131,6 +131,16 @@ deployed yet; kernel replacement remains deferred until the remaining
 context/region flag provenance and special/release output branches are proven. See
 [docs/PHASE69_WINDOWS_PROCESSING_PARITY.md](docs/PHASE69_WINDOWS_PROCESSING_PARITY.md).
 
+Phase 70 bakes the bounded geometry and base transition result into an opt-in
+kernel frame profile. The client retains sensor-space centroids, uses the
+recovered per-axis quantization and strict radius-five global assignment,
+stores ten score vectors, applies all 20 base transition records, and directly
+publishes matched X/Y without the Linux-only smoothing stage. Its load-time
+switch is read-only and defaults off; the known-good Phase 68 behavior remains
+the module default because later Windows lifecycle branches still require
+provider-owned frame/context values not present in raw Heat reports. See
+[docs/PHASE70_KERNEL_FRAME_ORCHESTRATOR.md](docs/PHASE70_KERNEL_FRAME_ORCHESTRATOR.md).
+
 It is not yet ready for a mainline submission. Labelled palm and physical-edge
 captures, measured edge calibration, pressure, merged-contact separation,
 suspend/resume hardware validation, and broader kernel compatibility remain
@@ -166,11 +176,13 @@ docs/PHASE66_WINDOWS_RECOVERY.md
 docs/PHASE67_STATIC_AUDIT.md
 docs/PHASE68_PROVEN_RECOVERY.md
 docs/PHASE69_WINDOWS_PROCESSING_PARITY.md
+docs/PHASE70_KERNEL_FRAME_ORCHESTRATOR.md
 phase55/
 tools/analyze_spb_etw_csv.py
 tools/decode_heat_frame.py
 tools/extract_windows_classifier.py
 tools/extract_windows_lifecycle.py
+tools/generate_lifecycle_header.py
 tools/windows_tracking_geometry.py
 tools/regress_heat_frames.py
 tools/track_heat_contacts.py

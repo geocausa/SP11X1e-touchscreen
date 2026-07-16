@@ -36,6 +36,11 @@ from tools.decode_heat_frame import (
 )
 from tools.extract_windows_classifier import ProjectClassifier
 from tools.extract_windows_lifecycle import BaseClassHistory, ProjectLifecycle, UNCLASSIFIED
+from tools.windows_tracking_geometry import (
+    AssignmentScaleInputs,
+    assignment_coordinate,
+    kernel_q24_assignment_coordinate,
+)
 
 
 def iter_frames(paths: list[Path]):
@@ -73,12 +78,16 @@ def main() -> int:
     args = parser.parse_args()
 
     classifier = None
+    assignment_scales = None
     lifecycle = None
     calibration_policy = None
     if args.classifier_dll is not None:
         try:
             dll = args.classifier_dll.read_bytes()
             classifier = ProjectClassifier.from_dll(dll, 0x0C83)
+            assignment_scales = AssignmentScaleInputs.from_dll(
+                dll, 0x0C83
+            ).scales()
             calibration_policy = HeatCalibrationPolicy.from_dll(dll, 0x0C83)
             if args.base_lifecycle:
                 lifecycle = ProjectLifecycle.from_dll(dll, 0x0C83)
@@ -113,6 +122,7 @@ def main() -> int:
     normalized_spreads: list[float] = []
     classifier_classes: Counter[int] = Counter()
     classifier_mismatches = 0
+    assignment_q24_mismatches = 0
     base_history: BaseClassHistory | None = None
     base_selected_classes: Counter[int] = Counter()
     base_gate_counts: Counter[str] = Counter()
@@ -196,6 +206,25 @@ def main() -> int:
             y_values.append(contact["y32767"])
             axis_ratios.append(contact["axis_ratio"])
             normalized_spreads.append(contact["normalized_spread"])
+            if assignment_scales is not None:
+                strength = int(contact["strength"])
+                weighted_x = round(float(contact["col"]) * strength)
+                weighted_y = round(float(contact["row"]) * strength)
+                floating_assignment = (
+                    assignment_coordinate(contact["col"], assignment_scales[0]),
+                    assignment_coordinate(contact["row"], assignment_scales[1]),
+                )
+                fixed_assignment = (
+                    kernel_q24_assignment_coordinate(
+                        weighted_x, strength, assignment_scales[0]
+                    ),
+                    kernel_q24_assignment_coordinate(
+                        weighted_y, strength, assignment_scales[1]
+                    ),
+                )
+                assignment_q24_mismatches += (
+                    floating_assignment != fixed_assignment
+                )
             if classifier is not None:
                 features = windows_classifier_features(grid, contact)
                 floating = classifier.scores(features, 0)
@@ -291,6 +320,7 @@ def main() -> int:
                 for value, count in sorted(classifier_classes.items())
             )
             + f" fixed_point_mismatches={classifier_mismatches}"
+            + f" assignment_q24_mismatches={assignment_q24_mismatches}"
         )
     if lifecycle is not None:
         delay_counts = Counter(base_onset_delays)
@@ -323,7 +353,7 @@ def main() -> int:
             file=sys.stderr,
         )
         return 1
-    return 1 if errors or classifier_mismatches else 0
+    return 1 if errors or classifier_mismatches or assignment_q24_mismatches else 0
 
 
 if __name__ == "__main__":

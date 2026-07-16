@@ -24,6 +24,7 @@
 #include <linux/workqueue.h>
 
 #include "g6ts_classifier_profile.h"
+#include "g6ts_lifecycle_profile.h"
 
 #define G6TS_NAME			"microsoft-g6ts"
 #define G6TS_SPI_HZ			40000000U
@@ -81,6 +82,17 @@
 #define G6TS_ASSIGN_UNMATCHED_COST	1000000
 #define G6TS_ASSIGN_INVALID_COST	3000000
 
+/*
+ * Phase 70 keeps the hardware-validated Phase 68 policy as the default.  The
+ * recovered Windows profile is opt-in until its provider-owned frame flags
+ * have live ground truth.  Read-only prevents switching policy under active
+ * contacts and mixing two incompatible track coordinate spaces.
+ */
+static bool g6ts_windows_orchestrator;
+module_param_named(windows_orchestrator, g6ts_windows_orchestrator, bool, 0444);
+MODULE_PARM_DESC(windows_orchestrator,
+		 "Use the experimental recovered Windows frame profile (default: false)");
+
 static const u8 g6ts_header_cmd[8] = {
 	0xeb, 0x00, 0x10, 0x00, 0xff, 0xff, 0xff, 0xff,
 };
@@ -114,6 +126,8 @@ struct g6ts_contact {
 	u64 weighted_x;
 	u64 weighted_y;
 	u32 strength;
+	u32 sensor_x_q24;
+	u32 sensor_y_q24;
 	u16 pixels;
 	u16 x;
 	u16 y;
@@ -123,6 +137,7 @@ struct g6ts_contact {
 	u8 min_row;
 	u8 max_row;
 	s32 features_q12[G6TS_FEATURE_COUNT];
+	s64 scores_q24[G6TS_CLASS_COUNT];
 	u8 shape_class;
 	bool shape_allowed;
 };
@@ -134,13 +149,20 @@ struct g6ts_track {
 	u16 output_x;
 	u16 output_y;
 	u16 pixels;
+	u32 sensor_x_q24;
+	u32 sensor_y_q24;
+	s32 sensor_velocity_x_q24;
+	s32 sensor_velocity_y_q24;
 	s16 velocity_x;
 	s16 velocity_y;
 	u16 age;
+	s64 score_history_q24[G6TS_WINDOWS_HISTORY_CAPACITY][G6TS_CLASS_COUNT];
 	u8 missed;
 	u8 evidence;
 	u8 required_evidence;
 	u8 shape_class;
+	u8 windows_class;
+	u8 score_history_count;
 	bool active;
 	bool confirmed;
 };
@@ -773,7 +795,7 @@ static s32 g6ts_halo_feature(struct g6ts *ts,
 	return div64_s64(halo << G6TS_CLASSIFIER_SHIFT, peak);
 }
 
-static u8 g6ts_classify_contact(const struct g6ts_contact *contact)
+static u8 g6ts_classify_contact(struct g6ts_contact *contact)
 {
 	s64 best_score = S64_MIN;
 	u8 best_class = 0;
@@ -784,6 +806,8 @@ static u8 g6ts_classify_contact(const struct g6ts_contact *contact)
 			&g6ts_classifier_models[class];
 		s64 distance = 0;
 
+		contact->scores_q24[class] =
+			-9999LL * (1LL << G6TS_WINDOWS_SCORE_SHIFT);
 		if (contact->pixels > model->max_points)
 			continue;
 		for (row = 0; row < G6TS_FEATURE_COUNT; row++) {
@@ -811,7 +835,10 @@ static u8 g6ts_classify_contact(const struct g6ts_contact *contact)
 		}
 		if (distance != S64_MAX) {
 			s64 score = ((s64)model->score_offset_q12 <<
-				     G6TS_CLASSIFIER_SHIFT) - distance / 2;
+				     G6TS_CLASSIFIER_SHIFT) - distance / 2 +
+				    G6TS_WINDOWS_RUNTIME_OFFSET_Q24;
+
+			contact->scores_q24[class] = score;
 
 			if (score > best_score) {
 				best_score = score;
@@ -909,6 +936,10 @@ static unsigned int g6ts_find_contacts(struct g6ts *ts)
 				    (u64)contact.strength * (G6TS_HEAT_COLS - 1));
 		contact.y = div_u64(contact.weighted_y * G6TS_LOGICAL_MAX,
 				    (u64)contact.strength * (G6TS_HEAT_ROWS - 1));
+		contact.sensor_x_q24 = div_u64(contact.weighted_x << 24,
+					       contact.strength);
+		contact.sensor_y_q24 = div_u64(contact.weighted_y << 24,
+					       contact.strength);
 		memset(ts->heat_component, 0, sizeof(ts->heat_component));
 		while (tail)
 			ts->heat_component[ts->heat_queue[--tail]] = 1;
@@ -930,6 +961,116 @@ static unsigned int g6ts_find_contacts(struct g6ts *ts)
 	}
 
 	return contact_count;
+}
+
+static bool
+g6ts_transition_current_passes(const struct g6ts_transition_rule *rule,
+			       u8 candidate,
+			       const s64 scores[G6TS_CLASS_COUNT])
+{
+	s64 selected = scores[candidate];
+	unsigned int class;
+
+	for (class = 0; class < G6TS_CLASS_COUNT; class++) {
+		s64 margin;
+
+		if (class == candidate)
+			continue;
+		margin = (s64)rule->current_margins[class] *
+			 (1LL << G6TS_WINDOWS_SCORE_SHIFT);
+		if (selected - scores[class] < margin)
+			return false;
+	}
+	return selected >= (s64)rule->absolute_minimum *
+			   (1LL << G6TS_WINDOWS_SCORE_SHIFT);
+}
+
+static bool
+g6ts_transition_history_passes(const struct g6ts_track *track,
+			       const struct g6ts_transition_rule *rule,
+			       u8 candidate)
+{
+	unsigned int sample, class;
+
+	if (rule->history_depth > G6TS_WINDOWS_HISTORY_CAPACITY ||
+	    track->score_history_count < rule->history_depth)
+		return false;
+	for (sample = 0; sample < rule->history_depth; sample++) {
+		s64 selected = track->score_history_q24[sample][candidate];
+
+		for (class = 0; class < G6TS_CLASS_COUNT; class++) {
+			s64 margin;
+
+			if (class == candidate)
+				continue;
+			margin = (s64)rule->history_margins[class] *
+				 (1LL << G6TS_WINDOWS_SCORE_SHIFT);
+			if (selected - track->score_history_q24[sample][class] <
+			    margin)
+				return false;
+		}
+		if (selected < (s64)rule->absolute_minimum *
+			       (1LL << G6TS_WINDOWS_SCORE_SHIFT))
+			return false;
+	}
+	return true;
+}
+
+/*
+ * Bounded ordinary-finger subset of FUN_180041150.  Context bias, the
+ * candidate +0x4d/+0x4e score-three producer, and the later output override
+ * remain outside this opt-in path until their live provider fields exist.
+ */
+static void g6ts_windows_update_class(struct g6ts_track *track,
+				      const struct g6ts_contact *contact)
+{
+	const struct g6ts_transition_rule *rule;
+	unsigned int sample, class;
+	u8 candidate = 0;
+	bool accepted = false;
+
+	for (sample = min_t(unsigned int, track->score_history_count,
+			    G6TS_WINDOWS_HISTORY_CAPACITY - 1);
+	     sample > 0; sample--)
+		memcpy(track->score_history_q24[sample],
+		       track->score_history_q24[sample - 1],
+		       sizeof(track->score_history_q24[sample]));
+	memcpy(track->score_history_q24[0], contact->scores_q24,
+	       sizeof(track->score_history_q24[0]));
+	if (track->score_history_count < G6TS_WINDOWS_HISTORY_CAPACITY)
+		track->score_history_count++;
+
+	for (class = 1; class < G6TS_CLASS_COUNT; class++) {
+		if (contact->scores_q24[candidate] < contact->scores_q24[class])
+			candidate = class;
+	}
+	if (track->windows_class == candidate) {
+		accepted = true;
+	} else {
+		rule = &g6ts_transition_rules[track->windows_class *
+					      G6TS_CLASS_COUNT + candidate];
+		if (track->age == 1 || track->age <= rule->initial_age_limit)
+			accepted = g6ts_transition_current_passes(rule, candidate,
+								  contact->scores_q24);
+		if (!accepted && track->age > 1)
+			accepted = g6ts_transition_history_passes(track, rule,
+								  candidate);
+		if (accepted &&
+		    (contact->pixels < g6ts_class_point_minimums[candidate] ||
+		     contact->pixels > g6ts_class_point_maximums[candidate]))
+			accepted = false;
+	}
+	if (accepted)
+		track->windows_class = candidate;
+	track->confirmed = track->windows_class == 0 ||
+			   track->windows_class == 2;
+}
+
+static u16 g6ts_windows_assignment_coordinate(u32 position_q24, u32 scale_q24)
+{
+	u64 scaled = (u64)position_q24 * scale_q24;
+
+	return min_t(u64, (scaled + BIT_ULL(47)) >> 48, S16_MAX);
 }
 
 static u16 g6ts_filter_coordinate(u16 previous, u16 sample)
@@ -954,6 +1095,33 @@ static u16 g6ts_filter_coordinate(u16 previous, u16 sample)
 static unsigned int g6ts_track_distance(const struct g6ts_track *track,
 					const struct g6ts_contact *contact)
 {
+	if (g6ts_windows_orchestrator) {
+		const u32 x_scale = G6TS_WINDOWS_ASSIGN_X_SCALE_Q24;
+		const u32 y_scale = G6TS_WINDOWS_ASSIGN_Y_SCALE_Q24;
+		s64 predicted_x = clamp_t(s64,
+			(s64)track->sensor_x_q24 + track->sensor_velocity_x_q24,
+			0, (s64)(G6TS_HEAT_COLS - 1) << 24);
+		s64 predicted_y = clamp_t(s64,
+			(s64)track->sensor_y_q24 + track->sensor_velocity_y_q24,
+			0, (s64)(G6TS_HEAT_ROWS - 1) << 24);
+		s32 track_x = g6ts_windows_assignment_coordinate(predicted_x,
+							      x_scale);
+		s32 track_y = g6ts_windows_assignment_coordinate(predicted_y,
+							      y_scale);
+		s32 candidate_x = g6ts_windows_assignment_coordinate(contact->sensor_x_q24,
+								  x_scale);
+		s32 candidate_y = g6ts_windows_assignment_coordinate(contact->sensor_y_q24,
+								  y_scale);
+		s32 dx = track_x - candidate_x;
+		s32 dy = track_y - candidate_y;
+		u32 squared = dx * dx + dy * dy;
+
+		if (squared >= G6TS_WINDOWS_ASSIGN_RADIUS *
+			       G6TS_WINDOWS_ASSIGN_RADIUS)
+			return G6TS_ASSIGN_INVALID_COST;
+		return squared;
+	}
+
 	s32 predicted_x = clamp_t(s32, (s32)track->raw_x + track->velocity_x,
 				    0, G6TS_LOGICAL_MAX);
 	s32 predicted_y = clamp_t(s32, (s32)track->raw_y + track->velocity_y,
@@ -1107,7 +1275,9 @@ static void g6ts_assign_tracks(struct g6ts *ts, unsigned int count,
 		row = work->p[j] - 1;
 		col = j - 1;
 		if (row < active_count && col < count &&
-		    work->cost[row][col] <= G6TS_TRACK_MATCH_MAX)
+		    work->cost[row][col] < G6TS_ASSIGN_INVALID_COST &&
+		    (g6ts_windows_orchestrator ||
+		     work->cost[row][col] <= G6TS_TRACK_MATCH_MAX))
 			contact_slots[col] = work->active_slots[row];
 	}
 }
@@ -1117,19 +1287,37 @@ static void g6ts_update_track(struct g6ts_track *track,
 {
 	u16 old_x = track->raw_x;
 	u16 old_y = track->raw_y;
+	u32 old_sensor_x_q24 = track->sensor_x_q24;
+	u32 old_sensor_y_q24 = track->sensor_y_q24;
 
 	track->raw_x = contact->x;
 	track->raw_y = contact->y;
 	track->velocity_x = (s32)contact->x - old_x;
 	track->velocity_y = (s32)contact->y - old_y;
-	track->output_x = g6ts_filter_coordinate(track->output_x, contact->x);
-	track->output_y = g6ts_filter_coordinate(track->output_y, contact->y);
+	track->sensor_x_q24 = contact->sensor_x_q24;
+	track->sensor_y_q24 = contact->sensor_y_q24;
+	track->sensor_velocity_x_q24 = (s32)((s64)contact->sensor_x_q24 -
+						 old_sensor_x_q24);
+	track->sensor_velocity_y_q24 = (s32)((s64)contact->sensor_y_q24 -
+						 old_sensor_y_q24);
+	if (g6ts_windows_orchestrator) {
+		/* FUN_18004a330 stores X/Y directly; its alpha blends another scalar. */
+		track->output_x = contact->x;
+		track->output_y = contact->y;
+	} else {
+		track->output_x = g6ts_filter_coordinate(track->output_x,
+							 contact->x);
+		track->output_y = g6ts_filter_coordinate(track->output_y,
+							 contact->y);
+	}
 	track->strength = contact->strength;
 	track->pixels = contact->pixels;
 	track->shape_class = contact->shape_class;
 	if (track->age < U16_MAX)
 		track->age++;
-	if (!track->confirmed && contact->shape_allowed &&
+	if (g6ts_windows_orchestrator) {
+		g6ts_windows_update_class(track, contact);
+	} else if (!track->confirmed && contact->shape_allowed &&
 	    track->evidence < U8_MAX) {
 		track->evidence++;
 		if (track->evidence >= track->required_evidence)
@@ -1153,18 +1341,87 @@ static int g6ts_new_track(struct g6ts *ts,
 		track->raw_y = contact->y;
 		track->output_x = contact->x;
 		track->output_y = contact->y;
+		track->sensor_x_q24 = contact->sensor_x_q24;
+		track->sensor_y_q24 = contact->sensor_y_q24;
 		track->strength = contact->strength;
 		track->pixels = contact->pixels;
 		track->shape_class = contact->shape_class;
 		track->age = 1;
-		track->evidence = contact->shape_allowed ? 1 : 0;
-		track->required_evidence =
-			g6ts_confirmation_requirement(ts, contact);
-		track->confirmed = track->required_evidence <= 1;
+		if (g6ts_windows_orchestrator) {
+			track->windows_class = G6TS_WINDOWS_UNCLASSIFIED;
+			g6ts_windows_update_class(track, contact);
+		} else {
+			track->evidence = contact->shape_allowed ? 1 : 0;
+			track->required_evidence =
+				g6ts_confirmation_requirement(ts, contact);
+			track->confirmed = track->required_evidence <= 1;
+		}
 		track->active = true;
 		return slot;
 	}
 	return -ENOSPC;
+}
+
+static void g6ts_advance_unmatched_tracks(struct g6ts *ts,
+					  unsigned long current_slots)
+{
+	unsigned int i;
+
+	for (i = 0; i < G6TS_MAX_CONTACTS; i++) {
+		struct g6ts_track *track = &ts->tracks[i];
+
+		if (!track->active || (current_slots & BIT(i)))
+			continue;
+		if (track->missed < G6TS_CONTACT_HOLD_FRAMES) {
+			track->missed++;
+			track->velocity_x /= 2;
+			track->velocity_y /= 2;
+			track->sensor_velocity_x_q24 /= 2;
+			track->sensor_velocity_y_q24 /= 2;
+		} else {
+			memset(track, 0, sizeof(*track));
+		}
+	}
+}
+
+static unsigned long
+g6ts_create_unmatched_tracks(struct g6ts *ts, unsigned int count,
+			     const int contact_slots[G6TS_MAX_CONTACTS],
+			     unsigned long current_slots)
+{
+	unsigned int i;
+
+	for (i = 0; i < count; i++) {
+		int slot;
+
+		if (contact_slots[i] >= 0)
+			continue;
+		slot = g6ts_new_track(ts, &ts->contacts[i]);
+		if (slot >= 0)
+			current_slots |= BIT(slot);
+	}
+	return current_slots;
+}
+
+static void g6ts_collect_linux_contacts(struct g6ts *ts,
+					unsigned long current_slots)
+{
+	unsigned int i;
+
+	for (i = 0; i < G6TS_MAX_CONTACTS; i++) {
+		struct g6ts_track *track = &ts->tracks[i];
+
+		/* Retained tracks remain assignable but never become ghost contacts. */
+		if (!track->active || !track->confirmed ||
+		    !(current_slots & BIT(i)))
+			continue;
+		input_mt_slot(ts->input, i);
+		input_mt_report_slot_state(ts->input, MT_TOOL_FINGER, true);
+		touchscreen_report_pos(ts->input, &ts->prop, track->output_x,
+				       track->output_y, true);
+	}
+	input_mt_sync_frame(ts->input);
+	input_sync(ts->input);
 }
 
 static int g6ts_report_heat_contacts(struct g6ts *ts, const u8 *content,
@@ -1189,48 +1446,16 @@ static int g6ts_report_heat_contacts(struct g6ts *ts, const u8 *content,
 		g6ts_update_track(&ts->tracks[slot], &ts->contacts[i]);
 		current_slots |= BIT(slot);
 	}
-	/* Age unmatched old tracks before allocating unmatched new blobs. */
-	for (i = 0; i < G6TS_MAX_CONTACTS; i++) {
-		struct g6ts_track *track = &ts->tracks[i];
 
-		if (!track->active || (current_slots & BIT(i)))
-			continue;
-		if (track->missed < G6TS_CONTACT_HOLD_FRAMES) {
-			track->missed++;
-			track->velocity_x /= 2;
-			track->velocity_y /= 2;
-		} else {
-			memset(track, 0, sizeof(*track));
-		}
-	}
-	for (i = 0; i < count; i++) {
-		int slot;
-
-		if (contact_slots[i] >= 0)
-			continue;
-		slot = g6ts_new_track(ts, &ts->contacts[i]);
-		if (slot < 0)
-			continue;
-		current_slots |= BIT(slot);
-	}
-	for (i = 0; i < G6TS_MAX_CONTACTS; i++) {
-		struct g6ts_track *track = &ts->tracks[i];
-
-		/*
-		 * Keep unmatched tracks briefly for reassociation, but never report
-		 * them as contacts.  Reporting a retained track alongside a newly
-		 * detected blob creates a synthetic second touch at the old position.
-		 */
-		if (!track->active || !track->confirmed ||
-		    !(current_slots & BIT(i)))
-			continue;
-		input_mt_slot(ts->input, i);
-		input_mt_report_slot_state(ts->input, MT_TOOL_FINGER, true);
-		touchscreen_report_pos(ts->input, &ts->prop, track->output_x,
-				       track->output_y, true);
-	}
-	input_mt_sync_frame(ts->input);
-	input_sync(ts->input);
+	/*
+	 * The frame transaction is deliberately explicit and single-threaded:
+	 * assignment -> matched updates -> unmatched lifecycle -> new tracks ->
+	 * final Linux collection.  No input event escapes an intermediate stage.
+	 */
+	g6ts_advance_unmatched_tracks(ts, current_slots);
+	current_slots = g6ts_create_unmatched_tracks(ts, count, contact_slots,
+						     current_slots);
+	g6ts_collect_linux_contacts(ts, current_slots);
 
 	return 0;
 }

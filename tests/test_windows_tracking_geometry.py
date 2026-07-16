@@ -21,6 +21,7 @@ from tools.windows_tracking_geometry import (
     blend_track_scalar,
     candidate_edge_flags,
     expanded_edge_centroid,
+    kernel_q24_assignment_coordinate,
     merge_nearby_output_contacts,
     select_expanded_centroid_baseline,
     snap_far_edge_centroid,
@@ -54,6 +55,21 @@ class WindowsTrackingGeometryTests(unittest.TestCase):
             AssignmentScaleInputs(27189, 18053, 68, 46, 0, 0, 0),
         )
         self.assertEqual(inputs.scales(), (4.0580596923828125, 4.011777877807617))
+
+    def test_kernel_q24_assignment_matches_recovered_float_quantization(self):
+        scales = (4.0580596923828125, 4.011777877807617)
+        maxima = (67, 45)
+        for scale, maximum in zip(scales, maxima, strict=True):
+            for strength in range(1, 65):
+                for weighted in range(0, maximum * strength + 1, 3):
+                    self.assertEqual(
+                        kernel_q24_assignment_coordinate(
+                            weighted, strength, scale
+                        ),
+                        assignment_coordinate(weighted / strength, scale),
+                    )
+        with self.assertRaisesRegex(ValueError, "strength"):
+            kernel_q24_assignment_coordinate(1, 0, scales[0])
 
     def test_candidate_edge_flags_distinguish_edge_corner_and_margin(self):
         interior = candidate_edge_flags(
