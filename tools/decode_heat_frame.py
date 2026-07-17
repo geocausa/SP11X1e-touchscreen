@@ -37,6 +37,9 @@ WINDOWS_SECONDARY_FLOOR = 0.05000000074505806
 WINDOWS_SECONDARY_NOISE = 0.019999999552965164
 WINDOWS_SECONDARY_SEED = 0.054999999701976776
 WINDOWS_SECONDARY_FRACTIONS = (0.5, 0.75, 0.875)
+WINDOWS_LOCAL_PEAK_EPSILON = 0.00009999999747378752
+WINDOWS_LOCAL_PEAK_FLOOR = 0.03999999910593033
+WINDOWS_LOCAL_PEAK_CAPACITY = 10
 WINDOWS_HALO_PEAK_FRACTION = 0.25
 WINDOWS_HALO_RING_RATIOS = (0.15000000596046448, 0.15000000596046448)
 WINDOWS_HALO_EPSILON = 0.00009999999747378752
@@ -518,6 +521,51 @@ def secondary_detector_features(
         results.extend((len(islands), max(map(len, islands), default=0)))
 
     return tuple(results)  # type: ignore[return-value]
+
+
+def local_peak_counts(
+    grid: bytes, component: dict[str, object]
+) -> tuple[int, int]:
+    """Mirror candidate ``+0x4d/+0x4e`` from FUN_180040438/180041fd8.
+
+    Windows scans the component in row-major order. A sample is a local peak
+    when all four neighbours are lower, or when exactly three are lower and
+    the remaining near-equal neighbour loses the signal/linear-index tie.
+    Candidate ``+0x4d`` is capped at ten peaks. Candidate ``+0x4e`` counts the
+    retained peaks whose signal is strictly greater than 0.04.
+    """
+    peaks: list[int] = []
+    for index in sorted(component["pixel_indices"]):
+        row, col = divmod(index, GRID_COLS)
+        current = windows_signal(grid[index])
+        lower = 0
+        near_equal: list[tuple[float, int]] = []
+        for dr, dc in ((0, -1), (0, 1), (-1, 0), (1, 0)):
+            nr, nc = row + dr, col + dc
+            if 0 <= nr < GRID_ROWS and 0 <= nc < GRID_COLS:
+                neighbour_index = nr * GRID_COLS + nc
+                neighbour = windows_signal(grid[neighbour_index])
+            else:
+                neighbour_index = -1
+                neighbour = 0.0
+            if neighbour + WINDOWS_LOCAL_PEAK_EPSILON < current:
+                lower += 1
+            elif abs(current - neighbour) < WINDOWS_LOCAL_PEAK_EPSILON:
+                near_equal.append((neighbour, neighbour_index))
+
+        selected = lower == 4
+        if lower == 3 and len(near_equal) == 1:
+            neighbour, neighbour_index = near_equal[0]
+            selected = neighbour < current or (
+                neighbour == current and index < neighbour_index
+            )
+        if selected and len(peaks) < WINDOWS_LOCAL_PEAK_CAPACITY:
+            peaks.append(index)
+
+    strong = sum(
+        windows_signal(grid[index]) > WINDOWS_LOCAL_PEAK_FLOOR for index in peaks
+    )
+    return len(peaks), strong
 
 
 def halo_ratio(grid: bytes, component: dict[str, object]) -> float:

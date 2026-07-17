@@ -131,10 +131,55 @@ deployed yet; kernel replacement remains deferred until the remaining
 context/region flag provenance and special/release output branches are proven. See
 [docs/PHASE69_WINDOWS_PROCESSING_PARITY.md](docs/PHASE69_WINDOWS_PROCESSING_PARITY.md).
 
-It is not yet ready for a mainline submission. Labelled palm and physical-edge
-captures, measured edge calibration, pressure, merged-contact separation,
-suspend/resume hardware validation, and broader kernel compatibility remain
-open. Pen support is deliberately out of scope.
+Phase 70 bakes the bounded geometry and base transition result into an opt-in
+kernel frame profile. The client retains sensor-space centroids, uses the
+recovered per-axis quantization and strict radius-five global assignment,
+stores ten score vectors, applies all 20 base transition records, and directly
+publishes matched X/Y without the Linux-only smoothing stage. Its load-time
+switch is read-only and defaults off; the known-good Phase 68 behavior remains
+the module default because later Windows lifecycle branches still require
+provider-owned frame/context values not present in raw Heat reports. See
+[docs/PHASE70_KERNEL_FRAME_ORCHESTRATOR.md](docs/PHASE70_KERNEL_FRAME_ORCHESTRATOR.md).
+
+The first Phase 70 boot kept the panel, DMA transport, detector, and
+multi-candidate extraction healthy but emitted no Linux contacts. Phase 71
+uses live score vectors and Ghidra to close the cause: it ports the exact
+`+0x4d/+0x4e` local-maximum producers and applies the recovered class-three
+50/20 score adjustment before lifecycle admission. The corpus now computes
+these fields directly with zero fixed-point or assignment mismatch. Phase 71
+remains an isolated one-shot hardware experiment; see
+[docs/PHASE71_SCORE3_PRODUCER.md](docs/PHASE71_SCORE3_PRODUCER.md).
+
+Phase 72 closes the frequent class-3 panel-reset regression that Phases 66-68
+narrowed but could not resolve. A live KDNET session against the shipping
+Windows stack (Surface Pro 11, build 26100, resolved `hidspi.sys` PDB symbols)
+proved that the mode-config feature payload was truncated: the kernel read the
+panel's `GET_FEATURE 0x70` response and discarded it, sending
+`SET_FEATURE 0x70 = {0x01}`, whereas Windows echoes the panel's own config back
+as `{0x01,<config>}` and emits an `OUTPUT_REPORT 0x09`. The under-configured
+panel watchdog-reset after roughly 300 ms of streaming, and because init and
+recovery share the sequence, each recovery re-installed the broken mode and the
+resets cascaded. Report `0x09`, abandoned in Phase 66-67 as unsupported, is in
+fact required. The fix captures the panel's `GET_FEATURE 0x70` config tail and
+echoes it back in `SET_FEATURE 0x70`, then emits the `0x09` report, gated by
+`g6ts_biosref.mode_config_fix` (default on) with a fall back to the Phase 68
+`{0x01}` payload if the panel returns no config. On the target the panel's
+`GET_FEATURE 0x70` returns a single byte `0x02`; echoing `{0x01,0x02}` produced
+zero panel resets over a roughly six-hour session including deliberate stress,
+against a prior baseline of one reset every 2-7 seconds under sustained touch.
+The reset storm is eliminated. The change is preserved in its own
+`sp11-phase72` GRUB entry; Phase 68 and the safe baseline remain available for
+rollback. See
+[docs/PHASE72_LIVE_KDNET_ROOT_CAUSE.md](docs/PHASE72_LIVE_KDNET_ROOT_CAUSE.md).
+
+With Phase 72 the driver now delivers stable multi-touch: the long-standing
+class-3 panel-reset storm is eliminated and the touchscreen survives sustained
+stress without watchdog resets. It is still not ready for a mainline submission.
+Labelled palm and physical-edge captures, measured edge calibration, pressure,
+merged-contact separation, suspend/resume hardware validation, and broader
+kernel compatibility remain open. The Phase 72 fix has been validated over a
+single multi-hour session and should accrue longer soak time before promotion
+to the default boot entry. Pen support is deliberately out of scope.
 
 ## Repository layout
 
@@ -166,14 +211,24 @@ docs/PHASE66_WINDOWS_RECOVERY.md
 docs/PHASE67_STATIC_AUDIT.md
 docs/PHASE68_PROVEN_RECOVERY.md
 docs/PHASE69_WINDOWS_PROCESSING_PARITY.md
+docs/PHASE70_KERNEL_FRAME_ORCHESTRATOR.md
+docs/PHASE71_SCORE3_PRODUCER.md
+docs/PHASE72_LIVE_KDNET_ROOT_CAUSE.md
 phase55/
 tools/analyze_spb_etw_csv.py
 tools/decode_heat_frame.py
 tools/extract_windows_classifier.py
 tools/extract_windows_lifecycle.py
+tools/generate_lifecycle_header.py
 tools/windows_tracking_geometry.py
 tools/regress_heat_frames.py
 tools/track_heat_contacts.py
+scripts/deploy_phase70.sh
+scripts/deploy_phase71.sh
+scripts/deploy_phase72.sh
+boot/57_sp11_711_phase70_orchestrator
+boot/58_sp11_711_phase71_score3
+boot/59_sp11_711_phase72_config
 tests/test_heat_decoder.py
 tests/test_contact_tracker.py
 tests/test_windows_classifier.py

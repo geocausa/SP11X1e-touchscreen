@@ -55,6 +55,8 @@ experimental kernel `7.1.1-sp11-gpicmp1+`.
 - `modules/gpi.c`: matched QSPI/GPI DMA engine.
 - `modules/spi-geni-qcom.c`: matched GENI QSPI controller.
 - `modules/g6ts_biosref.c`: HID-over-SPI client and heatmap contact tracker.
+- `modules/g6ts_lifecycle_profile.h`: generated Phase 70 project profile used
+  only when `g6ts_biosref.windows_orchestrator=1` is selected at load time.
 - `dts/x1-microsoft-denali.dtsi`: exact tested Surface device-tree source.
 - `../tools/decode_heat_frame.py`: offline report-`0x12` decoder.
 - `../docs/PHASE59_NSR_METADATA.md`: exact section-`0xff00` type-`0x04` format,
@@ -89,10 +91,12 @@ UEFI/PRE-OS FIFO transport. Keep a separate known-good kernel/GRUB entry.
 
 ## Known limitations
 
-- Candidate extraction and the core predicted assignment structure are ported
-  from `TouchPenProcessor0C83.dll`. The later four-score shape classifier's
-  architecture and tables are located, but its class labels and temporal
-  transitions are not yet proven well enough to filter live contacts.
+- Candidate extraction, fixed-point classification, and the core global
+  assignment structure are ported from the bounded processor analysis. Phase
+  70 adds an opt-in sensor-space assignment and base 20-transition profile,
+  but later lifecycle branches still require live provider-owned context and
+  component fields. The hardware-proven Phase 68 policy therefore remains the
+  default.
 - Pen support is deliberately out of scope; the driver is finger-only.
 - Pressure, contact shape, and merged-finger separation are not implemented.
 - Heat-byte calibration remains identity and edge calibration remains at the

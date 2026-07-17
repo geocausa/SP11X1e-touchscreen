@@ -25,6 +25,7 @@ from tools.decode_heat_frame import (
     extract_context_sources,
     extract_nsr_bins,
     extract_report,
+    local_peak_counts,
     modal_baseline,
     parse_sections,
     parse_metadata_records,
@@ -264,6 +265,27 @@ class HeatDecoderTests(unittest.TestCase):
             secondary_detector_features(grid, component),
             (1, 3, 1, 3, 1, 3),
         )
+
+    def test_windows_local_peak_producer_counts_single_and_plateau_peaks(self):
+        single = make_grid(
+            [(10, 10, 120), (10, 11, 140), (11, 10, 140)], baseline=180
+        )
+        component = connected_components(single, 180)[0]
+        self.assertEqual(local_peak_counts(single, component), (1, 1))
+
+        plateau = make_grid(
+            [(20, 20, 120), (20, 21, 120), (20, 22, 150)], baseline=180
+        )
+        component = connected_components(plateau, 180)[0]
+        # The lower row-major index wins the exact-signal tie.
+        self.assertEqual(local_peak_counts(plateau, component), (1, 1))
+
+    def test_windows_local_peak_floor_is_strict(self):
+        weak = make_grid(
+            [(30, 30, 163), (30, 31, 170), (31, 30, 170)], baseline=180
+        )
+        component = connected_components(weak, 180)[0]
+        self.assertEqual(local_peak_counts(weak, component), (1, 0))
 
     def test_windows_halo_walk_accumulates_falling_outer_energy(self):
         values = [80, 100, 120, 140, 160]
