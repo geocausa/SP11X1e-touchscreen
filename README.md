@@ -181,6 +181,22 @@ kernel compatibility remain open. The Phase 72 fix has been validated over a
 single multi-hour session and should accrue longer soak time before promotion
 to the default boot entry. Pen support is deliberately out of scope.
 
+Phase 73 re-homes the full QSPI/GPI-DMA multi-touch stack and the Phase 72 fix
+onto the `7.1.3` baseline kernel, retiring the `7.1.1` `sp11-gpicmp1+` lab
+kernel as the working target. All three custom modules (client,
+`spi-geni-qcom`, `gpi`) rebuild cleanly against `7.1.3` despite ~20-25% upstream
+drift in the base controller sources. The baseline device tree carried the touch
+node but was authored for FIFO and omitted the GPI-DMA channel wiring, which
+caused the first DMA boot to time out at stage 1; adding `qcom,enable-gsi-dma`,
+`dmas`, and `dma-names` to the `spi@a88000` node (matching the lab DTB) resolved
+it. On `7.1.3-sp11-baseline1+` with the DMA device tree live, touch initialized
+over GPI-DMA with no timeout, the Phase 72 mode-config fix fired, and the panel
+initialized with zero resets. This is the furthest the project has reached: a
+working DMA multi-touch touchscreen on the intended baseline kernel. It is not
+full Windows parity and needs longer soak time before default promotion. See
+[docs/PHASE73_BASELINE_DMA.md](docs/PHASE73_BASELINE_DMA.md) and
+[dts/PHASE73_BASELINE_DMA_DTB.patch.md](dts/PHASE73_BASELINE_DMA_DTB.patch.md).
+
 ## Repository layout
 
 ```text
@@ -214,6 +230,7 @@ docs/PHASE69_WINDOWS_PROCESSING_PARITY.md
 docs/PHASE70_KERNEL_FRAME_ORCHESTRATOR.md
 docs/PHASE71_SCORE3_PRODUCER.md
 docs/PHASE72_LIVE_KDNET_ROOT_CAUSE.md
+docs/PHASE73_BASELINE_DMA.md
 phase55/
 tools/analyze_spb_etw_csv.py
 tools/decode_heat_frame.py
@@ -226,9 +243,11 @@ tools/track_heat_contacts.py
 scripts/deploy_phase70.sh
 scripts/deploy_phase71.sh
 scripts/deploy_phase72.sh
+scripts/deploy_phase73_dma.sh
 boot/57_sp11_711_phase70_orchestrator
 boot/58_sp11_711_phase71_score3
 boot/59_sp11_711_phase72_config
+boot/60_sp11_713_phase73_dma
 tests/test_heat_decoder.py
 tests/test_contact_tracker.py
 tests/test_windows_classifier.py
