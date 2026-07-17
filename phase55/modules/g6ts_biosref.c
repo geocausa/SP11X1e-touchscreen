@@ -95,6 +95,18 @@ module_param_named(windows_orchestrator, g6ts_windows_orchestrator, bool, 0444);
 MODULE_PARM_DESC(windows_orchestrator,
 		 "Use the experimental recovered Windows frame profile (default: false)");
 
+/*
+ * Phase 72 live-KDNET fix: the Windows stack derives the mode-config tail from
+ * the GET_FEATURE 0x70 response and echoes it back in SET_FEATURE 0x05/0x70 as
+ * {0x01,<config>}; we previously sent only {0x01} and dropped <config>, leaving
+ * the panel under-configured so it watchdog-resets after ~300 ms of streaming.
+ * Opt-in until validated on an isolated boot entry.
+ */
+static bool g6ts_mode_config_fix = true;
+module_param_named(mode_config_fix, g6ts_mode_config_fix, bool, 0444);
+MODULE_PARM_DESC(mode_config_fix,
+		 "Echo GET_FEATURE 0x70 config into SET_FEATURE 0x05/0x70 (default: true)");
+
 static const u8 g6ts_header_cmd[8] = {
 	0xeb, 0x00, 0x10, 0x00, 0xff, 0xff, 0xff, 0xff,
 };
@@ -207,6 +219,10 @@ struct g6ts {
 	u16 last_content_len;
 	u16 expected_report_descriptor_len;
 	u8 last_content_id;
+	/* Phase 72: config tail captured from GET_FEATURE 0x70, echoed into SETs. */
+	u8 mode_config[G6TS_FEATURE_RESPONSE_LIMIT];
+	u8 mode_config_len;
+	bool mode_config_valid;
 	int interrupt_irq;
 	atomic64_t interrupt_edges;
 	s64 handled_interrupt_edges;
@@ -1866,22 +1882,85 @@ static int g6ts_full_reinitialize_locked(struct g6ts *ts)
 		goto out;
 
 	ts->initialization_stage = 5;
+	ts->mode_config_valid = false;
+	ts->mode_config_len = 0;
 	ret = g6ts_dma_feature_exchange(ts, GET_FEATURE, 0x70, NULL, 0);
 	if (ret)
 		goto out;
 	ret = g6ts_expect_response(ts, GET_FEATURE_RESPONSE, 0x70, 1);
 	if (ret)
 		goto out;
+	/*
+	 * Phase 72: capture the panel's GET_FEATURE 0x70 config tail NOW, before any
+	 * further response can overwrite ts->body. The Windows stack echoes these
+	 * bytes back in SET_FEATURE 0x05/0x70 as {0x01,<config>}; we previously sent
+	 * only {0x01}. ts->body layout: [0]=class [1..2]=len [3]=id [4..]=content.
+	 */
+	if (g6ts_mode_config_fix) {
+		size_t cfg_len = ts->last_content_len;
+
+		if (cfg_len > sizeof(ts->mode_config))
+			cfg_len = sizeof(ts->mode_config);
+		memcpy(ts->mode_config,
+		       ts->body + HIDSPI_INPUT_BODY_HEADER_SIZE, cfg_len);
+		ts->mode_config_len = cfg_len;
+		ts->mode_config_valid = cfg_len > 0;
+		dev_info(&ts->spi->dev,
+			 "phase72: GET_FEATURE 0x70 config len=%zu bytes=%*ph\n",
+			 cfg_len, (int)cfg_len, ts->mode_config);
+	}
 
 	ts->initialization_stage = 6;
-	ret = g6ts_dma_feature_exchange(ts, SET_FEATURE, 0x70,
-					g6ts_mode_enable,
-					sizeof(g6ts_mode_enable));
+	if (g6ts_mode_config_fix && ts->mode_config_valid) {
+		/*
+		 * Phase 72: SET_FEATURE 0x70 = {0x01, <config-from-GET>}, mirroring the
+		 * Windows stack. mode_setup[] is 0x01 followed by the panel's own
+		 * GET_FEATURE 0x70 config bytes.
+		 */
+		u8 mode_setup[1 + sizeof(ts->mode_config)];
+		size_t setup_len = 1 + ts->mode_config_len;
+
+		mode_setup[0] = 0x01;
+		memcpy(&mode_setup[1], ts->mode_config, ts->mode_config_len);
+		dev_info(&ts->spi->dev,
+			 "phase72: SET_FEATURE 0x70 derived len=%zu bytes=%*ph\n",
+			 setup_len, (int)setup_len, mode_setup);
+		ret = g6ts_dma_feature_exchange(ts, SET_FEATURE, 0x70,
+						mode_setup, setup_len);
+	} else {
+		ret = g6ts_dma_feature_exchange(ts, SET_FEATURE, 0x70,
+						g6ts_mode_enable,
+						sizeof(g6ts_mode_enable));
+	}
 	if (ret)
 		goto out;
 	ret = g6ts_expect_response(ts, SET_FEATURE_RESPONSE, 0x70, 0);
 	if (ret)
 		goto out;
+
+	/*
+	 * Phase 72: emit the OUTPUT_REPORT 0x09 mode/config report(s) the Windows
+	 * stack sends around the 0x70 write (report_type 5 = OUTPUT_REPORT). Payload
+	 * is 0x8e followed by the same config tail. This is best-effort: the panel
+	 * acks 0x09 as an OUTPUT_REPORT_RESPONSE which the read path already skips,
+	 * so a missing/late ack does not abort init.
+	 */
+	if (g6ts_mode_config_fix && ts->mode_config_valid) {
+		u8 report09[1 + sizeof(ts->mode_config)];
+		size_t report_len = 1 + ts->mode_config_len;
+
+		report09[0] = 0x8e;
+		memcpy(&report09[1], ts->mode_config, ts->mode_config_len);
+		dev_info(&ts->spi->dev,
+			 "phase72: OUTPUT_REPORT 0x09 len=%zu bytes=%*ph\n",
+			 report_len, (int)report_len, report09);
+		ret = g6ts_dma_hidspi_output(ts, OUTPUT_REPORT, 0x09,
+					     report09, report_len);
+		if (ret) {
+			ts->fatal_transport_error = true;
+			goto out;
+		}
+	}
 
 	ts->initialization_stage = 7;
 	ret = g6ts_dma_feature_exchange(ts, SET_FEATURE, 0x56,
