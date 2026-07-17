@@ -145,3 +145,29 @@ C:\Users\SurfacePro7\Documents\KDNET\). Windows target observed read-only via
 debugger; nothing written to the target. No change yet to this tree or the Linux
 device. Desktop working notes: SP11_DRIVER_DISCREPANCY_AUDIT.md,
 SP11_WINDOWS_RECOVERY_DISSECTION.md, SP11_DEFINITIVE_FINDINGS.md.
+
+## VALIDATION RESULT (2026-07-17, on-device)
+
+Deployed the mode_config_fix on the isolated sp11-phase72 GRUB entry
+(g6ts_biosref.mode_config_fix=1), known-good phase68 untouched.
+
+Boot log:
+  phase72: GET_FEATURE 0x70 config len=1 bytes=02
+  phase72: SET_FEATURE 0x70 derived len=2 bytes=01 02
+  phase72: OUTPUT_REPORT 0x09 len=2 bytes=8e 02
+  touch controller initialized recoveries=1 resets=0   (1 = normal boot init)
+
+Outcome after ~5h50m uptime including deliberate stress/crash attempts:
+  panel resets = 0.
+
+Baseline before the fix: a reset every 2-7s under sustained touch (dozens/min).
+At that rate ~5h50m would have logged thousands of resets. Observed: zero.
+=> The reset storm is eliminated.
+
+Note on the config bytes: the Linux panel's GET_FEATURE 0x70 returns a single
+byte 0x02 (not the a1 01 00 90 01 seen on the Windows target, whose panel was
+already in a richer configured state). What mattered was ECHOING the panel's own
+returned byte (send {0x01,0x02}) instead of the hardcoded {0x01}. The derive-and-
+echo approach is therefore the correct general fix even though the exact config
+byte differs from the Windows capture. Root-cause mechanism (truncated/wrong
+mode-config feature payload) confirmed.
