@@ -121,6 +121,14 @@ Heat frames and 784 accepted contact observations with zero Heat errors,
 panel resets, readiness failures, or recovery failures. The saved GRUB entry
 remained Phase 75 after the one-shot Phase 77 boot.
 
+The same boot was observed beyond the complete 10.507–400.701-second interval
+in which the bad Phase 76 boot had produced all three reset clusters. At
+418.34 seconds it had processed 6,984 Heat frames, accepted 5,153 contact
+observations, and emitted 5,021 contacts, still with zero Heat errors, panel
+resets, readiness failures, or recovery failures. This validates corrected
+cold startup and sustained input load; the panel-originated software recovery
+branch remains deliberately unclaimed until a real reset exercises it.
+
 The optional Clang cross-build cannot be used with this configured kernel
 tree because its saved GCC build flags include options unsupported by the
 installed Clang 21 driver. The failure occurs before source compilation; the
