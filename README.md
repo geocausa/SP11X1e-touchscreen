@@ -204,6 +204,10 @@ the historical `g6ts_biosref.ko` and `microsoft,mshw0485-biosref` identities.
 This prevents `modinfo`, module parameters, aliases, and initramfs contents from
 silently referring to different implementations under the same name. See
 [docs/PHASE75_DRIVER_IDENTITY.md](docs/PHASE75_DRIVER_IDENTITY.md).
+It has now booted successfully on the 7.1.3 baseline with the renamed client,
+explicit DMA device tree, zero panel resets, zero transport errors, and normal
+single- and multi-touch behaviour. Phase 75 is the saved default; Phase 73 and
+the FIFO baseline remain rollback entries.
 
 ## Repository layout
 

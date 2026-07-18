@@ -4,7 +4,8 @@ set -eu
 
 # Deploy the mechanically renamed Phase 73 DMA client into an isolated Phase
 # 75 initramfs. The root filesystem's legacy FIFO client and stock controller
-# modules are restored before exit. The saved GRUB default remains Phase 73.
+# modules are restored before exit. Deployment does not change the saved GRUB
+# default; promotion happens only after a successful hardware boot.
 
 release=7.1.3-sp11-baseline1+
 expected_vermagic="$release SMP preempt mod_unload modversions aarch64"
@@ -188,4 +189,4 @@ grub-reboot sp11-phase75-identity
 
 echo "installed isolated Phase 75 identity test: sp11-phase75-identity"
 echo "the EXIT trap restores the legacy FIFO and stock controller modules"
-echo "on the root filesystem; Phase 73 remains the saved default"
+echo "on the root filesystem; the saved GRUB default was not changed"
