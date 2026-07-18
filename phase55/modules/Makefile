@@ -1,5 +1,5 @@
 KDIR ?= /lib/modules/$(shell uname -r)/build
-EXPECTED_KERNEL_RELEASE ?= 7.1.1-sp11-gpicmp1+
+EXPECTED_KERNEL_RELEASE ?= 7.1.3-sp11-baseline1+
 TARGET_KERNEL_RELEASE := $(strip $(shell cat $(KDIR)/include/config/kernel.release 2>/dev/null))
 
 .PHONY: all clean verify-target
@@ -14,7 +14,7 @@ verify-target:
 	fi
 	@if [ "$(TARGET_KERNEL_RELEASE)" != "$(EXPECTED_KERNEL_RELEASE)" ] && \
 	   [ "$(ALLOW_UNTESTED_KERNEL)" != "1" ]; then \
-		echo "Refusing an unreviewed Phase 55 build for $(TARGET_KERNEL_RELEASE)" >&2; \
+		echo "Refusing an unreviewed MSHW0485 DMA build for $(TARGET_KERNEL_RELEASE)" >&2; \
 		echo "Expected $(EXPECTED_KERNEL_RELEASE). Rebase the matched sources first." >&2; \
 		echo "Use ALLOW_UNTESTED_KERNEL=1 only for an intentional porting build." >&2; \
 		exit 1; \

@@ -1,0 +1,16 @@
+/dts-v1/;
+/plugin/;
+
+/*
+ * Convert the exact 7.1.3 FIFO baseline DTB into the Phase 75 production DMA
+ * personality. Both labels are exported by that baseline's /__symbols__ node.
+ */
+&spi10 {
+	qcom,enable-gsi-dma;
+	dmas = <&gpi_dma1 0 2 4>, <&gpi_dma1 1 2 4>;
+	dma-names = "tx", "rx";
+};
+
+&{/soc@0/geniqup@ac0000/spi@a88000/touchscreen@0} {
+		compatible = "microsoft,mshw0485";
+};

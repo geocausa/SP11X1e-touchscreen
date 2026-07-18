@@ -39,10 +39,11 @@ components above 48 samples or spanning more than 12 rows or columns.
 ## Finger-only and power-management scope
 
 Pen extraction is deliberately not implemented. The Linux input device reports
-finger contacts only. The client also contains no suspend/resume callbacks:
-platform suspend is disabled on the tested machine because earlier system-level
-suspend attempts crashed the tablet. Automatic cold startup and bounded panel
-reset recovery remain fully enabled.
+finger contacts only. Phase 55 originally contained no suspend/resume
+callbacks; the current client has conventional callbacks, but platform suspend
+remains unvalidated because earlier system-level suspend attempts crashed the
+tablet. Automatic cold startup and bounded panel reset recovery remain fully
+enabled.
 
 The removed `dma_windows_output_sequence` experiment is not part of startup or
 recovery and is no longer exposed through sysfs. It previously reproduced an

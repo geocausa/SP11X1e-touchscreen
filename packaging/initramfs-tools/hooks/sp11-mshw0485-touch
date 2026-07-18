@@ -1,0 +1,26 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-2.0
+
+PREREQ=""
+
+prereqs()
+{
+	echo "$PREREQ"
+}
+
+case "$1" in
+prereqs)
+	prereqs
+	exit 0
+	;;
+esac
+
+# Provided by initramfs-tools on the target.
+# shellcheck disable=SC1091
+. /usr/share/initramfs-tools/hook-functions
+
+# Phase 75 has a unique client identity. Embed the complete matched transport
+# set and never rely on the root filesystem's legacy FIFO client.
+manual_add_modules mshw0485_touch
+manual_add_modules spi-geni-qcom
+manual_add_modules gpi

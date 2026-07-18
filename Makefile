@@ -1,8 +1,12 @@
 KDIR ?= /lib/modules/$(shell uname -r)/build
 
-.PHONY: all phase52 phase55 test clean clean-phase52 clean-phase55
+.PHONY: all production legacy-fifo phase52 phase55 test clean clean-phase52 clean-phase55
 
-all: phase52
+all: production
+
+production: phase55
+
+legacy-fifo: phase52
 
 phase52:
 	$(MAKE) -C $(KDIR) M=$(CURDIR) modules

@@ -334,7 +334,7 @@ class HeatDecoderTests(unittest.TestCase):
 
     def test_python_policy_constants_match_kernel_source(self):
         source = (
-            Path(__file__).parents[1] / "phase55/modules/g6ts_biosref.c"
+            Path(__file__).parents[1] / "phase55/modules/mshw0485_touch.c"
         ).read_text()
         expected = {
             "G6TS_HEAT_ROWS": GRID_ROWS,

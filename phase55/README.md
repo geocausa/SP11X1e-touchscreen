@@ -25,14 +25,16 @@ known-good Phase 52 FIFO/single-touch path.
 - Successful QSPI transactions use disabled-by-default dynamic debug rather
   than rate-limited informational logging.
 - Manual DMA laboratory controls are hidden by default. They require the
-  explicit boot/module option `g6ts_biosref.lab_controls=1`.
+  explicit boot/module option `mshw0485_touch.lab_controls=1`.
 - A malformed Heat frame releases Linux contacts instead of leaving a stale
   touch active.
 
 ## Hardware validation
 
-Validation was performed on a Surface Pro 11 OLED (`MSHW0485`) with the
-experimental kernel `7.1.1-sp11-gpicmp1+`.
+The original validation was performed on a Surface Pro 11 OLED (`MSHW0485`)
+with the experimental kernel `7.1.1-sp11-gpicmp1+`. Phase 73 subsequently
+re-homed the matched DMA stack onto `7.1.3-sp11-baseline1+`; that is now the
+supported build target.
 
 - 6,458 heatmap frames were processed in one session.
 - 5,431 frames contained one or more detected contacts.
@@ -54,9 +56,9 @@ experimental kernel `7.1.1-sp11-gpicmp1+`.
 
 - `modules/gpi.c`: matched QSPI/GPI DMA engine.
 - `modules/spi-geni-qcom.c`: matched GENI QSPI controller.
-- `modules/g6ts_biosref.c`: HID-over-SPI client and heatmap contact tracker.
+- `modules/mshw0485_touch.c`: HID-over-SPI client and heatmap contact tracker.
 - `modules/g6ts_lifecycle_profile.h`: generated Phase 70 project profile used
-  only when `g6ts_biosref.windows_orchestrator=1` is selected at load time.
+  only when `mshw0485_touch.windows_orchestrator=1` is selected at load time.
 - `dts/x1-microsoft-denali.dtsi`: exact tested Surface device-tree source.
 - `../tools/decode_heat_frame.py`: offline report-`0x12` decoder.
 - `../docs/PHASE59_NSR_METADATA.md`: exact section-`0xff00` type-`0x04` format,
@@ -72,12 +74,12 @@ Build only against the exact target kernel tree and configuration:
 ```bash
 cd phase55/modules
 make clean
-make -j"$(nproc)" KDIR=/path/to/linux-7.1.1
-modinfo gpi.ko spi-geni-qcom.ko g6ts_biosref.ko | grep vermagic
+make -j"$(nproc)" KDIR=/path/to/linux-7.1.3
+modinfo gpi.ko spi-geni-qcom.ko mshw0485_touch.ko | grep vermagic
 ```
 
 The wrapper refuses a kernel release other than the exact validated
-`7.1.1-sp11-gpicmp1+`. `ALLOW_UNTESTED_KERNEL=1` exists only for deliberate
+`7.1.3-sp11-baseline1+`. `ALLOW_UNTESTED_KERNEL=1` exists only for deliberate
 source-rebase work; it does not make a mismatched module safe to load.
 
 The tested source is based on internal DMA-engine and GENI structures. A later
@@ -102,8 +104,8 @@ UEFI/PRE-OS FIFO transport. Keep a separate known-good kernel/GRUB entry.
 - Heat-byte calibration remains identity and edge calibration remains at the
   validated 0..32767 mapping until repeatable labelled measurements are
   available.
-- Suspend/resume callbacks are deliberately absent while platform suspend is
-  disabled because of prior whole-device crashes.
+- Suspend/resume callbacks exist, but platform suspend remains unvalidated and
+  is not claimed safe because earlier experiments crashed the whole device.
 - The unsafe captured Windows output-replay hook has been removed. Manual
   laboratory diagnostics remain compiled for reproducibility but are
   inaccessible unless explicitly enabled at module load. The architecture is

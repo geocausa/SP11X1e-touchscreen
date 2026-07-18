@@ -1,11 +1,19 @@
 # Surface Pro 11 X Elite touchscreen driver
 
-Experimental Linux support for the `MSHW0485` G6 touchscreen in the OLED
-Microsoft Surface Pro 11. The repository preserves two isolated paths: the
-working UEFI-derived FIFO/single-touch baseline and the hardware-validated
-QSPI/GPI-DMA multi-touch experiment.
+Linux support for the `MSHW0485` G6 touchscreen in the OLED Microsoft Surface
+Pro 11. The hardware-validated production baseline is Phase 75: QSPI/GPI-DMA
+multi-touch on `7.1.3-sp11-baseline1+`, with a unique `mshw0485_touch` module
+identity and the Phase 72 mode-config reset fix. See
+[docs/STATUS.md](docs/STATUS.md) for the exact supported, experimental, and
+unsupported boundaries.
 
-## Stable baseline: Phase 52
+The repository retains two rollback paths: Phase 73 provides the same DMA
+behavior under the historical `g6ts_biosref` name, and the 7.1.3 FIFO entry
+provides the UEFI-derived single-touch implementation. The deliberately
+resetting Phase 74 code is excluded from production; only its negative result
+is documented.
+
+## Historical FIFO baseline: Phase 52
 
 - Power and reset sequencing works.
 - Qualcomm GENI protocol 9 transport works in the UEFI-derived FIFO mode.
@@ -181,12 +189,42 @@ kernel compatibility remain open. The Phase 72 fix has been validated over a
 single multi-hour session and should accrue longer soak time before promotion
 to the default boot entry. Pen support is deliberately out of scope.
 
+Phase 73 re-homes the full QSPI/GPI-DMA multi-touch stack and the Phase 72 fix
+onto the `7.1.3` baseline kernel, retiring the `7.1.1` `sp11-gpicmp1+` lab
+kernel as the working target. All three custom modules (client,
+`spi-geni-qcom`, `gpi`) rebuild cleanly against `7.1.3` despite ~20-25% upstream
+drift in the base controller sources. The baseline device tree carried the touch
+node but was authored for FIFO and omitted the GPI-DMA channel wiring, which
+caused the first DMA boot to time out at stage 1; adding `qcom,enable-gsi-dma`,
+`dmas`, and `dma-names` to the `spi@a88000` node (matching the lab DTB) resolved
+it. On `7.1.3-sp11-baseline1+` with the DMA device tree live, touch initialized
+over GPI-DMA with no timeout, the Phase 72 mode-config fix fired, and the panel
+initialized with zero resets. At that point this was the furthest project
+milestone: a working DMA multi-touch touchscreen on the intended baseline
+kernel. It is not full Windows parity. Phase 75 subsequently became the saved
+production baseline after separating the driver identity. See
+[docs/PHASE73_BASELINE_DMA.md](docs/PHASE73_BASELINE_DMA.md) and
+[dts/PHASE73_BASELINE_DMA_DTB.patch.md](dts/PHASE73_BASELINE_DMA_DTB.patch.md).
+
+Phase 75 removes the remaining FIFO/DMA identity collision. The production DMA
+client now builds as `mshw0485_touch.ko`, binds as `mshw0485-touch`, and uses
+the `microsoft,mshw0485` DT compatible. The legacy UEFI/FIFO fallback retains
+the historical `g6ts_biosref.ko` and `microsoft,mshw0485-biosref` identities.
+This prevents `modinfo`, module parameters, aliases, and initramfs contents from
+silently referring to different implementations under the same name. See
+[docs/PHASE75_DRIVER_IDENTITY.md](docs/PHASE75_DRIVER_IDENTITY.md).
+It has now booted successfully on the 7.1.3 baseline with the renamed client,
+explicit DMA device tree, zero panel resets, zero transport errors, and normal
+single- and multi-touch behaviour. Phase 75 is the saved default; Phase 73 and
+the FIFO baseline remain rollback entries.
+
 ## Repository layout
 
 ```text
 Kbuild
 src/g6ts_biosref.c
 src/spi-geni-qcom.c
+phase55/modules/mshw0485_touch.c
 include/linux/spi/spi-geni-qcom-biosref.h
 dts/x1-microsoft-denali.dtsi
 docs/BUILD.md
@@ -214,6 +252,7 @@ docs/PHASE69_WINDOWS_PROCESSING_PARITY.md
 docs/PHASE70_KERNEL_FRAME_ORCHESTRATOR.md
 docs/PHASE71_SCORE3_PRODUCER.md
 docs/PHASE72_LIVE_KDNET_ROOT_CAUSE.md
+docs/PHASE73_BASELINE_DMA.md
 phase55/
 tools/analyze_spb_etw_csv.py
 tools/decode_heat_frame.py
@@ -226,9 +265,11 @@ tools/track_heat_contacts.py
 scripts/deploy_phase70.sh
 scripts/deploy_phase71.sh
 scripts/deploy_phase72.sh
+scripts/deploy_phase73_dma.sh
 boot/57_sp11_711_phase70_orchestrator
 boot/58_sp11_711_phase71_score3
 boot/59_sp11_711_phase72_config
+boot/60_sp11_713_phase73_dma
 tests/test_heat_decoder.py
 tests/test_contact_tracker.py
 tests/test_windows_classifier.py
@@ -262,6 +303,7 @@ whole-device crashes.
 - QUP1 SE2 at `0x0a88000`
 - Ubuntu Concept kernel `7.0.0-32-qcom-x1e`
 - Experimental kernel `7.1.1-sp11-gpicmp1+` for Phase 55
+- Hardware-validated production kernel `7.1.3-sp11-baseline1+` for Phase 75
 
 ## License
 
