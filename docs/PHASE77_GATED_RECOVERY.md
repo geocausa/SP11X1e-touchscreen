@@ -129,6 +129,10 @@ resets, readiness failures, or recovery failures. This validates corrected
 cold startup and sustained input load; the panel-originated software recovery
 branch remains deliberately unclaimed until a real reset exercises it.
 
+A same-boot Plasma-to-GNOME comparison kept all Phase 77 transport and Heat
+counters clean. The separate GNOME/DING crash evidence and remediation are
+recorded in `PHASE77_GNOME_DING_CRASH.md`.
+
 The optional Clang cross-build cannot be used with this configured kernel
 tree because its saved GCC build flags include options unsupported by the
 installed Clang 21 driver. The failure occurs before source compilation; the
