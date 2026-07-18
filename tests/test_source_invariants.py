@@ -7,7 +7,9 @@ import unittest
 
 
 ROOT = Path(__file__).resolve().parents[1]
-CLIENT = ROOT / "phase55" / "modules" / "g6ts_biosref.c"
+CLIENT = ROOT / "phase55" / "modules" / "mshw0485_touch.c"
+LEGACY_CLIENT = ROOT / "src" / "g6ts_biosref.c"
+DMA_KBUILD = ROOT / "phase55" / "modules" / "Kbuild"
 LIFECYCLE_PROFILE = ROOT / "phase55" / "modules" / "g6ts_lifecycle_profile.h"
 
 
@@ -29,7 +31,18 @@ class SourceInvariantTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.source = CLIENT.read_text(encoding="utf-8")
+        cls.legacy_source = LEGACY_CLIENT.read_text(encoding="utf-8")
+        cls.dma_kbuild = DMA_KBUILD.read_text(encoding="utf-8")
         cls.lifecycle_profile = LIFECYCLE_PROFILE.read_text(encoding="utf-8")
+
+    def test_production_identity_is_distinct_from_legacy_fifo(self):
+        self.assertIn('G6TS_NAME\t\t\t"mshw0485-touch"', self.source)
+        self.assertIn('compatible = "microsoft,mshw0485"', self.source)
+        self.assertNotIn('compatible = "microsoft,mshw0485-biosref"', self.source)
+        self.assertIn("obj-m += mshw0485_touch.o", self.dma_kbuild)
+        self.assertNotIn("obj-m += g6ts_biosref.o", self.dma_kbuild)
+        self.assertIn('compatible = "microsoft,mshw0485-biosref"',
+                      self.legacy_source)
 
     def test_recovery_uses_hardware_validated_minimal_order(self):
         body = function_body(self.source, "g6ts_full_reinitialize_locked")
@@ -42,17 +55,20 @@ class SourceInvariantTests(unittest.TestCase):
         positions = [body.index(item) for item in ordered]
         self.assertEqual(positions, sorted(positions))
 
-    def test_windows_collection_setup_is_not_replayed_during_recovery(self):
+    def test_cold_boot_only_setup_is_not_replayed_during_recovery(self):
         body = function_body(self.source, "g6ts_full_reinitialize_locked")
         forbidden = (
             "GET_FEATURE, 0x60",
             "OUTPUT_REPORT, 0x65",
             "GET_FEATURE, 0x06",
-            "OUTPUT_REPORT, 0x09",
             "GET_FEATURE, 0x73",
         )
         for command in forbidden:
             self.assertNotIn(command, body)
+
+        # Phase 72 hardware validation proved that report 0x09 belongs to the
+        # mode-config recovery exchange and prevents the panel reset storm.
+        self.assertIn("OUTPUT_REPORT, 0x09", body)
 
         for removed_symbol in (
             "g6ts_output65",

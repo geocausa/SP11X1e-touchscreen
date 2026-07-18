@@ -197,12 +197,21 @@ full Windows parity and needs longer soak time before default promotion. See
 [docs/PHASE73_BASELINE_DMA.md](docs/PHASE73_BASELINE_DMA.md) and
 [dts/PHASE73_BASELINE_DMA_DTB.patch.md](dts/PHASE73_BASELINE_DMA_DTB.patch.md).
 
+Phase 75 removes the remaining FIFO/DMA identity collision. The production DMA
+client now builds as `mshw0485_touch.ko`, binds as `mshw0485-touch`, and uses
+the `microsoft,mshw0485` DT compatible. The legacy UEFI/FIFO fallback retains
+the historical `g6ts_biosref.ko` and `microsoft,mshw0485-biosref` identities.
+This prevents `modinfo`, module parameters, aliases, and initramfs contents from
+silently referring to different implementations under the same name. See
+[docs/PHASE75_DRIVER_IDENTITY.md](docs/PHASE75_DRIVER_IDENTITY.md).
+
 ## Repository layout
 
 ```text
 Kbuild
 src/g6ts_biosref.c
 src/spi-geni-qcom.c
+phase55/modules/mshw0485_touch.c
 include/linux/spi/spi-geni-qcom-biosref.h
 dts/x1-microsoft-denali.dtsi
 docs/BUILD.md

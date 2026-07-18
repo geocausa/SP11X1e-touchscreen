@@ -1,0 +1,12 @@
+/dts-v1/;
+/plugin/;
+
+/ {
+	fragment@0 {
+		target-path = "/soc@0/geniqup@ac0000/spi@a88000/touchscreen@0";
+
+		__overlay__ {
+			compatible = "microsoft,mshw0485";
+		};
+	};
+};

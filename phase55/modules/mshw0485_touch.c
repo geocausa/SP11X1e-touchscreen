@@ -26,7 +26,7 @@
 #include "g6ts_classifier_profile.h"
 #include "g6ts_lifecycle_profile.h"
 
-#define G6TS_NAME			"microsoft-g6ts"
+#define G6TS_NAME			"mshw0485-touch"
 #define G6TS_SPI_HZ			40000000U
 #define G6TS_MAX_BODY			8192U
 #define G6TS_HEADER_SYNC		0x5a
@@ -925,7 +925,6 @@ static u8 g6ts_classify_contact(struct g6ts_contact *contact)
 				    G6TS_WINDOWS_RUNTIME_OFFSET_Q24;
 
 			contact->scores_q24[class] = score;
-
 		}
 	}
 	if (g6ts_windows_orchestrator) {
@@ -2073,7 +2072,7 @@ static int g6ts_probe(struct spi_device *spi)
 	ts->input = devm_input_allocate_device(&spi->dev);
 	if (!ts->input)
 		return -ENOMEM;
-	ts->input->name = "Microsoft Surface G6 Touch (DMA)";
+	ts->input->name = "Microsoft Surface G6 Touch";
 	ts->input->id.bustype = BUS_SPI;
 	ts->input->dev.parent = &spi->dev;
 	input_set_abs_params(ts->input, ABS_MT_POSITION_X, 0,
@@ -2086,11 +2085,11 @@ static int g6ts_probe(struct spi_device *spi)
 				  INPUT_MT_TRACK);
 	if (ret)
 		return dev_err_probe(&spi->dev, ret,
-				     "failed to initialize DMA touch slots\n");
+				     "failed to initialize touch slots\n");
 	ret = input_register_device(ts->input);
 	if (ret)
 		return dev_err_probe(&spi->dev, ret,
-				     "failed to register DMA touch input\n");
+				     "failed to register touch input\n");
 
 	ret = g6ts_power_on(ts);
 	if (ret)
@@ -2168,14 +2167,12 @@ MODULE_DEVICE_TABLE(acpi, g6ts_acpi_match);
 
 static const struct of_device_id g6ts_of_match[] = {
 	{ .compatible = "microsoft,mshw0485" },
-	{ .compatible = "microsoft,mshw0485-biosref" },
 	{ }
 };
 MODULE_DEVICE_TABLE(of, g6ts_of_match);
 
 static const struct spi_device_id g6ts_spi_id[] = {
 	{ "mshw0485" },
-	{ "mshw0485-biosref" },
 	{ }
 };
 MODULE_DEVICE_TABLE(spi, g6ts_spi_id);
@@ -2193,6 +2190,6 @@ static struct spi_driver g6ts_driver = {
 };
 module_spi_driver(g6ts_driver);
 
-MODULE_DESCRIPTION("Microsoft Surface G6 touchscreen driver");
+MODULE_DESCRIPTION("Microsoft Surface G6 MSHW0485 touchscreen driver");
 MODULE_AUTHOR("SP11 reverse-engineering project");
 MODULE_LICENSE("GPL");

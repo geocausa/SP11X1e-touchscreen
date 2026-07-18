@@ -5,4 +5,4 @@ ccflags-y += -include $(src)/include/dt-bindings/dma/qcom-gpi.h
 
 obj-m += gpi.o
 obj-m += spi-geni-qcom.o
-obj-m += g6ts_biosref.o
+obj-m += mshw0485_touch.o
