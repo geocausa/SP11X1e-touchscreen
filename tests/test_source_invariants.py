@@ -11,6 +11,9 @@ CLIENT = ROOT / "phase55" / "modules" / "mshw0485_touch.c"
 LEGACY_CLIENT = ROOT / "src" / "g6ts_biosref.c"
 DMA_KBUILD = ROOT / "phase55" / "modules" / "Kbuild"
 LIFECYCLE_PROFILE = ROOT / "phase55" / "modules" / "g6ts_lifecycle_profile.h"
+ROOT_MAKEFILE = ROOT / "Makefile"
+PHASE75_OVERLAY = ROOT / "dts" / "phase75-mshw0485-production.dtso"
+PHASE75_DEPLOY = ROOT / "scripts" / "deploy_phase75_identity.sh"
 
 
 def function_body(source: str, name: str) -> str:
@@ -34,6 +37,26 @@ class SourceInvariantTests(unittest.TestCase):
         cls.legacy_source = LEGACY_CLIENT.read_text(encoding="utf-8")
         cls.dma_kbuild = DMA_KBUILD.read_text(encoding="utf-8")
         cls.lifecycle_profile = LIFECYCLE_PROFILE.read_text(encoding="utf-8")
+        cls.root_makefile = ROOT_MAKEFILE.read_text(encoding="utf-8")
+        cls.phase75_overlay = PHASE75_OVERLAY.read_text(encoding="utf-8")
+        cls.phase75_deploy = PHASE75_DEPLOY.read_text(encoding="utf-8")
+
+    def test_default_build_is_the_production_dma_set(self):
+        self.assertIn("all: production", self.root_makefile)
+        self.assertIn("production: phase55", self.root_makefile)
+        self.assertIn("legacy-fifo: phase52", self.root_makefile)
+
+    def test_phase75_dtb_is_reproducible_from_fifo_baseline(self):
+        for token in (
+            "&spi10",
+            "qcom,enable-gsi-dma",
+            "dmas = <&gpi_dma1 0 2 4>, <&gpi_dma1 1 2 4>",
+            'dma-names = "tx", "rx"',
+            'compatible = "microsoft,mshw0485"',
+        ):
+            self.assertIn(token, self.phase75_overlay)
+        self.assertIn("base_fifo_dtb", self.phase75_deploy)
+        self.assertNotIn("prebuilt/", self.phase75_deploy)
 
     def test_production_identity_is_distinct_from_legacy_fifo(self):
         self.assertIn('G6TS_NAME\t\t\t"mshw0485-touch"', self.source)

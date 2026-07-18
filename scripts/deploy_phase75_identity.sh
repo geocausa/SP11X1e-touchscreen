@@ -12,7 +12,8 @@ expected_vermagic="$release SMP preempt mod_unload modversions aarch64"
 script_dir=$(dirname -- "$0")
 root=$(CDPATH='' cd -- "$script_dir/.." && pwd)
 baseline_assets=/boot/sp11-7.1.3-baseline1
-base_dma_dtb=$root/prebuilt/x1e80100-microsoft-denali-sp11-baseline1-dma.dtb
+baseline_dtb_name=x1e80100-microsoft-denali-sp11-baseline1.dtb
+base_fifo_dtb=$baseline_assets/$baseline_dtb_name
 overlay_src=$root/dts/phase75-mshw0485-production.dtso
 target_assets=/boot/sp11-7.1.3-phase75-identity
 target_grub=/etc/grub.d/62_sp11_713_phase75_identity
@@ -70,7 +71,7 @@ if [ -n "$(git -C "$root" status --porcelain --untracked-files=normal)" ]; then
 fi
 for file in "$built_client" "$built_controller" "$built_gpi" \
 	"$legacy_client" "$installed_controller" "$installed_gpi" \
-	"$baseline_assets/vmlinuz-$release" "$base_dma_dtb" "$overlay_src"; do
+	"$baseline_assets/vmlinuz-$release" "$base_fifo_dtb" "$overlay_src"; do
 	if [ ! -f "$file" ]; then
 		echo "missing required file: $file" >&2
 		exit 1
@@ -88,10 +89,10 @@ if [ "$(modinfo -F name "$built_client")" != "mshw0485_touch" ]; then
 	exit 1
 fi
 
-# Produce the DMA DTB from the exact Phase 73 base plus a reviewable compatible
-# override. Refuse a result that does not retain explicit GPI-DMA selection.
+# Produce the complete DMA DTB from the retained 7.1.3 FIFO baseline plus the
+# checked-in overlay. No ignored or prebuilt DMA DTB is required.
 dtc -@ -I dts -O dtb -o "$work/phase75.dtbo" "$overlay_src"
-fdtoverlay -i "$base_dma_dtb" -o "$work/$target_dtb" "$work/phase75.dtbo"
+fdtoverlay -i "$base_fifo_dtb" -o "$work/$target_dtb" "$work/phase75.dtbo"
 compatible=$(fdtget -t s "$work/$target_dtb" \
 	/soc@0/geniqup@ac0000/spi@a88000/touchscreen@0 compatible)
 if [ "$compatible" != "microsoft,mshw0485" ]; then
@@ -169,7 +170,7 @@ commit=$(git -C "$root" rev-parse HEAD)
 	echo "controller srcversion: $(modinfo -F srcversion "$built_controller")"
 	echo "GPI srcversion: $(modinfo -F srcversion "$built_gpi")"
 	echo "legacy FIFO client embedded: no"
-	echo "base DMA DTB sha256: $(sha256sum "$base_dma_dtb" | cut -d ' ' -f 1)"
+	echo "base FIFO DTB sha256: $(sha256sum "$base_fifo_dtb" | cut -d ' ' -f 1)"
 	echo "DT overlay sha256: $(sha256sum "$overlay_src" | cut -d ' ' -f 1)"
 	sha256sum \
 		"$target_assets/initrd.img-$release-phase75" \

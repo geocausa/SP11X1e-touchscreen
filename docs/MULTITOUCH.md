@@ -36,6 +36,6 @@ multi-touch slots. See [PHASE55_DMA_MULTITOUCH.md](PHASE55_DMA_MULTITOUCH.md).
 - No touchscreen firmware flashing.
 - No calibration-storage unlock.
 - No pen support; this driver is intentionally finger-only.
-- No suspend/resume callbacks while platform suspend remains unsafe on the
-  tested machine.
+- Suspend/resume callbacks exist, but platform suspend remains unvalidated and
+  is not claimed safe on the tested machine.
 - No assumption that Windows GPI-DMA framing matches the UEFI FIFO path.

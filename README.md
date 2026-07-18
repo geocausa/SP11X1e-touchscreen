@@ -1,11 +1,19 @@
 # Surface Pro 11 X Elite touchscreen driver
 
-Experimental Linux support for the `MSHW0485` G6 touchscreen in the OLED
-Microsoft Surface Pro 11. The repository preserves two isolated paths: the
-working UEFI-derived FIFO/single-touch baseline and the hardware-validated
-QSPI/GPI-DMA multi-touch experiment.
+Linux support for the `MSHW0485` G6 touchscreen in the OLED Microsoft Surface
+Pro 11. The hardware-validated production baseline is Phase 75: QSPI/GPI-DMA
+multi-touch on `7.1.3-sp11-baseline1+`, with a unique `mshw0485_touch` module
+identity and the Phase 72 mode-config reset fix. See
+[docs/STATUS.md](docs/STATUS.md) for the exact supported, experimental, and
+unsupported boundaries.
 
-## Stable baseline: Phase 52
+The repository retains two rollback paths: Phase 73 provides the same DMA
+behavior under the historical `g6ts_biosref` name, and the 7.1.3 FIFO entry
+provides the UEFI-derived single-touch implementation. The deliberately
+resetting Phase 74 code is excluded from production; only its negative result
+is documented.
+
+## Historical FIFO baseline: Phase 52
 
 - Power and reset sequencing works.
 - Qualcomm GENI protocol 9 transport works in the UEFI-derived FIFO mode.
@@ -191,9 +199,10 @@ caused the first DMA boot to time out at stage 1; adding `qcom,enable-gsi-dma`,
 `dmas`, and `dma-names` to the `spi@a88000` node (matching the lab DTB) resolved
 it. On `7.1.3-sp11-baseline1+` with the DMA device tree live, touch initialized
 over GPI-DMA with no timeout, the Phase 72 mode-config fix fired, and the panel
-initialized with zero resets. This is the furthest the project has reached: a
-working DMA multi-touch touchscreen on the intended baseline kernel. It is not
-full Windows parity and needs longer soak time before default promotion. See
+initialized with zero resets. At that point this was the furthest project
+milestone: a working DMA multi-touch touchscreen on the intended baseline
+kernel. It is not full Windows parity. Phase 75 subsequently became the saved
+production baseline after separating the driver identity. See
 [docs/PHASE73_BASELINE_DMA.md](docs/PHASE73_BASELINE_DMA.md) and
 [dts/PHASE73_BASELINE_DMA_DTB.patch.md](dts/PHASE73_BASELINE_DMA_DTB.patch.md).
 
@@ -294,6 +303,7 @@ whole-device crashes.
 - QUP1 SE2 at `0x0a88000`
 - Ubuntu Concept kernel `7.0.0-32-qcom-x1e`
 - Experimental kernel `7.1.1-sp11-gpicmp1+` for Phase 55
+- Hardware-validated production kernel `7.1.3-sp11-baseline1+` for Phase 75
 
 ## License
 

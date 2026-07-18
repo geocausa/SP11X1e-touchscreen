@@ -12,31 +12,39 @@ The controller source reaches into the exact `spi-geni-qcom` implementation,
 so treat other kernel versions as ports requiring review rather than as
 drop-in compatible builds.
 
-## External module build
+## Production DMA build
 
 With the matching kernel and headers installed:
 
 ```bash
-make -C /lib/modules/$(uname -r)/build M="$PWD" modules
+make KDIR=/lib/modules/7.1.3-sp11-baseline1+/build
 ```
 
-This produces:
+This builds the matched production set under `phase55/modules/`:
 
 ```text
+gpi.ko
 spi-geni-qcom.ko
-g6ts_biosref.ko
+mshw0485_touch.ko
 ```
 
-The repository root defaults to the isolated Phase 52 FIFO baseline. To build
-the hardware-validated Phase 55 DMA/multi-touch matched set instead:
+The equivalent explicit target is:
 
 ```bash
 make phase55 KDIR=/path/to/linux-7.1.3
 ```
 
-This produces `gpi.ko`, `spi-geni-qcom.ko`, and `mshw0485_touch.ko` under
-`phase55/modules/`. These three modules must be built from the same source tree
-and used together. The top-level Makefile contains no host-specific paths.
+These three modules must be built from the same source tree and used together.
+The top-level Makefile contains no host-specific paths.
+
+The historical FIFO client remains available explicitly:
+
+```bash
+make legacy-fifo KDIR=/lib/modules/7.1.3-sp11-baseline1+/build
+```
+
+It produces `g6ts_biosref.ko` and must not be mixed with the production DMA
+client or loaded from the same initramfs.
 
 The DMA wrapper checks `include/config/kernel.release` and accepts only the
 hardware-validated `7.1.3-sp11-baseline1+` target by default. A newer kernel
@@ -102,8 +110,13 @@ cmp /tmp/g6ts_classifier_profile.h \
 
 ## Device tree
 
-The Denali source enables QUP1 SE2, removes DMA properties for the isolated
-firmware-style path and adds:
+The retained Denali FIFO baseline enables QUP1 SE2 and removes its DMA
+properties. Phase 75 derives the production tree from that baseline using
+`dts/phase75-mshw0485-production.dtso`, which adds the GPI-DMA channels and
+changes the client compatible to `microsoft,mshw0485`. No prebuilt or ignored
+DMA DTB is required.
+
+The common touchscreen node provides:
 
 ```dts
 interrupts = <51 IRQ_TYPE_LEVEL_LOW>;
@@ -112,9 +125,8 @@ power-gpios = <&tlmm 64 GPIO_ACTIVE_HIGH>;
 reset-gpios = <&tlmm 48 GPIO_ACTIVE_HIGH>;
 ```
 
-Build the OLED DTB through the matching Ubuntu kernel tree. Do not replace the
-normal boot image. Embed the modified DTB in a separate stubble image and use
-a separate initramfs containing the matching modules.
+Do not replace the normal boot image. Use the Phase 75 deployment script to
+derive and verify a separate DTB and initramfs containing the matching modules.
 
 ## Secure Boot
 

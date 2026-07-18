@@ -18,11 +18,12 @@ protocol:
 | DT compatible | `microsoft,mshw0485` | `microsoft,mshw0485-biosref` |
 | Parameter prefix | `mshw0485_touch.*` | `g6ts_biosref.*` |
 
-The Phase 75 device-tree overlay changes only the touchscreen compatible. The
-controller retains `qcom,enable-gsi-dma`, `dmas`, and `dma-names`, so transport
-selection remains explicit. The isolated initramfs embeds the renamed client
-and matched controller/GPI modules and explicitly rejects an embedded legacy
-FIFO client.
+The Phase 75 device-tree overlay converts the retained 7.1.3 FIFO baseline
+into the complete production personality: it adds `qcom,enable-gsi-dma`,
+`dmas`, and `dma-names` to the controller and changes the touchscreen
+compatible. A fresh clone therefore needs no ignored or prebuilt DMA DTB. The
+isolated initramfs embeds the renamed client and matched controller/GPI modules
+and explicitly rejects an embedded legacy FIFO client.
 
 ## Hardware validation
 

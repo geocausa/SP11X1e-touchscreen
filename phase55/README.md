@@ -104,8 +104,8 @@ UEFI/PRE-OS FIFO transport. Keep a separate known-good kernel/GRUB entry.
 - Heat-byte calibration remains identity and edge calibration remains at the
   validated 0..32767 mapping until repeatable labelled measurements are
   available.
-- Suspend/resume callbacks are deliberately absent while platform suspend is
-  disabled because of prior whole-device crashes.
+- Suspend/resume callbacks exist, but platform suspend remains unvalidated and
+  is not claimed safe because earlier experiments crashed the whole device.
 - The unsafe captured Windows output-replay hook has been removed. Manual
   laboratory diagnostics remain compiled for reproducibility but are
   inaccessible unless explicitly enabled at module load. The architecture is
