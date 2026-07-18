@@ -89,8 +89,9 @@ class SourceInvariantTests(unittest.TestCase):
         for command in forbidden:
             self.assertNotIn(command, body)
 
-        # Phase 72 hardware validation proved that report 0x09 belongs to the
-        # mode-config recovery exchange and prevents the panel reset storm.
+        # KDNET proves that report 0x09 belongs to Windows initialization and
+        # reset recovery. Phase 72 proves only that the combined Linux sequence
+        # containing this short report eliminated the observed reset storm.
         self.assertIn("OUTPUT_REPORT, 0x09", body)
 
         for removed_symbol in (

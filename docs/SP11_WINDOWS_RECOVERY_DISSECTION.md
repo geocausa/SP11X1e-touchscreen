@@ -1,4 +1,9 @@
 
+> **Historical working note:** This document records the state before the clean
+> 72-byte capture was reinterpreted using `txLen` and `content_len`. Its capture
+> plan and incomplete-payload discussion are superseded by
+> [PHASE72_KDNET_ERRATUM.md](PHASE72_KDNET_ERRATUM.md).
+
 =====================================================================================
 UPDATE 2026-07-16 (pm) — Byte-exact 0x09 status + Windows partition mounted + decision point
 =====================================================================================

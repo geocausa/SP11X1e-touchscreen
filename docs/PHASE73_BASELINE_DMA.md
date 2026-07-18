@@ -1,7 +1,7 @@
-# Phase 73 baseline DMA re-home: DMA multi-touch + Phase 72 fix on 7.1.3
+# Phase 73 baseline DMA re-home: DMA multi-touch + Phase 72 sequence on 7.1.3
 
-Phase 73 brings the full QSPI/GPI-DMA multi-touch stack and the Phase 72
-mode-config reset fix onto the 7.1.3 baseline kernel, retiring the 7.1.1
+Phase 73 brings the full QSPI/GPI-DMA multi-touch stack and the empirically
+stable Phase 72 exchange onto the 7.1.3 baseline kernel, retiring the 7.1.1
 `sp11-gpicmp1+` lab kernel as the working target. This is the furthest the
 project has reached: a working DMA multi-touch touchscreen on the baseline
 kernel intended as its permanent home.
@@ -51,7 +51,7 @@ microsoft-g6ts spi0.0: touch controller initialized recoveries=1 resets=0
 
 - GSI-DMA confirmed live in the running device tree.
 - Touch initialized over GPI-DMA with no stage-1 timeout.
-- Phase 72 mode-config fix fired correctly on 7.1.3 as well.
+- The empirically validated Phase 72 combined exchange ran on 7.1.3 as well.
 - Zero panel resets at init; touch functional.
 
 ## Isolation

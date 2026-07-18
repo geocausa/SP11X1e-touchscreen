@@ -40,7 +40,7 @@ panel resets:       0
 transport errors:   0
 ```
 
-The panel completed the Phase 72 mode-config exchange, registered as
+The panel completed the empirically stable Phase 72 combined exchange, registered as
 `Microsoft Surface G6 Touch`, and the user confirmed quick taps, dragging,
 two-finger pinch and fast on-screen typing behaved normally. Phase 75 is now
 the saved default. Phase 73 and the 7.1.3 FIFO baseline remain distinct
