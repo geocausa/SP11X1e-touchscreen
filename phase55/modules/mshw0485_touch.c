@@ -290,6 +290,7 @@ struct g6ts {
 	u8 recovery_fail_streak;
 	enum g6ts_recovery_path recovery_path;
 	bool nsr_valid;
+	bool awaiting_ready_heat;
 	bool mode_enabled;
 	bool fatal_transport_error;
 	bool stopping;
@@ -308,6 +309,7 @@ static ssize_t behavior_stats_show(struct device *dev,
 	length = sysfs_emit(buf,
 			    "profile=%s\n"
 			    "mode_enabled=%u\n"
+			    "awaiting_ready_heat=%u\n"
 			    "heat_frames=%llu\n"
 			    "heat_errors=%llu\n"
 			    "components=%llu\n"
@@ -333,7 +335,8 @@ static ssize_t behavior_stats_show(struct device *dev,
 			    (g6ts_behavior_v2 ? "phase76" :
 				    (g6ts_windows_orchestrator ?
 				     "windows-orchestrator" : "phase75")),
-			    ts->mode_enabled, ts->heat_frames, ts->heat_errors,
+			    ts->mode_enabled, ts->awaiting_ready_heat,
+			    ts->heat_frames, ts->heat_errors,
 			    ts->component_total, ts->contact_total,
 			    ts->weak_rejections, ts->nsr_rejections,
 			    ts->palm_rejections, ts->assignment_matches,
@@ -1766,6 +1769,15 @@ static void g6ts_handle_data_report(struct g6ts *ts)
 
 	if (ts->last_class != DATA)
 		return;
+	/*
+	 * Heat is demand-driven on this panel: the first frame may not exist until
+	 * a finger reaches the glass.  Phase 77 therefore opens the response path
+	 * after the mode handshake, but suppresses every non-Heat input report
+	 * until a complete Heat frame has passed the normal structural parser.
+	 */
+	if (ts->awaiting_ready_heat &&
+	    ts->last_content_id != G6TS_HEATMAP_REPORT_ID)
+		return;
 
 	if (ts->last_content_id == 0x40 && ts->last_content_len == 5) {
 		active = payload[0] & BIT(0);
@@ -1785,9 +1797,16 @@ static void g6ts_handle_data_report(struct g6ts *ts)
 
 		ret = g6ts_report_heat_contacts(ts, payload, ts->last_content_len);
 		if (ret) {
+			if (ts->awaiting_ready_heat)
+				ts->ready_verification_failures++;
 			g6ts_release_contacts(ts);
 			dev_warn_ratelimited(&ts->spi->dev,
 					     "malformed Heat frame: %d\n", ret);
+		} else if (ts->awaiting_ready_heat) {
+			ts->awaiting_ready_heat = false;
+			ts->ready_heat_frames++;
+			dev_info(&ts->spi->dev,
+				 "touch input ready after first valid Heat frame\n");
 		}
 	}
 }
@@ -1865,6 +1884,7 @@ static void g6ts_note_panel_reset_locked(struct g6ts *ts,
 	ts->last_reset_jiffies = now;
 	ts->reset_notifications++;
 	ts->mode_enabled = false;
+	ts->awaiting_ready_heat = false;
 	ts->recovery_path = g6ts_reset_recovery_v2 ?
 		G6TS_RECOVERY_SOFTWARE : G6TS_RECOVERY_HARDWARE;
 	g6ts_release_contacts(ts);
@@ -2004,18 +2024,6 @@ static int g6ts_recovery_read_expected(struct g6ts *ts, u8 response_class,
 	return -EOVERFLOW;
 }
 
-static int g6ts_verify_heat_ready(struct g6ts *ts)
-{
-	const u8 *content = ts->body + HIDSPI_INPUT_BODY_HEADER_SIZE;
-	int ret;
-
-	ret = g6ts_recovery_read_expected(ts, DATA, G6TS_HEATMAP_REPORT_ID, 9);
-	if (ret)
-		return ret;
-
-	return g6ts_extract_heatmap(ts, content, ts->last_content_len);
-}
-
 /*
  * Cold startup requires the validated power/reset sequence and its resulting
  * RESET_RESPONSE.  A panel-originated reset has already completed that part
@@ -2028,6 +2036,7 @@ static int g6ts_full_reinitialize_locked(struct g6ts *ts,
 	int ret;
 
 	ts->mode_enabled = false;
+	ts->awaiting_ready_heat = false;
 	ts->expected_report_descriptor_len = 0;
 	ts->initialization_stage = 0;
 
@@ -2199,12 +2208,12 @@ static int g6ts_full_reinitialize_locked(struct g6ts *ts,
 
 	if (g6ts_reset_recovery_v2) {
 		ts->initialization_stage = 8;
-		ret = g6ts_verify_heat_ready(ts);
-		if (ret) {
-			ts->ready_verification_failures++;
-			goto out;
-		}
-		ts->ready_heat_frames++;
+		/*
+		 * Do not synchronously wait here.  The panel produces Heat on touch,
+		 * so waiting before enabling the IRQ response path deadlocks startup.
+		 * The first frame is parsed and admitted by g6ts_handle_data_report().
+		 */
+		ts->awaiting_ready_heat = true;
 	}
 
 	ts->mode_enabled = true;

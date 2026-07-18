@@ -48,8 +48,9 @@ enables the following behavior:
 3. Because the reset response has already been consumed, recovery begins with
    device and report descriptor enumeration without another power cycle.
 4. The unchanged Phase 75 mode sequence is replayed.
-5. A complete structurally valid report `0x12` Heat frame is required before
-   `mode_enabled` becomes true.
+5. The IRQ response path opens after the report `0x56` handshake, while every
+   non-Heat input report remains gated. The first report `0x12` Heat frame is
+   parsed by the normal structural decoder before it can emit Linux input.
 6. If software recovery fails, one bounded retry uses the existing full
    hardware initialization path. Existing fatal-transport and retry limits
    remain in force.
@@ -68,14 +69,30 @@ software_recovery_attempts
 software_recovery_fallbacks
 ready_heat_frames
 ready_verification_failures
+awaiting_ready_heat
 ```
 
 Successful and failed initialization messages identify `path=hardware` or
 `path=software`. These counters make the result distinguish among a clean
 software recovery, fallback success, readiness failure, and another delayed
 panel reset. An unexpected reset consumed while waiting for any descriptor,
-feature response, or readiness frame is counted and terminates that attempt;
+or feature response is counted and terminates that attempt;
 it is never silently treated as stale input.
+
+## First-boot correction
+
+The first Phase 77 hardware boot reached the report `0x56` response on all
+three cold-start attempts but timed out at the original synchronous Heat gate.
+Touching the glass then increased the GPIO51 interrupt count while input was
+still gated. This proves that Heat is demand-driven on this panel: requiring a
+Heat frame before opening the response path creates a driver deadlock rather
+than detecting a panel failure.
+
+The corrected gate does not use a readiness timeout. It opens only the IRQ
+response path after the mode handshake, ignores non-Heat data while readiness
+is pending, and admits the first Heat frame only after the ordinary complete
+Heat parser accepts it. Malformed first frames remain gated and increment
+`ready_verification_failures`.
 
 ## Offline validation
 
@@ -86,7 +103,14 @@ it is never silently treated as stale input.
 - Sparse reports no findings for all three modules;
 - strict kernel style review reports zero errors, warnings, or checks;
 - deployment and GRUB scripts pass shell/static validation; and
-- the Phase 77 client source version is `09F63F1F26207EC3408EB0E`.
+- the corrected Phase 77 client source version is
+  `E61E066E59C2C910A9D7702`.
+
+The corrected client was also reloaded on the first Phase 77 hardware boot. It
+completed cold initialization on its first attempt, accepted its first valid
+Heat frame on touch, processed at least 694 Heat frames, and recorded zero
+Heat errors, resets, readiness failures, or recovery failures during the
+initial test window.
 
 The optional Clang cross-build cannot be used with this configured kernel
 tree because its saved GCC build flags include options unsupported by the

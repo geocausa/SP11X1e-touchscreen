@@ -219,6 +219,11 @@ class SourceInvariantTests(unittest.TestCase):
         reader = function_body(self.source, "g6ts_dma_read_response")
         self.assertIn("if (READ_ONCE(ts->mode_enabled))", reader)
 
+        data_report = function_body(self.source, "g6ts_handle_data_report")
+        self.assertIn("ts->awaiting_ready_heat", data_report)
+        self.assertIn("ts->ready_heat_frames++", data_report)
+        self.assertIn("g6ts_report_heat_contacts", data_report)
+
         feature = function_body(self.source, "g6ts_dma_feature_exchange")
         expected = function_body(self.source, "g6ts_recovery_read_expected")
         for body in (feature, expected):
@@ -229,7 +234,7 @@ class SourceInvariantTests(unittest.TestCase):
         hardware = recovery.index("path == G6TS_RECOVERY_HARDWARE")
         power_off = recovery.index("g6ts_power_off", hardware)
         descriptor = recovery.index("g6ts_device_descriptor_cmd")
-        verify = recovery.index("g6ts_verify_heat_ready")
+        verify = recovery.index("ts->awaiting_ready_heat = true")
         enable = recovery.index("ts->mode_enabled = true")
         self.assertLess(hardware, power_off)
         self.assertLess(power_off, descriptor)
