@@ -9,8 +9,10 @@ Phase 75 is the current hardware-validated baseline for the OLED Surface Pro
 - raw Heat report decoding and up to ten type-B multi-touch slots;
 - single-finger input, dragging, two-finger pinch/zoom, and three-finger
   desktop gestures;
-- Phase 72 mode-config exchange (`GET 0x70 = 02`, derived `SET 0x70 = 01 02`,
-  `OUTPUT 0x09 = 8e 02`);
+- empirically validated Phase 72 exchange (`GET 0x70 = 02`, derived
+  `SET 0x70 = 01 02`, `OUTPUT 0x09 = 8e 02`), whose benefit is not yet
+  causally isolated and whose bytes do not reproduce the captured Windows
+  exchange;
 - bounded class-3 reset recovery;
 - distinct production and FIFO module/DT identities;
 - zero panel resets and zero transport errors in the Phase 75 validation boot.
@@ -18,6 +20,11 @@ Phase 75 is the current hardware-validated baseline for the OLED Surface Pro
 The production driver is `phase55/modules/mshw0485_touch.c`. Running `make`
 builds its matched client, GENI controller, and GPI-DMA modules. Phase 73 and
 the 7.1.3 FIFO build remain bootable fallbacks.
+
+The corrected KDNET interpretation is recorded in
+[PHASE72_KDNET_ERRATUM.md](PHASE72_KDNET_ERRATUM.md). It retracts the former
+“truncated feature payload” explanation without retracting the Phase 72/75
+hardware results.
 
 ## Explicitly experimental
 

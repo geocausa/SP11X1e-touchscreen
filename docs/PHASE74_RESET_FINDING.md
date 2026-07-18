@@ -6,10 +6,11 @@ must not be merged or made the saved GRUB default.
 
 ## Experiment
 
-The laboratory client independently gated three additions recovered from
-Windows traces:
+The laboratory client independently gated three additions based on the
+then-current Windows-trace interpretation:
 
-- a derived second `SET_FEATURE 0x05` after `GET_FEATURE 0x70`;
+- a derived second `SET_FEATURE 0x05` after `GET_FEATURE 0x70` (the later
+  transfer-length audit disproved the claimed Windows feature payload);
 - four captured `OUTPUT_REPORT 0x65` payloads;
 - a post-recovery `GET_FEATURE 0x70` readiness verification.
 
@@ -30,7 +31,8 @@ intrinsically wrong: their lifecycle placement, required acknowledgement, or
 prerequisites may be wrong. Production Phase 75 therefore keeps `0x65` out of
 the recovery path. The derived `0x05` and readiness-verification additions were
 not promoted independently because their short axis-disabled trial was not a
-sufficient soak test.
+sufficient soak test. See [PHASE72_KDNET_ERRATUM.md](PHASE72_KDNET_ERRATUM.md)
+before interpreting any Phase 74 feature-report experiment.
 
 The local-only Phase 74 branch and boot artifact may be retained to reproduce
 the failure, but neither belongs in production releases.

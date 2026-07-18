@@ -3,7 +3,7 @@
 Linux support for the `MSHW0485` G6 touchscreen in the OLED Microsoft Surface
 Pro 11. The hardware-validated production baseline is Phase 75: QSPI/GPI-DMA
 multi-touch on `7.1.3-sp11-baseline1+`, with a unique `mshw0485_touch` module
-identity and the Phase 72 mode-config reset fix. See
+identity and the empirically stable Phase 72 exchange. See
 [docs/STATUS.md](docs/STATUS.md) for the exact supported, experimental, and
 unsupported boundaries.
 
@@ -161,44 +161,42 @@ remains an isolated one-shot hardware experiment; see
 Phase 72 closes the frequent class-3 panel-reset regression that Phases 66-68
 narrowed but could not resolve. A live KDNET session against the shipping
 Windows stack (Surface Pro 11, build 26100, resolved `hidspi.sys` PDB symbols)
-proved that the mode-config feature payload was truncated: the kernel read the
-panel's `GET_FEATURE 0x70` response and discarded it, sending
-`SET_FEATURE 0x70 = {0x01}`, whereas Windows echoes the panel's own config back
-as `{0x01,<config>}` and emits an `OUTPUT_REPORT 0x09`. The under-configured
-panel watchdog-reset after roughly 300 ms of streaming, and because init and
-recovery share the sequence, each recovery re-installed the broken mode and the
-resets cascaded. Report `0x09`, abandoned in Phase 66-67 as unsupported, is in
-fact required. The fix captures the panel's `GET_FEATURE 0x70` config tail and
-echoes it back in `SET_FEATURE 0x70`, then emits the `0x09` report, gated by
-`g6ts_biosref.mode_config_fix` (default on) with a fall back to the Phase 68
-`{0x01}` payload if the panel returns no config. On the target the panel's
-`GET_FEATURE 0x70` returns a single byte `0x02`; echoing `{0x01,0x02}` produced
-zero panel resets over a roughly six-hour session including deliberate stress,
-against a prior baseline of one reset every 2-7 seconds under sustained touch.
-The reset storm is eliminated. The change is preserved in its own
-`sp11-phase72` GRUB entry; Phase 68 and the safe baseline remain available for
-rollback. See
-[docs/PHASE72_LIVE_KDNET_ROOT_CAUSE.md](docs/PHASE72_LIVE_KDNET_ROOT_CAUSE.md).
+confirmed that 63-byte report `0x09` participates in initialization and
+device-reset recovery and that report `0x65` is cold-boot-only. Phase 72 then
+captured Linux's one-byte `GET_FEATURE 0x70` result (`02`), sent derived
+`SET_FEATURE 0x70 = {0x01,0x02}`, and emitted short
+`OUTPUT_REPORT 0x09 = {0x8e,0x02}`. The combined sequence produced zero panel
+resets over a roughly six-hour session including deliberate stress, against a
+prior baseline of one reset every 2-7 seconds under sustained touch.
+
+The original analysis incorrectly claimed that Windows sent a six-byte feature
+payload. Applying the capture's `txLen` and `content_len` proves that Windows'
+logical `0x05` and `0x70` payloads are each the single byte `{0x01}`; the extra
+displayed bytes were padding or lay beyond the transfer. Phase 72's hardware
+result stands, but its causal mechanism is not isolated and its sequence is not
+byte-for-byte Windows traffic. See
+[docs/PHASE72_LIVE_KDNET_ROOT_CAUSE.md](docs/PHASE72_LIVE_KDNET_ROOT_CAUSE.md)
+and [docs/PHASE72_KDNET_ERRATUM.md](docs/PHASE72_KDNET_ERRATUM.md).
 
 With Phase 72 the driver now delivers stable multi-touch: the long-standing
 class-3 panel-reset storm is eliminated and the touchscreen survives sustained
 stress without watchdog resets. It is still not ready for a mainline submission.
 Labelled palm and physical-edge captures, measured edge calibration, pressure,
 merged-contact separation, suspend/resume hardware validation, and broader
-kernel compatibility remain open. The Phase 72 fix has been validated over a
-single multi-hour session and should accrue longer soak time before promotion
-to the default boot entry. Pen support is deliberately out of scope.
+kernel compatibility remain open. The Phase 72 sequence has been validated
+over a single multi-hour session and should accrue longer soak time before
+promotion to the default boot entry. Pen support is deliberately out of scope.
 
-Phase 73 re-homes the full QSPI/GPI-DMA multi-touch stack and the Phase 72 fix
-onto the `7.1.3` baseline kernel, retiring the `7.1.1` `sp11-gpicmp1+` lab
-kernel as the working target. All three custom modules (client,
+Phase 73 re-homes the full QSPI/GPI-DMA multi-touch stack and the Phase 72
+sequence onto the `7.1.3` baseline kernel, retiring the `7.1.1`
+`sp11-gpicmp1+` lab kernel as the working target. All three custom modules (client,
 `spi-geni-qcom`, `gpi`) rebuild cleanly against `7.1.3` despite ~20-25% upstream
 drift in the base controller sources. The baseline device tree carried the touch
 node but was authored for FIFO and omitted the GPI-DMA channel wiring, which
 caused the first DMA boot to time out at stage 1; adding `qcom,enable-gsi-dma`,
 `dmas`, and `dma-names` to the `spi@a88000` node (matching the lab DTB) resolved
 it. On `7.1.3-sp11-baseline1+` with the DMA device tree live, touch initialized
-over GPI-DMA with no timeout, the Phase 72 mode-config fix fired, and the panel
+over GPI-DMA with no timeout, the Phase 72 combined exchange ran, and the panel
 initialized with zero resets. At that point this was the furthest project
 milestone: a working DMA multi-touch touchscreen on the intended baseline
 kernel. It is not full Windows parity. Phase 75 subsequently became the saved
@@ -252,6 +250,7 @@ docs/PHASE69_WINDOWS_PROCESSING_PARITY.md
 docs/PHASE70_KERNEL_FRAME_ORCHESTRATOR.md
 docs/PHASE71_SCORE3_PRODUCER.md
 docs/PHASE72_LIVE_KDNET_ROOT_CAUSE.md
+docs/PHASE72_KDNET_ERRATUM.md
 docs/PHASE73_BASELINE_DMA.md
 phase55/
 tools/analyze_spb_etw_csv.py

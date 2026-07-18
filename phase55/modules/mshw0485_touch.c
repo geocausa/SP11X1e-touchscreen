@@ -96,16 +96,17 @@ MODULE_PARM_DESC(windows_orchestrator,
 		 "Use the experimental recovered Windows frame profile (default: false)");
 
 /*
- * Phase 72 live-KDNET fix: the Windows stack derives the mode-config tail from
- * the GET_FEATURE 0x70 response and echoes it back in SET_FEATURE 0x05/0x70 as
- * {0x01,<config>}; we previously sent only {0x01} and dropped <config>, leaving
- * the panel under-configured so it watchdog-resets after ~300 ms of streaming.
- * Opt-in until validated on an isolated boot entry.
+ * Phase 72 hardware-validated a coupled experiment: append the Linux panel's
+ * GET_FEATURE 0x70 content to SET_FEATURE 0x70 and emit a short report 0x09.
+ * A later transfer-length audit disproved the original claim that this mirrors
+ * Windows: captured Windows SET_FEATURE 0x70 content is one byte and its report
+ * 0x09 content is 63 bytes. Keep the proven Linux sequence until isolated
+ * experiments identify which element prevents the reset storm.
  */
 static bool g6ts_mode_config_fix = true;
 module_param_named(mode_config_fix, g6ts_mode_config_fix, bool, 0444);
 MODULE_PARM_DESC(mode_config_fix,
-		 "Echo GET_FEATURE 0x70 config into SET_FEATURE 0x05/0x70 (default: true)");
+		 "Use validated Phase 72 SET 0x70 + short 0x09 sequence (default: true)");
 
 static const u8 g6ts_header_cmd[8] = {
 	0xeb, 0x00, 0x10, 0x00, 0xff, 0xff, 0xff, 0xff,
@@ -219,7 +220,7 @@ struct g6ts {
 	u16 last_content_len;
 	u16 expected_report_descriptor_len;
 	u8 last_content_id;
-	/* Phase 72: config tail captured from GET_FEATURE 0x70, echoed into SETs. */
+	/* Phase 72 Linux response content used by the combined experimental path. */
 	u8 mode_config[G6TS_FEATURE_RESPONSE_LIMIT];
 	u8 mode_config_len;
 	bool mode_config_valid;
@@ -1890,10 +1891,10 @@ static int g6ts_full_reinitialize_locked(struct g6ts *ts)
 	if (ret)
 		goto out;
 	/*
-	 * Phase 72: capture the panel's GET_FEATURE 0x70 config tail NOW, before any
-	 * further response can overwrite ts->body. The Windows stack echoes these
-	 * bytes back in SET_FEATURE 0x05/0x70 as {0x01,<config>}; we previously sent
-	 * only {0x01}. ts->body layout: [0]=class [1..2]=len [3]=id [4..]=content.
+	 * Capture the Linux panel's GET_FEATURE 0x70 content now, before another
+	 * response overwrites ts->body. Phase 72 used it in the empirically stable
+	 * combined sequence; this is not a byte-for-byte Windows feature exchange.
+	 * Body layout: [0]=class [1..2]=len [3]=id [4..]=content.
 	 */
 	if (g6ts_mode_config_fix) {
 		size_t cfg_len = ts->last_content_len;
@@ -1912,9 +1913,9 @@ static int g6ts_full_reinitialize_locked(struct g6ts *ts)
 	ts->initialization_stage = 6;
 	if (g6ts_mode_config_fix && ts->mode_config_valid) {
 		/*
-		 * Phase 72: SET_FEATURE 0x70 = {0x01, <config-from-GET>}, mirroring the
-		 * Windows stack. mode_setup[] is 0x01 followed by the panel's own
-		 * GET_FEATURE 0x70 config bytes.
+		 * Phase 72 Linux sequence: SET_FEATURE 0x70 is 0x01 followed by the
+		 * panel's GET_FEATURE 0x70 content. Windows declares one logical content
+		 * byte for its captured SET_FEATURE 0x70 writes.
 		 */
 		u8 mode_setup[1 + sizeof(ts->mode_config)];
 		size_t setup_len = 1 + ts->mode_config_len;
@@ -1938,11 +1939,11 @@ static int g6ts_full_reinitialize_locked(struct g6ts *ts)
 		goto out;
 
 	/*
-	 * Phase 72: emit the OUTPUT_REPORT 0x09 mode/config report(s) the Windows
-	 * stack sends around the 0x70 write (report_type 5 = OUTPUT_REPORT). Payload
-	 * is 0x8e followed by the same config tail. This is best-effort: the panel
-	 * acks 0x09 as an OUTPUT_REPORT_RESPONSE which the read path already skips,
-	 * so a missing/late ack does not abort init.
+	 * Phase 72 emits a short OUTPUT_REPORT 0x09 containing 0x8e followed by the
+	 * Linux GET_FEATURE 0x70 content. KDNET confirms that Windows uses report
+	 * 0x09 here, but with 63-byte content rather than this short form. This is
+	 * best-effort: the read path already skips OUTPUT_REPORT_RESPONSE, so a
+	 * missing or late acknowledgment does not abort initialization.
 	 */
 	if (g6ts_mode_config_fix && ts->mode_config_valid) {
 		u8 report09[1 + sizeof(ts->mode_config)];

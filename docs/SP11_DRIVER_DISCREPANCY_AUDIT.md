@@ -1,6 +1,12 @@
 
 ---
 
+> **Historical working note:** This document predates the final transfer-length
+> audit. Its recovery hypotheses are retained for provenance, not as current
+> conclusions. In particular, the raw KDNET capture disproves any inference
+> that Windows sends a multi-byte logical payload in `SET_FEATURE 0x05/0x70`.
+> See [PHASE72_KDNET_ERRATUM.md](PHASE72_KDNET_ERRATUM.md).
+
 ## UPDATE 2026-07-16 (pm, cont.7) — FULL WINDOWS RECOVERY SEQUENCE + "does Windows glitch too?"
 
 ### Full Windows software-recovery call chain (HidSpiCx.sys)
@@ -31,7 +37,7 @@
   => Windows DOES see the occasional panel-initiated reset (the panel hardware genuinely does this),
      but it recovers cleanly ONCE and does NOT cascade.
 
-### THEREFORE — why do WE crash so often (the answer):
+### HISTORICAL HYPOTHESIS — why we thought Linux crashed so often:
   The panel occasionally resets on its own = NORMAL, Windows sees it too. The difference is RECOVERY:
     Windows: re-queries panel feature config -> rebuilds exact mode mask -> atomically commits ->
              gates stream on completion event -> verifies -> resumes. Result: clean, one-shot.
@@ -72,6 +78,9 @@
      that we omit.
   3. Only then propose a reversible, branch-based code change for geoca's approval.
 
-### STATUS: Root cause well-supported and now CONSISTENT WITH WINDOWS DESIGN (software recovery, not
-   HW reset). Gap = fixed-handshake-replay + ungated/unverified resume vs Windows'
-   live-feature-re-derivation + gated/verified recovery. NOTHING changed in tree or on device.
+### STATUS AT THE TIME (SUPERSEDED)
+The working hypothesis was fixed-handshake replay plus ungated/unverified
+resume versus Windows' live-feature re-derivation and gated/verified recovery.
+The later transfer-length audit invalidated the feature-payload evidence for
+that causal claim. Nothing was changed in the tree or on the device by this
+historical analysis.
