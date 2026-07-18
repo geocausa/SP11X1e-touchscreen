@@ -33,6 +33,13 @@ Do not put `0x65` in the shared recovery path. Do not infer logical content from
 bytes outside a packet's declared `content_len`, even when those bytes appear in
 the rounded transfer or debugger dump.
 
+Contact behavior must be tested independently from those transport experiments.
+Phase 76 preserves the complete Phase 75 setup/recovery sequence and changes
+only assignment, final centroid/output coordinates, and strong-contact
+admission. Compare keyboard cadence, display edges, slow drags, two-finger
+crossing, gesture continuity, `behavior_stats`, and reset counters against the
+Phase 75 control before considering promotion.
+
 ## Evidence boundary
 
 No capture is committed to the repository. The reviewed raw log is 33,851 bytes

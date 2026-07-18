@@ -13,6 +13,7 @@
 #include <linux/interrupt.h>
 #include <linux/jiffies.h>
 #include <linux/kernel.h>
+#include <linux/ktime.h>
 #include <linux/math.h>
 #include <linux/math64.h>
 #include <linux/module.h>
@@ -67,6 +68,8 @@
 #define G6TS_TRACK_CONFIRM_WEAK		5U
 #define G6TS_TRACK_CONFIRM_SPLIT	8U
 #define G6TS_TRACK_SPLIT_RADIUS		2048U
+#define G6TS_BEHAVIOR_CONFIRM_NORMAL	2U
+#define G6TS_WINDOWS_CENTROID_BASELINE	171U
 #define G6TS_SMOOTH_STATIONARY_MAX	64U
 #define G6TS_SMOOTH_SLOW_MAX		256U
 #define G6TS_SIGNAL_INTERCEPT_Q24	6710886
@@ -94,6 +97,20 @@ static bool g6ts_windows_orchestrator;
 module_param_named(windows_orchestrator, g6ts_windows_orchestrator, bool, 0444);
 MODULE_PARM_DESC(windows_orchestrator,
 		 "Use the experimental recovered Windows frame profile (default: false)");
+
+/*
+ * Phase 76 isolates the behavior-only changes from the hardware-validated
+ * Phase 75 transport and recovery path.  It enables three independently
+ * proven ordinary-finger pieces without enabling the incomplete Windows
+ * lifecycle: sensor-space assignment, direct output coordinates, and the
+ * project-0x0c83 normal expanded-centroid baseline.  Strong contacts use the
+ * previously tested two-frame admission window; weak and nearby split
+ * candidates retain their longer gates.
+ */
+static bool g6ts_behavior_v2;
+module_param_named(behavior_v2, g6ts_behavior_v2, bool, 0444);
+MODULE_PARM_DESC(behavior_v2,
+		 "Use Phase 76 low-latency Windows-derived contact behavior (default: false)");
 
 /*
  * Phase 72 hardware-validated a coupled experiment: append the Linux panel's
@@ -146,6 +163,8 @@ struct g6ts_contact {
 	u16 pixels;
 	u16 x;
 	u16 y;
+	u16 output_x;
+	u16 output_y;
 	u8 peak_value;
 	u8 min_col;
 	u8 max_col;
@@ -230,6 +249,19 @@ struct g6ts {
 	u64 reset_notifications;
 	u64 recovery_successes;
 	u64 recovery_failures;
+	u64 heat_frames;
+	u64 heat_errors;
+	u64 component_total;
+	u64 contact_total;
+	u64 weak_rejections;
+	u64 nsr_rejections;
+	u64 palm_rejections;
+	u64 assignment_matches;
+	u64 new_tracks;
+	u64 output_frames;
+	u64 output_contacts;
+	u64 processing_ns_total;
+	u64 processing_ns_max;
 	unsigned long last_reset_jiffies;
 	u8 nsr_bin_count;
 	u8 initialization_stage;
@@ -238,6 +270,61 @@ struct g6ts {
 	bool mode_enabled;
 	bool fatal_transport_error;
 	bool stopping;
+};
+
+static ssize_t behavior_stats_show(struct device *dev,
+				   struct device_attribute *attr, char *buf)
+{
+	struct g6ts *ts = dev_get_drvdata(dev);
+	u64 average_ns;
+	ssize_t length;
+
+	mutex_lock(&ts->io_lock);
+	average_ns = ts->heat_frames ?
+		div64_u64(ts->processing_ns_total, ts->heat_frames) : 0;
+	length = sysfs_emit(buf,
+			    "profile=%s\n"
+			    "mode_enabled=%u\n"
+			    "heat_frames=%llu\n"
+			    "heat_errors=%llu\n"
+			    "components=%llu\n"
+			    "accepted_contacts=%llu\n"
+			    "weak_rejections=%llu\n"
+			    "nsr_rejections=%llu\n"
+			    "palm_rejections=%llu\n"
+			    "assignment_matches=%llu\n"
+			    "new_tracks=%llu\n"
+			    "output_frames=%llu\n"
+			    "output_contacts=%llu\n"
+			    "processing_average_ns=%llu\n"
+			    "processing_max_ns=%llu\n"
+			    "panel_resets=%llu\n"
+			    "recovery_successes=%llu\n"
+			    "recovery_failures=%llu\n",
+			    g6ts_behavior_v2 ? "phase76" :
+				    (g6ts_windows_orchestrator ?
+				     "windows-orchestrator" : "phase75"),
+			    ts->mode_enabled, ts->heat_frames, ts->heat_errors,
+			    ts->component_total, ts->contact_total,
+			    ts->weak_rejections, ts->nsr_rejections,
+			    ts->palm_rejections, ts->assignment_matches,
+			    ts->new_tracks, ts->output_frames,
+			    ts->output_contacts, average_ns,
+			    ts->processing_ns_max, ts->reset_notifications,
+			    ts->recovery_successes, ts->recovery_failures);
+	mutex_unlock(&ts->io_lock);
+
+	return length;
+}
+static DEVICE_ATTR_RO(behavior_stats);
+
+static struct attribute *g6ts_attributes[] = {
+	&dev_attr_behavior_stats.attr,
+	NULL,
+};
+
+static const struct attribute_group g6ts_attribute_group = {
+	.attrs = g6ts_attributes,
 };
 
 static int g6ts_acpi_method(struct device *dev, const char *method)
@@ -561,6 +648,45 @@ static s32 g6ts_signal_q12(u8 value)
 
 	return (signal_q24 + BIT(G6TS_CLASSIFIER_SHIFT - 1)) >>
 		G6TS_CLASSIFIER_SHIFT;
+}
+
+/*
+ * FUN_180047078 recomputes the normal output centroid relative to project
+ * baseline index 171.  On the ordinary zero-context path captured for project
+ * 0x0c83, empty cells outside the thresholded component cannot have positive
+ * weight against that baseline.  The expanded-window traversal therefore
+ * reduces exactly to this component-local weighted centroid.  Keep the
+ * detector centroid in contact->x/y for assignment and place this later
+ * output-stage position in contact->output_x/y.
+ */
+static void g6ts_phase76_output_centroid(struct g6ts *ts,
+					 struct g6ts_contact *contact)
+{
+	u64 weighted_x = 0, weighted_y = 0;
+	u64 weight_total = 0;
+	unsigned int index;
+
+	for (index = 0; index < G6TS_HEAT_SAMPLES; index++) {
+		u8 value;
+		u32 weight;
+
+		if (!ts->heat_component[index])
+			continue;
+		value = ts->heatmap[index];
+		if (value >= G6TS_WINDOWS_CENTROID_BASELINE)
+			continue;
+		weight = G6TS_WINDOWS_CENTROID_BASELINE - value;
+		weight_total += weight;
+		weighted_x += (u64)(index % G6TS_HEAT_COLS) * weight;
+		weighted_y += (u64)(index / G6TS_HEAT_COLS) * weight;
+	}
+	if (!weight_total)
+		return;
+
+	contact->output_x = div_u64(weighted_x * G6TS_LOGICAL_MAX,
+				    weight_total * (G6TS_HEAT_COLS - 1));
+	contact->output_y = div_u64(weighted_y * G6TS_LOGICAL_MAX,
+				    weight_total * (G6TS_HEAT_ROWS - 1));
 }
 
 /*
@@ -1008,9 +1134,11 @@ static unsigned int g6ts_find_contacts(struct g6ts *ts)
 			}
 		}
 
-		if (contact.pixels < G6TS_HEAT_MIN_PIXELS) {
-			if (contact.peak_value > G6TS_HEAT_STRONG_MAX)
-				continue;
+		ts->component_total++;
+		if (contact.pixels < G6TS_HEAT_MIN_PIXELS &&
+		    contact.peak_value > G6TS_HEAT_STRONG_MAX) {
+			ts->weak_rejections++;
+			continue;
 		}
 		if (ts->nsr_valid) {
 			unsigned int sensor_row = div_u64(contact.weighted_y +
@@ -1021,18 +1149,24 @@ static unsigned int g6ts_find_contacts(struct g6ts *ts)
 				u8 bin = g6ts_nsr_row_to_bin[sensor_row];
 
 				if (bin < ts->nsr_bin_count &&
-				    ts->nsr_bins[bin] > G6TS_NSR_CUTOFF)
+				    ts->nsr_bins[bin] > G6TS_NSR_CUTOFF) {
+					ts->nsr_rejections++;
 					continue;
+				}
 			}
 		}
 		if (contact.pixels > G6TS_HEAT_PALM_PIXELS ||
 		    contact.max_col - contact.min_col + 1 > G6TS_HEAT_PALM_SPAN ||
-		    contact.max_row - contact.min_row + 1 > G6TS_HEAT_PALM_SPAN)
+		    contact.max_row - contact.min_row + 1 > G6TS_HEAT_PALM_SPAN) {
+			ts->palm_rejections++;
 			continue;
+		}
 		contact.x = div_u64(contact.weighted_x * G6TS_LOGICAL_MAX,
 				    (u64)contact.strength * (G6TS_HEAT_COLS - 1));
 		contact.y = div_u64(contact.weighted_y * G6TS_LOGICAL_MAX,
 				    (u64)contact.strength * (G6TS_HEAT_ROWS - 1));
+		contact.output_x = contact.x;
+		contact.output_y = contact.y;
 		contact.sensor_x_q24 = div_u64(contact.weighted_x << 24,
 					       contact.strength);
 		contact.sensor_y_q24 = div_u64(contact.weighted_y << 24,
@@ -1040,6 +1174,8 @@ static unsigned int g6ts_find_contacts(struct g6ts *ts)
 		memset(ts->heat_component, 0, sizeof(ts->heat_component));
 		while (tail)
 			ts->heat_component[ts->heat_queue[--tail]] = 1;
+		if (g6ts_behavior_v2)
+			g6ts_phase76_output_centroid(ts, &contact);
 		g6ts_local_peak_counts(ts, &contact);
 		contact.features_q12[0] =
 			contact.pixels << G6TS_CLASSIFIER_SHIFT;
@@ -1061,6 +1197,7 @@ static unsigned int g6ts_find_contacts(struct g6ts *ts)
 		g6ts_store_contact(ts, &contact, &contact_count);
 	}
 
+	ts->contact_total += contact_count;
 	return contact_count;
 }
 
@@ -1196,7 +1333,7 @@ static u16 g6ts_filter_coordinate(u16 previous, u16 sample)
 static unsigned int g6ts_track_distance(const struct g6ts_track *track,
 					const struct g6ts_contact *contact)
 {
-	if (g6ts_windows_orchestrator) {
+	if (g6ts_windows_orchestrator || g6ts_behavior_v2) {
 		const u32 x_scale = G6TS_WINDOWS_ASSIGN_X_SCALE_Q24;
 		const u32 y_scale = G6TS_WINDOWS_ASSIGN_Y_SCALE_Q24;
 		s64 predicted_x = clamp_t(s64,
@@ -1240,7 +1377,8 @@ static u8 g6ts_confirmation_requirement(const struct g6ts *ts,
 					const struct g6ts_contact *contact)
 {
 	unsigned int i;
-	u8 required = G6TS_TRACK_CONFIRM_NORMAL;
+	u8 required = g6ts_behavior_v2 ? G6TS_BEHAVIOR_CONFIRM_NORMAL :
+					     G6TS_TRACK_CONFIRM_NORMAL;
 
 	/*
 	 * TouchPenProcessor does not expose a blob immediately.  Its recovered
@@ -1377,10 +1515,13 @@ static void g6ts_assign_tracks(struct g6ts *ts, unsigned int count,
 		col = j - 1;
 		if (row < active_count && col < count &&
 		    work->cost[row][col] < G6TS_ASSIGN_INVALID_COST &&
-		    (g6ts_windows_orchestrator ||
+		    (g6ts_windows_orchestrator || g6ts_behavior_v2 ||
 		     work->cost[row][col] <= G6TS_TRACK_MATCH_MAX))
 			contact_slots[col] = work->active_slots[row];
 	}
+	for (i = 0; i < count; i++)
+		if (contact_slots[i] >= 0)
+			ts->assignment_matches++;
 }
 
 static void g6ts_update_track(struct g6ts_track *track,
@@ -1405,6 +1546,9 @@ static void g6ts_update_track(struct g6ts_track *track,
 		/* FUN_18004a330 stores X/Y directly; its alpha blends another scalar. */
 		track->output_x = contact->x;
 		track->output_y = contact->y;
+	} else if (g6ts_behavior_v2) {
+		track->output_x = contact->output_x;
+		track->output_y = contact->output_y;
 	} else {
 		track->output_x = g6ts_filter_coordinate(track->output_x,
 							 contact->x);
@@ -1440,8 +1584,8 @@ static int g6ts_new_track(struct g6ts *ts,
 		memset(track, 0, sizeof(*track));
 		track->raw_x = contact->x;
 		track->raw_y = contact->y;
-		track->output_x = contact->x;
-		track->output_y = contact->y;
+		track->output_x = g6ts_behavior_v2 ? contact->output_x : contact->x;
+		track->output_y = g6ts_behavior_v2 ? contact->output_y : contact->y;
 		track->sensor_x_q24 = contact->sensor_x_q24;
 		track->sensor_y_q24 = contact->sensor_y_q24;
 		track->strength = contact->strength;
@@ -1458,6 +1602,7 @@ static int g6ts_new_track(struct g6ts *ts,
 			track->confirmed = track->required_evidence <= 1;
 		}
 		track->active = true;
+		ts->new_tracks++;
 		return slot;
 	}
 	return -ENOSPC;
@@ -1507,6 +1652,7 @@ g6ts_create_unmatched_tracks(struct g6ts *ts, unsigned int count,
 static void g6ts_collect_linux_contacts(struct g6ts *ts,
 					unsigned long current_slots)
 {
+	unsigned int reported = 0;
 	unsigned int i;
 
 	for (i = 0; i < G6TS_MAX_CONTACTS; i++) {
@@ -1520,22 +1666,28 @@ static void g6ts_collect_linux_contacts(struct g6ts *ts,
 		input_mt_report_slot_state(ts->input, MT_TOOL_FINGER, true);
 		touchscreen_report_pos(ts->input, &ts->prop, track->output_x,
 				       track->output_y, true);
+		reported++;
 	}
 	input_mt_sync_frame(ts->input);
 	input_sync(ts->input);
+	ts->output_frames++;
+	ts->output_contacts += reported;
 }
 
 static int g6ts_report_heat_contacts(struct g6ts *ts, const u8 *content,
 				     size_t content_len)
 {
+	u64 started_ns = ktime_get_ns();
 	unsigned long current_slots = 0;
 	int contact_slots[G6TS_MAX_CONTACTS];
 	unsigned int count, i;
 	int ret;
 
 	ret = g6ts_extract_heatmap(ts, content, content_len);
-	if (ret)
+	if (ret) {
+		ts->heat_errors++;
 		return ret;
+	}
 	count = g6ts_find_contacts(ts);
 	g6ts_assign_tracks(ts, count, contact_slots);
 
@@ -1557,6 +1709,10 @@ static int g6ts_report_heat_contacts(struct g6ts *ts, const u8 *content,
 	current_slots = g6ts_create_unmatched_tracks(ts, count, contact_slots,
 						     current_slots);
 	g6ts_collect_linux_contacts(ts, current_slots);
+	ts->heat_frames++;
+	started_ns = ktime_get_ns() - started_ns;
+	ts->processing_ns_total += started_ns;
+	ts->processing_ns_max = max(ts->processing_ns_max, started_ns);
 
 	return 0;
 }
@@ -2023,6 +2179,10 @@ static int g6ts_probe(struct spi_device *spi)
 	struct g6ts *ts;
 	int ret;
 
+	if (g6ts_behavior_v2 && g6ts_windows_orchestrator)
+		return dev_err_probe(&spi->dev, -EINVAL,
+				     "behavior_v2 and windows_orchestrator are mutually exclusive\n");
+
 	ts = devm_kzalloc(&spi->dev, sizeof(*ts), GFP_KERNEL);
 	if (!ts)
 		return -ENOMEM;
@@ -2063,6 +2223,10 @@ static int g6ts_probe(struct spi_device *spi)
 	mutex_init(&ts->io_lock);
 	INIT_DELAYED_WORK(&ts->recovery_work, g6ts_recovery_work);
 	spi_set_drvdata(spi, ts);
+	ret = devm_device_add_group(&spi->dev, &g6ts_attribute_group);
+	if (ret)
+		return dev_err_probe(&spi->dev, ret,
+				     "failed to create diagnostic attributes\n");
 	spi->max_speed_hz = G6TS_SPI_HZ;
 	spi->bits_per_word = 8;
 	spi->mode = SPI_MODE_0 | SPI_TX_QUAD | SPI_RX_QUAD;
@@ -2099,7 +2263,9 @@ static int g6ts_probe(struct spi_device *spi)
 	g6ts_clear_last_response(ts);
 	schedule_delayed_work(&ts->recovery_work,
 			      msecs_to_jiffies(G6TS_RECOVERY_DELAY_MS));
-	dev_info(&spi->dev, "touch controller initialization scheduled\n");
+	dev_info(&spi->dev, "touch controller initialization scheduled profile=%s\n",
+		 g6ts_behavior_v2 ? "phase76" :
+		 (g6ts_windows_orchestrator ? "windows-orchestrator" : "phase75"));
 	return 0;
 }
 

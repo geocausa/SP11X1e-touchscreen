@@ -14,6 +14,8 @@ LIFECYCLE_PROFILE = ROOT / "phase55" / "modules" / "g6ts_lifecycle_profile.h"
 ROOT_MAKEFILE = ROOT / "Makefile"
 PHASE75_OVERLAY = ROOT / "dts" / "phase75-mshw0485-production.dtso"
 PHASE75_DEPLOY = ROOT / "scripts" / "deploy_phase75_identity.sh"
+PHASE76_BOOT = ROOT / "boot" / "63_sp11_713_phase76_behavior"
+PHASE76_DEPLOY = ROOT / "scripts" / "deploy_phase76_behavior.sh"
 
 
 def function_body(source: str, name: str) -> str:
@@ -40,6 +42,8 @@ class SourceInvariantTests(unittest.TestCase):
         cls.root_makefile = ROOT_MAKEFILE.read_text(encoding="utf-8")
         cls.phase75_overlay = PHASE75_OVERLAY.read_text(encoding="utf-8")
         cls.phase75_deploy = PHASE75_DEPLOY.read_text(encoding="utf-8")
+        cls.phase76_boot = PHASE76_BOOT.read_text(encoding="utf-8")
+        cls.phase76_deploy = PHASE76_DEPLOY.read_text(encoding="utf-8")
 
     def test_default_build_is_the_production_dma_set(self):
         self.assertIn("all: production", self.root_makefile)
@@ -135,6 +139,64 @@ class SourceInvariantTests(unittest.TestCase):
         self.assertIn("track->output_x = contact->x", windows_branch)
         self.assertIn("track->output_y = contact->y", windows_branch)
         self.assertNotIn("g6ts_filter_coordinate", windows_branch)
+
+    def test_phase76_profile_is_opt_in_and_transport_independent(self):
+        self.assertIn("static bool g6ts_behavior_v2;", self.source)
+        self.assertIn(
+            "module_param_named(behavior_v2, g6ts_behavior_v2, bool, 0444)",
+            self.source,
+        )
+        probe = function_body(self.source, "g6ts_probe")
+        self.assertIn(
+            "g6ts_behavior_v2 && g6ts_windows_orchestrator", probe
+        )
+        recovery = function_body(self.source, "g6ts_full_reinitialize_locked")
+        self.assertNotIn("g6ts_behavior_v2", recovery)
+
+    def test_phase76_uses_proven_geometry_and_two_frame_gate(self):
+        centroid = function_body(self.source, "g6ts_phase76_output_centroid")
+        self.assertIn("G6TS_WINDOWS_CENTROID_BASELINE", centroid)
+        self.assertIn("contact->output_x", centroid)
+        self.assertIn("contact->output_y", centroid)
+
+        distance = function_body(self.source, "g6ts_track_distance")
+        self.assertIn(
+            "g6ts_windows_orchestrator || g6ts_behavior_v2", distance
+        )
+        confirmation = function_body(
+            self.source, "g6ts_confirmation_requirement"
+        )
+        self.assertIn("G6TS_BEHAVIOR_CONFIRM_NORMAL", confirmation)
+
+        update = function_body(self.source, "g6ts_update_track")
+        phase76 = update[update.index("else if (g6ts_behavior_v2)") :]
+        self.assertIn("contact->output_x", phase76)
+        self.assertNotIn("g6ts_filter_coordinate", phase76.split("} else {")[0])
+
+    def test_phase76_exposes_read_only_behavior_counters(self):
+        show = function_body(self.source, "behavior_stats_show")
+        for token in (
+            "heat_frames",
+            "components",
+            "accepted_contacts",
+            "assignment_matches",
+            "processing_average_ns",
+            "panel_resets",
+        ):
+            self.assertIn(token, show)
+        self.assertIn("static DEVICE_ATTR_RO(behavior_stats)", self.source)
+
+    def test_phase76_deployment_is_isolated_from_phase75(self):
+        for token in (
+            "sp11-phase76-behavior",
+            "sp11_entry=7.1.3-phase76-behavior",
+            "mshw0485_touch.behavior_v2=1",
+        ):
+            self.assertIn(token, self.phase76_boot)
+        self.assertIn("phase75_assets", self.phase76_deploy)
+        self.assertIn("grub-reboot sp11-phase76-behavior", self.phase76_deploy)
+        self.assertIn("saved GRUB default remains unchanged", self.phase76_deploy)
+        self.assertNotIn("grub-set-default", self.phase76_deploy)
 
     def test_frame_orchestrator_has_one_ordered_collection_boundary(self):
         body = function_body(self.source, "g6ts_report_heat_contacts")

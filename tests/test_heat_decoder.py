@@ -29,6 +29,7 @@ from tools.decode_heat_frame import (
     modal_baseline,
     parse_sections,
     parse_metadata_records,
+    phase76_output_centroid,
     halo_ratio,
     secondary_detector_features,
     windows_classifier_features,
@@ -216,6 +217,29 @@ class HeatDecoderTests(unittest.TestCase):
         self.assertEqual(len(contacts), 2)
         self.assertEqual(palms, 0)
         self.assertGreater(contacts[0]["strength"], contacts[1]["strength"])
+
+    def test_phase76_centroid_uses_project_normal_baseline(self):
+        grid = make_grid(
+            [
+                (10, 20, 150),
+                (10, 21, 170),
+                (11, 20, 165),
+            ]
+        )
+        component = connected_components(grid, 0xB5)[0]
+        output = phase76_output_centroid(grid, component)
+
+        weights = (21, 1, 6)
+        expected_x = (20 * weights[0] + 21 * weights[1] + 20 * weights[2])
+        expected_y = (10 * weights[0] + 10 * weights[1] + 11 * weights[2])
+        total = sum(weights)
+        self.assertEqual(
+            output,
+            (
+                expected_x * 32767 // (total * (GRID_COLS - 1)),
+                expected_y * 32767 // (total * (GRID_ROWS - 1)),
+            ),
+        )
 
     def test_windows_detector_uses_four_connectivity(self):
         grid = make_grid([(10, 10, 0x80), (11, 11, 0x80)])

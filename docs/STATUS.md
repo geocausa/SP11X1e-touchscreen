@@ -26,11 +26,20 @@ The corrected KDNET interpretation is recorded in
 “truncated feature payload” explanation without retracting the Phase 72/75
 hardware results.
 
+Phase 76 is an opt-in behavior-only experiment over this exact baseline. It
+adds recovered sensor-space assignment, direct output coordinates, the bounded
+normal centroid branch, and two-frame strong-contact admission. It has passed
+static and corpus regression only until a dedicated hardware boot is tested;
+see [PHASE76_BEHAVIOR.md](PHASE76_BEHAVIOR.md).
+
 ## Explicitly experimental
 
 - `mshw0485_touch.windows_orchestrator=1` enables recovered Windows lifecycle
   behavior whose provider-owned context fields are not fully proven. It is
   read-only and defaults off.
+- `mshw0485_touch.behavior_v2=1` selects the isolated Phase 76 contact profile.
+  It is read-only, defaults off, is mutually exclusive with
+  `windows_orchestrator`, and does not change transport or reset recovery.
 - Phase 74 is a local reset reproducer. Replaying its captured report `0x65`
   sequence during recovery caused 15-17 resets; see
   [PHASE74_RESET_FINDING.md](PHASE74_RESET_FINDING.md).

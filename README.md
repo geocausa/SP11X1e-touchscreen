@@ -13,6 +13,14 @@ provides the UEFI-derived single-touch implementation. The deliberately
 resetting Phase 74 code is excluded from production; only its negative result
 is documented.
 
+Phase 76 is a separate, opt-in behavior experiment over the unchanged Phase 75
+transport and recovery baseline. It combines recovered sensor-space
+assignment, a bounded normal output-centroid branch, direct coordinates, and
+the previously hardware-tested two-frame strong-contact gate. It remains a
+one-shot GRUB test until live keyboard, edge, crossing-finger, and reset
+validation is complete. See
+[docs/PHASE76_BEHAVIOR.md](docs/PHASE76_BEHAVIOR.md).
+
 ## Historical FIFO baseline: Phase 52
 
 - Power and reset sequencing works.
@@ -252,6 +260,8 @@ docs/PHASE71_SCORE3_PRODUCER.md
 docs/PHASE72_LIVE_KDNET_ROOT_CAUSE.md
 docs/PHASE72_KDNET_ERRATUM.md
 docs/PHASE73_BASELINE_DMA.md
+docs/PHASE75_DRIVER_IDENTITY.md
+docs/PHASE76_BEHAVIOR.md
 phase55/
 tools/analyze_spb_etw_csv.py
 tools/decode_heat_frame.py
@@ -265,10 +275,14 @@ scripts/deploy_phase70.sh
 scripts/deploy_phase71.sh
 scripts/deploy_phase72.sh
 scripts/deploy_phase73_dma.sh
+scripts/deploy_phase75_identity.sh
+scripts/deploy_phase76_behavior.sh
 boot/57_sp11_711_phase70_orchestrator
 boot/58_sp11_711_phase71_score3
 boot/59_sp11_711_phase72_config
 boot/60_sp11_713_phase73_dma
+boot/62_sp11_713_phase75_identity
+boot/63_sp11_713_phase76_behavior
 tests/test_heat_decoder.py
 tests/test_contact_tracker.py
 tests/test_windows_classifier.py
