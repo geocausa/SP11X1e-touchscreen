@@ -28,9 +28,13 @@ hardware results.
 
 Phase 76 is an opt-in behavior-only experiment over this exact baseline. It
 adds recovered sensor-space assignment, direct output coordinates, the bounded
-normal centroid branch, and two-frame strong-contact admission. It has passed
-static and corpus regression only until a dedicated hardware boot is tested;
-see [PHASE76_BEHAVIOR.md](PHASE76_BEHAVIOR.md).
+normal centroid branch, and two-frame strong-contact admission. That behavior
+subsequently booted and provided ordinary and multi-touch input. Phase 77 adds
+gated software re-enumeration after a panel reset and also completed clean
+cold boots with thousands of Heat frames and zero parser/reset errors, but its
+natural panel-reset branch has not yet been exercised by a captured reset; see
+[PHASE76_BEHAVIOR.md](PHASE76_BEHAVIOR.md) and
+[PHASE77_GATED_RECOVERY.md](PHASE77_GATED_RECOVERY.md).
 
 ## Explicitly experimental
 
@@ -40,6 +44,17 @@ see [PHASE76_BEHAVIOR.md](PHASE76_BEHAVIOR.md).
 - `mshw0485_touch.behavior_v2=1` selects the isolated Phase 76 contact profile.
   It is read-only, defaults off, is mutually exclusive with
   `windows_orchestrator`, and does not change transport or reset recovery.
+- `mshw0485_touch.reset_recovery_v2=1` selects Phase 77's gated software
+  descriptor re-enumeration after a panel reset. Clean cold boot is validated;
+  the reset branch remains experimental.
+- `mshw0485_touch.reset_storm_breaker=1` selects Phase 78's bounded escalation.
+  It was hardware exercised but did not remove the underlying reset storm.
+- `mshw0485_touch.feature70_one_byte=1` is the untested Phase 79 single-axis
+  protocol experiment. It corrects the logical Windows SetFeature length while
+  deliberately retaining Phase 72's short report `0x09`.
+- `mshw0485_touch.host_fault_recovery=1` selects Phase 80's bounded cold
+  recovery after an IRQ transport/protocol/drain failure. It is backed by the
+  captured Windows timeout lifecycle but is not yet hardware validated.
 - Phase 74 is a local reset reproducer. Replaying its captured report `0x65`
   sequence during recovery caused 15-17 resets; see
   [PHASE74_RESET_FINDING.md](PHASE74_RESET_FINDING.md).
@@ -61,8 +76,9 @@ see [PHASE76_BEHAVIOR.md](PHASE76_BEHAVIOR.md).
   sufficient.
 - The driver is out-of-tree and not yet suitable for a mainline Linux
   submission. It depends on matched internal GENI and GPI changes.
-- No firmware is flashed or modified. Windows binaries and captures are
-  optional read-only research inputs and are not redistributed.
+- No firmware is flashed or modified. Windows binaries are not redistributed.
+  One small textual KDNET log is retained for reproducibility; the larger
+  private captures are represented by hashes and derived findings.
 
 `main` represents the best validated project baseline, not a claim of generic
 hardware support, Windows parity, or upstream acceptance.

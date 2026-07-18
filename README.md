@@ -170,7 +170,8 @@ Phase 72 closes the frequent class-3 panel-reset regression that Phases 66-68
 narrowed but could not resolve. A live KDNET session against the shipping
 Windows stack (Surface Pro 11, build 26100, resolved `hidspi.sys` PDB symbols)
 confirmed that 63-byte report `0x09` participates in initialization and
-device-reset recovery and that report `0x65` is cold-boot-only. Phase 72 then
+host-reset/shallow-wake setup and that report `0x65` is cold-boot-only. A
+natural panel-initiated reset was not captured. Phase 72 then
 captured Linux's one-byte `GET_FEATURE 0x70` result (`02`), sent derived
 `SET_FEATURE 0x70 = {0x01,0x02}`, and emitted short
 `OUTPUT_REPORT 0x09 = {0x8e,0x02}`. The combined sequence produced zero panel
@@ -185,6 +186,16 @@ result stands, but its causal mechanism is not isolated and its sequence is not
 byte-for-byte Windows traffic. See
 [docs/PHASE72_LIVE_KDNET_ROOT_CAUSE.md](docs/PHASE72_LIVE_KDNET_ROOT_CAUSE.md)
 and [docs/PHASE72_KDNET_ERRATUM.md](docs/PHASE72_KDNET_ERRATUM.md).
+
+The returned July lifecycle capture closes another concrete gap: Windows
+actively resets and re-enumerates after a host-side HID-SPI timeout, whereas
+the Linux IRQ reader could stop permanently on a transport, framing, or drain
+failure. Phase 80 adds an isolated, bounded host-fault recovery using the
+existing cold path and separate diagnostics; it deliberately retains the
+Phase 72 mode exchange because five complete report-`0x09` variants contain
+lifecycle-dependent fields. See
+[docs/KDNET_20260718_LIFECYCLE_CAPTURE.md](docs/KDNET_20260718_LIFECYCLE_CAPTURE.md)
+and [docs/PHASE80_HOST_FAULT_RECOVERY.md](docs/PHASE80_HOST_FAULT_RECOVERY.md).
 
 With Phase 72 the driver now delivers stable multi-touch: the long-standing
 class-3 panel-reset storm is eliminated and the touchscreen survives sustained
@@ -262,12 +273,17 @@ docs/PHASE72_KDNET_ERRATUM.md
 docs/PHASE73_BASELINE_DMA.md
 docs/PHASE75_DRIVER_IDENTITY.md
 docs/PHASE76_BEHAVIOR.md
+docs/PHASE77_GATED_RECOVERY.md
+docs/PHASE78_RESET_STORM_BREAKER.md
+docs/PHASE80_HOST_FAULT_RECOVERY.md
+docs/KDNET_20260718_LIFECYCLE_CAPTURE.md
 phase55/
 tools/analyze_spb_etw_csv.py
 tools/decode_heat_frame.py
 tools/extract_windows_classifier.py
 tools/extract_windows_lifecycle.py
 tools/generate_lifecycle_header.py
+tools/extract_kdnet_hidspi.py
 tools/windows_tracking_geometry.py
 tools/regress_heat_frames.py
 tools/track_heat_contacts.py
@@ -277,17 +293,22 @@ scripts/deploy_phase72.sh
 scripts/deploy_phase73_dma.sh
 scripts/deploy_phase75_identity.sh
 scripts/deploy_phase76_behavior.sh
+scripts/deploy_phase77_recovery.sh
+scripts/deploy_phase80_host_recovery.sh
 boot/57_sp11_711_phase70_orchestrator
 boot/58_sp11_711_phase71_score3
 boot/59_sp11_711_phase72_config
 boot/60_sp11_713_phase73_dma
 boot/62_sp11_713_phase75_identity
 boot/63_sp11_713_phase76_behavior
+boot/64_sp11_713_phase77_recovery
+boot/67_sp11_713_phase80_host_recovery
 tests/test_heat_decoder.py
 tests/test_contact_tracker.py
 tests/test_windows_classifier.py
 tests/test_windows_lifecycle.py
 tests/test_windows_tracking_geometry.py
+tests/test_kdnet_hidspi.py
 tests/test_source_invariants.py
 packaging/initramfs-tools/hooks/sp11-g6ts
 ```
@@ -297,10 +318,12 @@ adds the isolated BIOS-reference transfer helper required by this device.
 
 ## Safety and scope
 
-This repository does not contain Microsoft firmware, EFI binaries, firmware
-updates, captures, boot images or initramfs files. The driver does not flash
-the touchscreen and contains no CFU or FRU-unlock path. The GPI-DMA
-experiments are isolated under `phase54/` and `phase55/`.
+This repository does not contain Microsoft firmware, EFI/driver binaries,
+firmware updates, boot images, or initramfs files. It does contain the small
+July 17 textual KDNET mode-setup log needed to audit transfer boundaries; the
+larger lifecycle logs remain private and are identified only by hashes. The
+driver does not flash the touchscreen and contains no CFU or FRU-unlock path.
+The GPI-DMA experiments are isolated under `phase54/` and `phase55/`.
 
 Use a separate boot entry and retain a known-good kernel. See
 [docs/BUILD.md](docs/BUILD.md) and [docs/TESTING.md](docs/TESTING.md).

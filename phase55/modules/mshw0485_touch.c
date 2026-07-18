@@ -33,11 +33,14 @@
 #define G6TS_HEADER_SYNC		0x5a
 #define G6TS_HEADER_VERSION		0x03
 #define G6TS_FEATURE_RESPONSE_LIMIT	64U
+#define G6TS_IRQ_DRAIN_LIMIT		128U
 #define G6TS_HEATMAP_REPORT_ID		0x12
 #define G6TS_MODE_ATTEMPT_LIMIT		3U
 #define G6TS_RECOVERY_DELAY_MS		100U
 #define G6TS_RECOVERY_RETRY_MS		500U
 #define G6TS_RECOVERY_LIMIT		3U
+#define G6TS_RESET_STORM_WINDOW_MS	5000U
+#define G6TS_RESET_STORM_LIMIT		3U
 #define G6TS_HEAT_ROWS			46U
 #define G6TS_HEAT_COLS			68U
 #define G6TS_HEAT_SAMPLES		(G6TS_HEAT_ROWS * G6TS_HEAT_COLS)
@@ -126,6 +129,17 @@ MODULE_PARM_DESC(mode_config_fix,
 		 "Use validated Phase 72 SET 0x70 + short 0x09 sequence (default: true)");
 
 /*
+ * Phase 79 isolates the first known Phase 72 divergence. Windows declares
+ * one logical SET_FEATURE 0x70 content byte (01); Linux appends the panel's
+ * GET_FEATURE result (02). Keep the short Phase 72 report 0x09 unchanged so
+ * this switch changes exactly one logical feature byte.
+ */
+static bool g6ts_feature70_one_byte;
+module_param_named(feature70_one_byte, g6ts_feature70_one_byte, bool, 0444);
+MODULE_PARM_DESC(feature70_one_byte,
+		 "Use Windows-length one-byte SET_FEATURE 0x70 with short report 0x09 (default: false)");
+
+/*
  * Phase 77 keeps cold initialization and the Phase 75 mode exchange intact,
  * but does not force a second hardware reset after the panel has already sent
  * RESET_RESPONSE.  The device-reset path re-enumerates in place, gates Linux
@@ -136,6 +150,31 @@ static bool g6ts_reset_recovery_v2;
 module_param_named(reset_recovery_v2, g6ts_reset_recovery_v2, bool, 0444);
 MODULE_PARM_DESC(reset_recovery_v2,
 		 "Use Phase 77 gated software recovery after panel reset (default: false)");
+
+/*
+ * Phase 78 bounds the Phase 77 fast path.  A real hardware run proved that
+ * software re-enumeration can succeed repeatedly while the panel continues
+ * issuing RESET_RESPONSE.  Three closely spaced resets therefore escalate
+ * the current attempt to the existing cold hardware power/reset path.
+ */
+static bool g6ts_reset_storm_breaker;
+module_param_named(reset_storm_breaker, g6ts_reset_storm_breaker, bool, 0444);
+MODULE_PARM_DESC(reset_storm_breaker,
+		 "Escalate a rapid Phase 77 reset loop to hardware recovery (default: false)");
+
+/*
+ * The July KDNET capture proves that Windows does not leave the collection
+ * inert after a host-side HID-SPI timeout: it enters ResetDevice, observes the
+ * reset response, and enumerates the descriptors again.  The Linux IRQ path
+ * historically just broke out after a transport or framing failure, leaving
+ * mode_enabled set with no recovery work queued.  Phase 80 makes that recovery
+ * explicit and observable.  It uses the already proven cold hardware path;
+ * it does not invent another panel command sequence.
+ */
+static bool g6ts_host_fault_recovery;
+module_param_named(host_fault_recovery, g6ts_host_fault_recovery, bool, 0444);
+MODULE_PARM_DESC(host_fault_recovery,
+		 "Recover with a cold re-enumeration after an IRQ transport/protocol fault (default: false)");
 
 enum g6ts_recovery_path {
 	G6TS_RECOVERY_HARDWARE,
@@ -269,6 +308,11 @@ struct g6ts {
 	u64 hardware_recovery_attempts;
 	u64 software_recovery_attempts;
 	u64 software_recovery_fallbacks;
+	u64 reset_storm_escalations;
+	u64 host_fault_recoveries;
+	u64 irq_transport_errors;
+	u64 irq_protocol_errors;
+	u64 irq_drain_overflows;
 	u64 ready_heat_frames;
 	u64 ready_verification_failures;
 	u64 heat_frames;
@@ -288,6 +332,8 @@ struct g6ts {
 	u8 nsr_bin_count;
 	u8 initialization_stage;
 	u8 recovery_fail_streak;
+	u8 rapid_reset_streak;
+	int last_host_fault;
 	enum g6ts_recovery_path recovery_path;
 	bool nsr_valid;
 	bool awaiting_ready_heat;
@@ -295,6 +341,23 @@ struct g6ts {
 	bool fatal_transport_error;
 	bool stopping;
 };
+
+static const char *g6ts_profile_name(void)
+{
+	if (g6ts_host_fault_recovery)
+		return "phase80";
+	if (g6ts_feature70_one_byte)
+		return "phase79";
+	if (g6ts_reset_storm_breaker)
+		return "phase78";
+	if (g6ts_reset_recovery_v2)
+		return "phase77";
+	if (g6ts_behavior_v2)
+		return "phase76";
+	if (g6ts_windows_orchestrator)
+		return "windows-orchestrator";
+	return "phase75";
+}
 
 static ssize_t behavior_stats_show(struct device *dev,
 				   struct device_attribute *attr, char *buf)
@@ -329,12 +392,16 @@ static ssize_t behavior_stats_show(struct device *dev,
 			    "hardware_recovery_attempts=%llu\n"
 			    "software_recovery_attempts=%llu\n"
 			    "software_recovery_fallbacks=%llu\n"
+			    "reset_storm_escalations=%llu\n"
+			    "rapid_reset_streak=%u\n"
+			    "host_fault_recoveries=%llu\n"
+			    "irq_transport_errors=%llu\n"
+			    "irq_protocol_errors=%llu\n"
+			    "irq_drain_overflows=%llu\n"
+			    "last_host_fault=%d\n"
 			    "ready_heat_frames=%llu\n"
 			    "ready_verification_failures=%llu\n",
-			    g6ts_reset_recovery_v2 ? "phase77" :
-			    (g6ts_behavior_v2 ? "phase76" :
-				    (g6ts_windows_orchestrator ?
-				     "windows-orchestrator" : "phase75")),
+			    g6ts_profile_name(),
 			    ts->mode_enabled, ts->awaiting_ready_heat,
 			    ts->heat_frames, ts->heat_errors,
 			    ts->component_total, ts->contact_total,
@@ -347,6 +414,13 @@ static ssize_t behavior_stats_show(struct device *dev,
 			    ts->hardware_recovery_attempts,
 			    ts->software_recovery_attempts,
 			    ts->software_recovery_fallbacks,
+			    ts->reset_storm_escalations,
+			    ts->rapid_reset_streak,
+			    ts->host_fault_recoveries,
+			    ts->irq_transport_errors,
+			    ts->irq_protocol_errors,
+			    ts->irq_drain_overflows,
+			    ts->last_host_fault,
 			    ts->ready_heat_frames,
 			    ts->ready_verification_failures);
 	mutex_unlock(&ts->io_lock);
@@ -1887,12 +1961,63 @@ static void g6ts_note_panel_reset_locked(struct g6ts *ts,
 	ts->awaiting_ready_heat = false;
 	ts->recovery_path = g6ts_reset_recovery_v2 ?
 		G6TS_RECOVERY_SOFTWARE : G6TS_RECOVERY_HARDWARE;
+	if (g6ts_reset_storm_breaker) {
+		if (interval_ms && interval_ms <= G6TS_RESET_STORM_WINDOW_MS)
+			ts->rapid_reset_streak++;
+		else
+			ts->rapid_reset_streak = 1;
+
+		if (ts->rapid_reset_streak >= G6TS_RESET_STORM_LIMIT) {
+			ts->recovery_path = G6TS_RECOVERY_HARDWARE;
+			ts->reset_storm_escalations++;
+			dev_warn(&ts->spi->dev,
+				 "rapid reset circuit breaker #%llu after %u resets\n",
+				 ts->reset_storm_escalations,
+				 ts->rapid_reset_streak);
+		}
+	}
 	g6ts_release_contacts(ts);
 	dev_warn(&ts->spi->dev,
 		 "panel reset notification #%llu interval=%lums\n",
 		 ts->reset_notifications, interval_ms);
 
 	if (schedule_recovery && !READ_ONCE(ts->stopping))
+		schedule_delayed_work(&ts->recovery_work,
+				      msecs_to_jiffies(G6TS_RECOVERY_DELAY_MS));
+}
+
+/* io_lock is held and the caller has observed one complete IRQ read failure. */
+static void g6ts_note_host_fault_locked(struct g6ts *ts, int error)
+{
+	if (error == -EPROTO || error == -EMSGSIZE)
+		ts->irq_protocol_errors++;
+	else
+		ts->irq_transport_errors++;
+	ts->last_host_fault = error;
+
+	if (!g6ts_host_fault_recovery) {
+		dev_warn_ratelimited(&ts->spi->dev,
+				     "IRQ response read failed: %d\n", error);
+		return;
+	}
+
+	/*
+	 * A fresh hardware recovery is allowed to use the transport again.  A new
+	 * fatal error during that attempt will still stop the worker, preserving
+	 * the existing bounded-failure behavior.
+	 */
+	ts->fatal_transport_error = false;
+	ts->mode_enabled = false;
+	ts->awaiting_ready_heat = false;
+	ts->recovery_path = G6TS_RECOVERY_HARDWARE;
+	ts->rapid_reset_streak = 0;
+	ts->host_fault_recoveries++;
+	g6ts_release_contacts(ts);
+	dev_warn(&ts->spi->dev,
+		 "host HID-SPI fault #%llu ret=%d; scheduling cold recovery\n",
+		 ts->host_fault_recoveries, error);
+
+	if (!READ_ONCE(ts->stopping))
 		schedule_delayed_work(&ts->recovery_work,
 				      msecs_to_jiffies(G6TS_RECOVERY_DELAY_MS));
 }
@@ -1907,16 +2032,29 @@ static irqreturn_t g6ts_interrupt_thread(int irq, void *data)
 		return IRQ_HANDLED;
 
 	mutex_lock(&ts->io_lock);
-	for (i = 0; i < G6TS_FEATURE_RESPONSE_LIMIT; i++) {
+	for (i = 0; i < G6TS_IRQ_DRAIN_LIMIT; i++) {
 		if (!g6ts_has_unread_response(ts))
 			break;
 		ret = g6ts_dma_read_response(ts);
-		if (ret)
+		if (ret) {
+			if (ret != -EAGAIN)
+				g6ts_note_host_fault_locked(ts, ret);
 			break;
+		}
 		if (ts->last_class == RESET_RESPONSE) {
 			g6ts_note_panel_reset_locked(ts, true);
 			break;
 		}
+	}
+	/*
+	 * This IRQ is edge-triggered.  Returning while GPIO51 still advertises an
+	 * unread packet can strand the stream because no second falling edge is
+	 * guaranteed.  Bound the drain for safety, then use the same observable
+	 * host-fault recovery as a timed-out Windows transfer.
+	 */
+	if (i == G6TS_IRQ_DRAIN_LIMIT && g6ts_has_unread_response(ts)) {
+		ts->irq_drain_overflows++;
+		g6ts_note_host_fault_locked(ts, -EOVERFLOW);
 	}
 	mutex_unlock(&ts->io_lock);
 	return IRQ_HANDLED;
@@ -2145,7 +2283,13 @@ static int g6ts_full_reinitialize_locked(struct g6ts *ts,
 	}
 
 	ts->initialization_stage = 6;
-	if (g6ts_mode_config_fix && ts->mode_config_valid) {
+	if (g6ts_feature70_one_byte) {
+		dev_info(&ts->spi->dev,
+			 "phase79: SET_FEATURE 0x70 len=1 bytes=01\n");
+		ret = g6ts_dma_feature_exchange(ts, SET_FEATURE, 0x70,
+						g6ts_mode_enable,
+						sizeof(g6ts_mode_enable));
+	} else if (g6ts_mode_config_fix && ts->mode_config_valid) {
 		/*
 		 * Phase 72 Linux sequence: SET_FEATURE 0x70 is 0x01 followed by the
 		 * panel's GET_FEATURE 0x70 content. Windows declares one logical content
@@ -2244,6 +2388,8 @@ static void g6ts_recovery_work(struct work_struct *work)
 	if (!ret) {
 		ts->recovery_fail_streak = 0;
 		ts->recovery_successes++;
+		if (path == G6TS_RECOVERY_HARDWARE)
+			ts->rapid_reset_streak = 0;
 		ts->recovery_path = G6TS_RECOVERY_HARDWARE;
 		dev_info(&ts->spi->dev,
 			 "touch controller initialized path=%s recoveries=%llu resets=%llu\n",
@@ -2282,6 +2428,9 @@ static int g6ts_probe(struct spi_device *spi)
 	if (g6ts_behavior_v2 && g6ts_windows_orchestrator)
 		return dev_err_probe(&spi->dev, -EINVAL,
 				     "behavior_v2 and windows_orchestrator are mutually exclusive\n");
+	if (g6ts_reset_storm_breaker && !g6ts_reset_recovery_v2)
+		return dev_err_probe(&spi->dev, -EINVAL,
+				     "reset_storm_breaker requires reset_recovery_v2\n");
 
 	ts = devm_kzalloc(&spi->dev, sizeof(*ts), GFP_KERNEL);
 	if (!ts)
@@ -2365,9 +2514,7 @@ static int g6ts_probe(struct spi_device *spi)
 	schedule_delayed_work(&ts->recovery_work,
 			      msecs_to_jiffies(G6TS_RECOVERY_DELAY_MS));
 	dev_info(&spi->dev, "touch controller initialization scheduled profile=%s\n",
-		 g6ts_reset_recovery_v2 ? "phase77" :
-		 (g6ts_behavior_v2 ? "phase76" :
-		 (g6ts_windows_orchestrator ? "windows-orchestrator" : "phase75")));
+		 g6ts_profile_name());
 	return 0;
 }
 

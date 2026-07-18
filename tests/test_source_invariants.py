@@ -18,6 +18,10 @@ PHASE76_BOOT = ROOT / "boot" / "63_sp11_713_phase76_behavior"
 PHASE76_DEPLOY = ROOT / "scripts" / "deploy_phase76_behavior.sh"
 PHASE77_BOOT = ROOT / "boot" / "64_sp11_713_phase77_recovery"
 PHASE77_DEPLOY = ROOT / "scripts" / "deploy_phase77_recovery.sh"
+PHASE78_BOOT = ROOT / "boot" / "65_sp11_713_phase78_storm_breaker"
+PHASE78_DEPLOY = ROOT / "scripts" / "deploy_phase78_storm_breaker.sh"
+PHASE80_BOOT = ROOT / "boot" / "67_sp11_713_phase80_host_recovery"
+PHASE80_DEPLOY = ROOT / "scripts" / "deploy_phase80_host_recovery.sh"
 
 
 def function_body(source: str, name: str) -> str:
@@ -48,6 +52,10 @@ class SourceInvariantTests(unittest.TestCase):
         cls.phase76_deploy = PHASE76_DEPLOY.read_text(encoding="utf-8")
         cls.phase77_boot = PHASE77_BOOT.read_text(encoding="utf-8")
         cls.phase77_deploy = PHASE77_DEPLOY.read_text(encoding="utf-8")
+        cls.phase78_boot = PHASE78_BOOT.read_text(encoding="utf-8")
+        cls.phase78_deploy = PHASE78_DEPLOY.read_text(encoding="utf-8")
+        cls.phase80_boot = PHASE80_BOOT.read_text(encoding="utf-8")
+        cls.phase80_deploy = PHASE80_DEPLOY.read_text(encoding="utf-8")
 
     def test_default_build_is_the_production_dma_set(self):
         self.assertIn("all: production", self.root_makefile)
@@ -257,6 +265,98 @@ class SourceInvariantTests(unittest.TestCase):
         self.assertIn("grub-reboot sp11-phase77-recovery", self.phase77_deploy)
         self.assertIn("saved GRUB default remains unchanged", self.phase77_deploy)
         self.assertNotIn("grub-set-default", self.phase77_deploy)
+
+    def test_phase78_reset_storm_breaker_is_bounded_and_opt_in(self):
+        self.assertIn("static bool g6ts_reset_storm_breaker;", self.source)
+        self.assertIn(
+            "module_param_named(reset_storm_breaker, "
+            "g6ts_reset_storm_breaker, bool, 0444)",
+            self.source,
+        )
+        self.assertIn("#define G6TS_RESET_STORM_WINDOW_MS\t5000U", self.source)
+        self.assertIn("#define G6TS_RESET_STORM_LIMIT\t\t3U", self.source)
+
+        reset = function_body(self.source, "g6ts_note_panel_reset_locked")
+        self.assertIn("interval_ms <= G6TS_RESET_STORM_WINDOW_MS", reset)
+        self.assertIn("ts->rapid_reset_streak >= G6TS_RESET_STORM_LIMIT", reset)
+        self.assertIn("ts->recovery_path = G6TS_RECOVERY_HARDWARE", reset)
+        self.assertIn("ts->reset_storm_escalations++", reset)
+
+        worker = function_body(self.source, "g6ts_recovery_work")
+        self.assertIn("path == G6TS_RECOVERY_HARDWARE", worker)
+        self.assertIn("ts->rapid_reset_streak = 0", worker)
+
+        for token in (
+            "sp11-phase78-storm-breaker",
+            "sp11_entry=7.1.3-phase78-storm-breaker",
+            "mshw0485_touch.behavior_v2=1",
+            "mshw0485_touch.reset_recovery_v2=1",
+            "mshw0485_touch.reset_storm_breaker=1",
+        ):
+            self.assertIn(token, self.phase78_boot)
+        self.assertIn("phase75_assets", self.phase78_deploy)
+        self.assertIn(
+            "grub-reboot sp11-phase78-storm-breaker", self.phase78_deploy
+        )
+        self.assertIn("saved GRUB default remains unchanged", self.phase78_deploy)
+        self.assertNotIn("grub-set-default", self.phase78_deploy)
+
+    def test_phase79_changes_only_the_logical_set70_content_length(self):
+        self.assertIn("static bool g6ts_feature70_one_byte;", self.source)
+        self.assertIn(
+            "module_param_named(feature70_one_byte, "
+            "g6ts_feature70_one_byte, bool, 0444)",
+            self.source,
+        )
+        recovery = function_body(self.source, "g6ts_full_reinitialize_locked")
+        phase79 = recovery.index("if (g6ts_feature70_one_byte)")
+        phase72 = recovery.index("else if (g6ts_mode_config_fix", phase79)
+        isolated = recovery[phase79:phase72]
+        self.assertIn("g6ts_mode_enable", isolated)
+        self.assertIn("sizeof(g6ts_mode_enable)", isolated)
+        self.assertNotIn("mode_config", isolated)
+
+    def test_phase80_recovers_irq_faults_without_miscounting_panel_resets(self):
+        self.assertIn("static bool g6ts_host_fault_recovery;", self.source)
+        self.assertIn(
+            "module_param_named(host_fault_recovery, "
+            "g6ts_host_fault_recovery, bool, 0444)",
+            self.source,
+        )
+        host_fault = function_body(self.source, "g6ts_note_host_fault_locked")
+        for token in (
+            "irq_protocol_errors++",
+            "irq_transport_errors++",
+            "host_fault_recoveries++",
+            "G6TS_RECOVERY_HARDWARE",
+            "g6ts_release_contacts",
+            "schedule_delayed_work",
+        ):
+            self.assertIn(token, host_fault)
+        self.assertNotIn("reset_notifications++", host_fault)
+
+        irq = function_body(self.source, "g6ts_interrupt_thread")
+        self.assertIn("g6ts_note_host_fault_locked(ts, ret)", irq)
+        self.assertIn("ret != -EAGAIN", irq)
+        self.assertIn("G6TS_IRQ_DRAIN_LIMIT", irq)
+        self.assertIn("irq_drain_overflows++", irq)
+        self.assertIn("g6ts_note_host_fault_locked(ts, -EOVERFLOW)", irq)
+
+        for token in (
+            "sp11-phase80-host-recovery",
+            "sp11_entry=7.1.3-phase80-host-recovery",
+            "mshw0485_touch.behavior_v2=1",
+            "mshw0485_touch.reset_recovery_v2=1",
+            "mshw0485_touch.host_fault_recovery=1",
+        ):
+            self.assertIn(token, self.phase80_boot)
+        self.assertNotIn("feature70_one_byte=1", self.phase80_boot)
+        self.assertIn("phase75_assets", self.phase80_deploy)
+        self.assertIn(
+            "grub-reboot sp11-phase80-host-recovery", self.phase80_deploy
+        )
+        self.assertIn("saved GRUB default remains unchanged", self.phase80_deploy)
+        self.assertNotIn("grub-set-default", self.phase80_deploy)
 
     def test_frame_orchestrator_has_one_ordered_collection_boundary(self):
         body = function_body(self.source, "g6ts_report_heat_contacts")
