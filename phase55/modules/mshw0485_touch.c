@@ -125,6 +125,23 @@ module_param_named(mode_config_fix, g6ts_mode_config_fix, bool, 0444);
 MODULE_PARM_DESC(mode_config_fix,
 		 "Use validated Phase 72 SET 0x70 + short 0x09 sequence (default: true)");
 
+/*
+ * Phase 77 keeps cold initialization and the Phase 75 mode exchange intact,
+ * but does not force a second hardware reset after the panel has already sent
+ * RESET_RESPONSE.  The device-reset path re-enumerates in place, gates Linux
+ * input until a complete Heat frame validates the restored stream, and falls
+ * back to the cold hardware path if software recovery itself fails.
+ */
+static bool g6ts_reset_recovery_v2;
+module_param_named(reset_recovery_v2, g6ts_reset_recovery_v2, bool, 0444);
+MODULE_PARM_DESC(reset_recovery_v2,
+		 "Use Phase 77 gated software recovery after panel reset (default: false)");
+
+enum g6ts_recovery_path {
+	G6TS_RECOVERY_HARDWARE,
+	G6TS_RECOVERY_SOFTWARE,
+};
+
 static const u8 g6ts_header_cmd[8] = {
 	0xeb, 0x00, 0x10, 0x00, 0xff, 0xff, 0xff, 0xff,
 };
@@ -249,6 +266,11 @@ struct g6ts {
 	u64 reset_notifications;
 	u64 recovery_successes;
 	u64 recovery_failures;
+	u64 hardware_recovery_attempts;
+	u64 software_recovery_attempts;
+	u64 software_recovery_fallbacks;
+	u64 ready_heat_frames;
+	u64 ready_verification_failures;
 	u64 heat_frames;
 	u64 heat_errors;
 	u64 component_total;
@@ -266,6 +288,7 @@ struct g6ts {
 	u8 nsr_bin_count;
 	u8 initialization_stage;
 	u8 recovery_fail_streak;
+	enum g6ts_recovery_path recovery_path;
 	bool nsr_valid;
 	bool mode_enabled;
 	bool fatal_transport_error;
@@ -300,10 +323,16 @@ static ssize_t behavior_stats_show(struct device *dev,
 			    "processing_max_ns=%llu\n"
 			    "panel_resets=%llu\n"
 			    "recovery_successes=%llu\n"
-			    "recovery_failures=%llu\n",
-			    g6ts_behavior_v2 ? "phase76" :
+			    "recovery_failures=%llu\n"
+			    "hardware_recovery_attempts=%llu\n"
+			    "software_recovery_attempts=%llu\n"
+			    "software_recovery_fallbacks=%llu\n"
+			    "ready_heat_frames=%llu\n"
+			    "ready_verification_failures=%llu\n",
+			    g6ts_reset_recovery_v2 ? "phase77" :
+			    (g6ts_behavior_v2 ? "phase76" :
 				    (g6ts_windows_orchestrator ?
-				     "windows-orchestrator" : "phase75"),
+				     "windows-orchestrator" : "phase75")),
 			    ts->mode_enabled, ts->heat_frames, ts->heat_errors,
 			    ts->component_total, ts->contact_total,
 			    ts->weak_rejections, ts->nsr_rejections,
@@ -311,7 +340,12 @@ static ssize_t behavior_stats_show(struct device *dev,
 			    ts->new_tracks, ts->output_frames,
 			    ts->output_contacts, average_ns,
 			    ts->processing_ns_max, ts->reset_notifications,
-			    ts->recovery_successes, ts->recovery_failures);
+			    ts->recovery_successes, ts->recovery_failures,
+			    ts->hardware_recovery_attempts,
+			    ts->software_recovery_attempts,
+			    ts->software_recovery_fallbacks,
+			    ts->ready_heat_frames,
+			    ts->ready_verification_failures);
 	mutex_unlock(&ts->io_lock);
 
 	return length;
@@ -1813,8 +1847,34 @@ static int g6ts_dma_read_response(struct g6ts *ts)
 		ts->expected_report_descriptor_len =
 			le16_to_cpu(descriptor->rep_desc_len);
 	}
-	g6ts_handle_data_report(ts);
+	/* Recovery consumes and validates replies before reopening Linux input. */
+	if (READ_ONCE(ts->mode_enabled))
+		g6ts_handle_data_report(ts);
 	return 0;
+}
+
+/* io_lock is held by both the IRQ thread and the recovery worker. */
+static void g6ts_note_panel_reset_locked(struct g6ts *ts,
+					 bool schedule_recovery)
+{
+	unsigned long now = jiffies;
+	unsigned long interval_ms = 0;
+
+	if (ts->last_reset_jiffies)
+		interval_ms = jiffies_to_msecs(now - ts->last_reset_jiffies);
+	ts->last_reset_jiffies = now;
+	ts->reset_notifications++;
+	ts->mode_enabled = false;
+	ts->recovery_path = g6ts_reset_recovery_v2 ?
+		G6TS_RECOVERY_SOFTWARE : G6TS_RECOVERY_HARDWARE;
+	g6ts_release_contacts(ts);
+	dev_warn(&ts->spi->dev,
+		 "panel reset notification #%llu interval=%lums\n",
+		 ts->reset_notifications, interval_ms);
+
+	if (schedule_recovery && !READ_ONCE(ts->stopping))
+		schedule_delayed_work(&ts->recovery_work,
+				      msecs_to_jiffies(G6TS_RECOVERY_DELAY_MS));
 }
 
 static irqreturn_t g6ts_interrupt_thread(int irq, void *data)
@@ -1834,22 +1894,7 @@ static irqreturn_t g6ts_interrupt_thread(int irq, void *data)
 		if (ret)
 			break;
 		if (ts->last_class == RESET_RESPONSE) {
-			unsigned long now = jiffies;
-			unsigned long interval_ms = 0;
-
-			if (ts->last_reset_jiffies)
-				interval_ms = jiffies_to_msecs(now -
-							       ts->last_reset_jiffies);
-			ts->last_reset_jiffies = now;
-			ts->reset_notifications++;
-			ts->mode_enabled = false;
-			g6ts_release_contacts(ts);
-			dev_warn(&ts->spi->dev,
-				 "panel reset notification #%llu interval=%lums\n",
-				 ts->reset_notifications, interval_ms);
-			if (!READ_ONCE(ts->stopping))
-				schedule_delayed_work(&ts->recovery_work,
-						      msecs_to_jiffies(G6TS_RECOVERY_DELAY_MS));
+			g6ts_note_panel_reset_locked(ts, true);
 			break;
 		}
 	}
@@ -1893,6 +1938,10 @@ static int g6ts_dma_feature_exchange(struct g6ts *ts, u8 report_type,
 		if (ts->last_class == expected_class &&
 		    ts->last_content_id == content_id)
 			return 0;
+		if (ts->last_class == RESET_RESPONSE) {
+			g6ts_note_panel_reset_locked(ts, false);
+			return -EPIPE;
+		}
 
 		/* Streaming data can precede a solicited feature response. */
 		if (ts->last_class == DATA)
@@ -1938,12 +1987,13 @@ static int g6ts_recovery_read_expected(struct g6ts *ts, u8 response_class,
 		    ts->last_content_id == content_id &&
 		    ts->last_content_len >= min_content_len)
 			return 0;
-		if (response_class == DATA &&
-		    ts->last_class == RESET_RESPONSE)
+		if (ts->last_class == RESET_RESPONSE) {
+			g6ts_note_panel_reset_locked(ts, false);
 			return -EPIPE;
+		}
 
-		/* A reset or stale input can precede the solicited reply. */
-		if (ts->last_class == RESET_RESPONSE || ts->last_class == DATA ||
+		/* Stale input can precede the solicited reply. */
+		if (ts->last_class == DATA ||
 		    (ts->last_class == OUTPUT_REPORT_RESPONSE &&
 		     ts->last_content_id == 0x09))
 			continue;
@@ -1954,13 +2004,26 @@ static int g6ts_recovery_read_expected(struct g6ts *ts, u8 response_class,
 	return -EOVERFLOW;
 }
 
+static int g6ts_verify_heat_ready(struct g6ts *ts)
+{
+	const u8 *content = ts->body + HIDSPI_INPUT_BODY_HEADER_SIZE;
+	int ret;
+
+	ret = g6ts_recovery_read_expected(ts, DATA, G6TS_HEATMAP_REPORT_ID, 9);
+	if (ret)
+		return ret;
+
+	return g6ts_extract_heatmap(ts, content, ts->last_content_len);
+}
+
 /*
- * A class-3 notification terminates the panel's heat session.  Merely
- * replaying the feature reports is not sufficient: the panel waits for a
- * fresh host enumeration.  Reproduce the known-good cold path after a full
- * ACPI/GPIO power cycle, then restore heat mode.
+ * Cold startup requires the validated power/reset sequence and its resulting
+ * RESET_RESPONSE.  A panel-originated reset has already completed that part
+ * and its response was consumed by the IRQ thread, so the Phase 77 path starts
+ * at host re-enumeration instead of forcing another hardware reset.
  */
-static int g6ts_full_reinitialize_locked(struct g6ts *ts)
+static int g6ts_full_reinitialize_locked(struct g6ts *ts,
+					 enum g6ts_recovery_path path)
 {
 	int ret;
 
@@ -1968,24 +2031,30 @@ static int g6ts_full_reinitialize_locked(struct g6ts *ts)
 	ts->expected_report_descriptor_len = 0;
 	ts->initialization_stage = 0;
 
-	ret = g6ts_power_off(ts);
-	if (ret)
-		return ret;
-	msleep(100);
-	ret = g6ts_power_on(ts);
-	if (ret)
-		return ret;
+	if (path == G6TS_RECOVERY_HARDWARE) {
+		ts->hardware_recovery_attempts++;
+		ret = g6ts_power_off(ts);
+		if (ret)
+			return ret;
+		msleep(100);
+		ret = g6ts_power_on(ts);
+		if (ret)
+			return ret;
 
-	ts->initialization_stage = 1;
-	ret = g6ts_wait_pending(ts, 1000);
-	if (ret)
-		goto out;
-	ret = g6ts_dma_read_response(ts);
-	if (ret)
-		goto out;
-	ret = g6ts_expect_response(ts, RESET_RESPONSE, 0, 0);
-	if (ret)
-		goto out;
+		ts->initialization_stage = 1;
+		ret = g6ts_wait_pending(ts, 1000);
+		if (ret)
+			goto out;
+		ret = g6ts_dma_read_response(ts);
+		if (ret)
+			goto out;
+		ret = g6ts_expect_response(ts, RESET_RESPONSE, 0, 0);
+		if (ret)
+			goto out;
+	} else {
+		ts->software_recovery_attempts++;
+		ts->initialization_stage = 1;
+	}
 
 	ts->initialization_stage = 2;
 	ret = g6ts_dma_output(ts, g6ts_device_descriptor_cmd,
@@ -2128,6 +2197,16 @@ static int g6ts_full_reinitialize_locked(struct g6ts *ts)
 	if (ret)
 		goto out;
 
+	if (g6ts_reset_recovery_v2) {
+		ts->initialization_stage = 8;
+		ret = g6ts_verify_heat_ready(ts);
+		if (ret) {
+			ts->ready_verification_failures++;
+			goto out;
+		}
+		ts->ready_heat_frames++;
+	}
+
 	ts->mode_enabled = true;
 	return 0;
 out:
@@ -2139,6 +2218,7 @@ static void g6ts_recovery_work(struct work_struct *work)
 {
 	struct g6ts *ts = container_of(to_delayed_work(work), struct g6ts,
 				      recovery_work);
+	enum g6ts_recovery_path path;
 	bool retry = false;
 	int ret;
 
@@ -2150,20 +2230,31 @@ static void g6ts_recovery_work(struct work_struct *work)
 
 	ts->mode_enabled = false;
 	g6ts_release_contacts(ts);
-	ret = g6ts_full_reinitialize_locked(ts);
+	path = ts->recovery_path;
+	ret = g6ts_full_reinitialize_locked(ts, path);
 	if (!ret) {
 		ts->recovery_fail_streak = 0;
 		ts->recovery_successes++;
+		ts->recovery_path = G6TS_RECOVERY_HARDWARE;
 		dev_info(&ts->spi->dev,
-			 "touch controller initialized recoveries=%llu resets=%llu\n",
+			 "touch controller initialized path=%s recoveries=%llu resets=%llu\n",
+			 path == G6TS_RECOVERY_SOFTWARE ? "software" : "hardware",
 			 ts->recovery_successes, ts->reset_notifications);
 	} else {
 		ts->recovery_failures++;
 		ts->recovery_fail_streak++;
-		retry = !ts->fatal_transport_error &&
-			ts->recovery_fail_streak < G6TS_RECOVERY_LIMIT;
+		if (path == G6TS_RECOVERY_SOFTWARE &&
+		    !ts->fatal_transport_error) {
+			ts->software_recovery_fallbacks++;
+			ts->recovery_path = G6TS_RECOVERY_HARDWARE;
+			retry = true;
+		} else {
+			retry = !ts->fatal_transport_error &&
+				ts->recovery_fail_streak < G6TS_RECOVERY_LIMIT;
+		}
 		dev_warn(&ts->spi->dev,
-			 "touch controller initialization failed stage=%u ret=%d failures=%llu%s\n",
+			 "touch controller initialization failed path=%s stage=%u ret=%d failures=%llu%s\n",
+			 path == G6TS_RECOVERY_SOFTWARE ? "software" : "hardware",
 			 ts->initialization_stage, ret, ts->recovery_failures,
 			 retry ? "; retrying" : "");
 	}
@@ -2261,11 +2352,13 @@ static int g6ts_probe(struct spi_device *spi)
 		return ret;
 
 	g6ts_clear_last_response(ts);
+	ts->recovery_path = G6TS_RECOVERY_HARDWARE;
 	schedule_delayed_work(&ts->recovery_work,
 			      msecs_to_jiffies(G6TS_RECOVERY_DELAY_MS));
 	dev_info(&spi->dev, "touch controller initialization scheduled profile=%s\n",
-		 g6ts_behavior_v2 ? "phase76" :
-		 (g6ts_windows_orchestrator ? "windows-orchestrator" : "phase75"));
+		 g6ts_reset_recovery_v2 ? "phase77" :
+		 (g6ts_behavior_v2 ? "phase76" :
+		 (g6ts_windows_orchestrator ? "windows-orchestrator" : "phase75")));
 	return 0;
 }
 
@@ -2298,6 +2391,7 @@ static int g6ts_suspend(struct device *dev)
 
 	if (ret) {
 		enable_irq(ts->interrupt_irq);
+		ts->recovery_path = G6TS_RECOVERY_HARDWARE;
 		schedule_delayed_work(&ts->recovery_work,
 				      msecs_to_jiffies(G6TS_RECOVERY_DELAY_MS));
 	}
@@ -2313,6 +2407,7 @@ static int g6ts_resume(struct device *dev)
 	mutex_lock(&ts->io_lock);
 	ts->fatal_transport_error = false;
 	ts->recovery_fail_streak = 0;
+	ts->recovery_path = G6TS_RECOVERY_HARDWARE;
 	ret = g6ts_power_on(ts);
 	mutex_unlock(&ts->io_lock);
 	if (ret)

@@ -16,6 +16,8 @@ PHASE75_OVERLAY = ROOT / "dts" / "phase75-mshw0485-production.dtso"
 PHASE75_DEPLOY = ROOT / "scripts" / "deploy_phase75_identity.sh"
 PHASE76_BOOT = ROOT / "boot" / "63_sp11_713_phase76_behavior"
 PHASE76_DEPLOY = ROOT / "scripts" / "deploy_phase76_behavior.sh"
+PHASE77_BOOT = ROOT / "boot" / "64_sp11_713_phase77_recovery"
+PHASE77_DEPLOY = ROOT / "scripts" / "deploy_phase77_recovery.sh"
 
 
 def function_body(source: str, name: str) -> str:
@@ -44,6 +46,8 @@ class SourceInvariantTests(unittest.TestCase):
         cls.phase75_deploy = PHASE75_DEPLOY.read_text(encoding="utf-8")
         cls.phase76_boot = PHASE76_BOOT.read_text(encoding="utf-8")
         cls.phase76_deploy = PHASE76_DEPLOY.read_text(encoding="utf-8")
+        cls.phase77_boot = PHASE77_BOOT.read_text(encoding="utf-8")
+        cls.phase77_deploy = PHASE77_DEPLOY.read_text(encoding="utf-8")
 
     def test_default_build_is_the_production_dma_set(self):
         self.assertIn("all: production", self.root_makefile)
@@ -197,6 +201,57 @@ class SourceInvariantTests(unittest.TestCase):
         self.assertIn("grub-reboot sp11-phase76-behavior", self.phase76_deploy)
         self.assertIn("saved GRUB default remains unchanged", self.phase76_deploy)
         self.assertNotIn("grub-set-default", self.phase76_deploy)
+
+    def test_phase77_software_recovery_is_opt_in_and_gated(self):
+        self.assertIn("static bool g6ts_reset_recovery_v2;", self.source)
+        self.assertIn(
+            "module_param_named(reset_recovery_v2, "
+            "g6ts_reset_recovery_v2, bool, 0444)",
+            self.source,
+        )
+
+        irq = function_body(self.source, "g6ts_interrupt_thread")
+        self.assertIn("g6ts_note_panel_reset_locked(ts, true)", irq)
+        reset = function_body(self.source, "g6ts_note_panel_reset_locked")
+        self.assertIn("G6TS_RECOVERY_SOFTWARE", reset)
+        self.assertIn("reset_notifications++", reset)
+        self.assertIn("g6ts_release_contacts", reset)
+        reader = function_body(self.source, "g6ts_dma_read_response")
+        self.assertIn("if (READ_ONCE(ts->mode_enabled))", reader)
+
+        feature = function_body(self.source, "g6ts_dma_feature_exchange")
+        expected = function_body(self.source, "g6ts_recovery_read_expected")
+        for body in (feature, expected):
+            self.assertIn("g6ts_note_panel_reset_locked(ts, false)", body)
+            self.assertIn("return -EPIPE", body)
+
+        recovery = function_body(self.source, "g6ts_full_reinitialize_locked")
+        hardware = recovery.index("path == G6TS_RECOVERY_HARDWARE")
+        power_off = recovery.index("g6ts_power_off", hardware)
+        descriptor = recovery.index("g6ts_device_descriptor_cmd")
+        verify = recovery.index("g6ts_verify_heat_ready")
+        enable = recovery.index("ts->mode_enabled = true")
+        self.assertLess(hardware, power_off)
+        self.assertLess(power_off, descriptor)
+        self.assertLess(descriptor, verify)
+        self.assertLess(verify, enable)
+
+        worker = function_body(self.source, "g6ts_recovery_work")
+        self.assertIn("software_recovery_fallbacks", worker)
+        self.assertIn("G6TS_RECOVERY_HARDWARE", worker)
+
+    def test_phase77_deployment_is_isolated_from_saved_baseline(self):
+        for token in (
+            "sp11-phase77-recovery",
+            "sp11_entry=7.1.3-phase77-recovery",
+            "mshw0485_touch.behavior_v2=1",
+            "mshw0485_touch.reset_recovery_v2=1",
+        ):
+            self.assertIn(token, self.phase77_boot)
+        self.assertIn("phase75_assets", self.phase77_deploy)
+        self.assertIn("grub-reboot sp11-phase77-recovery", self.phase77_deploy)
+        self.assertIn("saved GRUB default remains unchanged", self.phase77_deploy)
+        self.assertNotIn("grub-set-default", self.phase77_deploy)
 
     def test_frame_orchestrator_has_one_ordered_collection_boundary(self):
         body = function_body(self.source, "g6ts_report_heat_contacts")

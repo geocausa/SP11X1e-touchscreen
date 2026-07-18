@@ -1,0 +1,20 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-2.0
+exec tail -n +4 $0
+# Phase 77 is Phase 76 plus a read-only reset-recovery experiment. Cold boot,
+# QSPI/GPI-DMA transport, DTB, Phase 72 mode setup, and contact behavior remain
+# unchanged. A panel-originated reset first uses gated software re-enumeration;
+# failure falls back to the existing hardware initialization path.
+
+menuentry 'Ubuntu SP11 7.1.3 DMA Gated Recovery Test (Phase 77)' --id 'sp11-phase77-recovery' --class ubuntu --class gnu-linux --class gnu --class os {
+        load_video
+        set gfxpayload=keep
+        insmod gzio
+        insmod part_gpt
+        insmod ext2
+        insmod fdt
+        search --no-floppy --fs-uuid --set=root 33e842b7-0434-4749-b03a-299bdcdb8b9f
+        devicetree /boot/sp11-7.1.3-phase77-recovery/x1e80100-microsoft-denali-sp11-phase75.dtb
+        linux /boot/sp11-7.1.3-phase77-recovery/vmlinuz-7.1.3-sp11-baseline1+ root=UUID=33e842b7-0434-4749-b03a-299bdcdb8b9f ro clk_ignore_unused pd_ignore_unused cma=128M efi=noruntime quiet splash console=tty0 crashkernel=2G-4G:320M,4G-32G:512M,32G-64G:1024M,64G-128G:2048M,128G-:4096M sp11_entry=7.1.3-phase77-recovery mshw0485_touch.mode_config_fix=1 mshw0485_touch.behavior_v2=1 mshw0485_touch.reset_recovery_v2=1
+        initrd /boot/sp11-7.1.3-phase77-recovery/initrd.img-7.1.3-sp11-baseline1+-phase77
+}
