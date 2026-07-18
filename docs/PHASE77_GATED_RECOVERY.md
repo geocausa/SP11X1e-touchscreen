@@ -112,6 +112,15 @@ Heat frame on touch, processed at least 694 Heat frames, and recorded zero
 Heat errors, resets, readiness failures, or recovery failures during the
 initial test window.
 
+The rebuilt isolated initramfs was then cold-booted, independently confirming
+that the correction was embedded rather than supplied by the live reload. The
+client source version was `E61E066E59C2C910A9D7702`; hardware initialization
+completed on its first attempt at 21:19:58, and the first touch admitted a
+valid Heat frame at 21:20:03. At 123.90 seconds uptime it had processed 1,408
+Heat frames and 784 accepted contact observations with zero Heat errors,
+panel resets, readiness failures, or recovery failures. The saved GRUB entry
+remained Phase 75 after the one-shot Phase 77 boot.
+
 The optional Clang cross-build cannot be used with this configured kernel
 tree because its saved GCC build flags include options unsupported by the
 installed Clang 21 driver. The failure occurs before source compilation; the
