@@ -176,6 +176,18 @@ module_param_named(host_fault_recovery, g6ts_host_fault_recovery, bool, 0444);
 MODULE_PARM_DESC(host_fault_recovery,
 		 "Recover with a cold re-enumeration after an IRQ transport/protocol fault (default: false)");
 
+/*
+ * Phase 80 live evidence found invalid second headers immediately after valid
+ * Heat bodies.  GPIO51 can remain logically ready until the completed body
+ * transaction has propagated through the panel.  Phase 81 waits once, then
+ * treats an invalid header as an empty trailing read only if ready deasserted;
+ * a still-asserted line remains a real protocol fault handled by Phase 80.
+ */
+static bool g6ts_ready_quiesce;
+module_param_named(ready_quiesce, g6ts_ready_quiesce, bool, 0444);
+MODULE_PARM_DESC(ready_quiesce,
+		 "Ignore one invalid trailing header after GPIO51 deasserts (default: false)");
+
 enum g6ts_recovery_path {
 	G6TS_RECOVERY_HARDWARE,
 	G6TS_RECOVERY_SOFTWARE,
@@ -313,6 +325,7 @@ struct g6ts {
 	u64 irq_transport_errors;
 	u64 irq_protocol_errors;
 	u64 irq_drain_overflows;
+	u64 quiesced_empty_reads;
 	u64 ready_heat_frames;
 	u64 ready_verification_failures;
 	u64 heat_frames;
@@ -344,6 +357,8 @@ struct g6ts {
 
 static const char *g6ts_profile_name(void)
 {
+	if (g6ts_ready_quiesce)
+		return "phase81";
 	if (g6ts_host_fault_recovery)
 		return "phase80";
 	if (g6ts_feature70_one_byte)
@@ -398,6 +413,7 @@ static ssize_t behavior_stats_show(struct device *dev,
 			    "irq_transport_errors=%llu\n"
 			    "irq_protocol_errors=%llu\n"
 			    "irq_drain_overflows=%llu\n"
+			    "quiesced_empty_reads=%llu\n"
 			    "last_host_fault=%d\n"
 			    "ready_heat_frames=%llu\n"
 			    "ready_verification_failures=%llu\n",
@@ -420,6 +436,7 @@ static ssize_t behavior_stats_show(struct device *dev,
 			    ts->irq_transport_errors,
 			    ts->irq_protocol_errors,
 			    ts->irq_drain_overflows,
+			    ts->quiesced_empty_reads,
 			    ts->last_host_fault,
 			    ts->ready_heat_frames,
 			    ts->ready_verification_failures);
@@ -1912,8 +1929,23 @@ static int g6ts_dma_read_response(struct g6ts *ts)
 	}
 
 	if ((ts->last_header[0] & 0x0f) != G6TS_HEADER_VERSION ||
-	    ts->last_header[3] != G6TS_HEADER_SYNC)
+	    ts->last_header[3] != G6TS_HEADER_SYNC) {
+		if (g6ts_ready_quiesce) {
+			/* Let the panel retire the body transaction before rechecking. */
+			usleep_range(100, 200);
+			pending = g6ts_pending(ts);
+			if (!pending) {
+				ts->quiesced_empty_reads++;
+				return -EAGAIN;
+			}
+			if (pending < 0)
+				return pending;
+		}
+		dev_warn_ratelimited(&ts->spi->dev,
+				     "invalid HID-SPI header=%4ph ready=%d\n",
+				     ts->last_header, g6ts_pending(ts));
 		return -EPROTO;
+	}
 
 	words = get_unaligned_le16(&ts->last_header[1]) & 0x3fff;
 	body_len = (size_t)words * 4;
@@ -2431,6 +2463,9 @@ static int g6ts_probe(struct spi_device *spi)
 	if (g6ts_reset_storm_breaker && !g6ts_reset_recovery_v2)
 		return dev_err_probe(&spi->dev, -EINVAL,
 				     "reset_storm_breaker requires reset_recovery_v2\n");
+	if (g6ts_ready_quiesce && !g6ts_host_fault_recovery)
+		return dev_err_probe(&spi->dev, -EINVAL,
+				     "ready_quiesce requires host_fault_recovery\n");
 
 	ts = devm_kzalloc(&spi->dev, sizeof(*ts), GFP_KERNEL);
 	if (!ts)

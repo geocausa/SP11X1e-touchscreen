@@ -22,6 +22,8 @@ PHASE78_BOOT = ROOT / "boot" / "65_sp11_713_phase78_storm_breaker"
 PHASE78_DEPLOY = ROOT / "scripts" / "deploy_phase78_storm_breaker.sh"
 PHASE80_BOOT = ROOT / "boot" / "67_sp11_713_phase80_host_recovery"
 PHASE80_DEPLOY = ROOT / "scripts" / "deploy_phase80_host_recovery.sh"
+PHASE81_BOOT = ROOT / "boot" / "68_sp11_713_phase81_ready_quiesce"
+PHASE81_DEPLOY = ROOT / "scripts" / "deploy_phase81_ready_quiesce.sh"
 
 
 def function_body(source: str, name: str) -> str:
@@ -56,6 +58,8 @@ class SourceInvariantTests(unittest.TestCase):
         cls.phase78_deploy = PHASE78_DEPLOY.read_text(encoding="utf-8")
         cls.phase80_boot = PHASE80_BOOT.read_text(encoding="utf-8")
         cls.phase80_deploy = PHASE80_DEPLOY.read_text(encoding="utf-8")
+        cls.phase81_boot = PHASE81_BOOT.read_text(encoding="utf-8")
+        cls.phase81_deploy = PHASE81_DEPLOY.read_text(encoding="utf-8")
 
     def test_default_build_is_the_production_dma_set(self):
         self.assertIn("all: production", self.root_makefile)
@@ -357,6 +361,46 @@ class SourceInvariantTests(unittest.TestCase):
         )
         self.assertIn("saved GRUB default remains unchanged", self.phase80_deploy)
         self.assertNotIn("grub-set-default", self.phase80_deploy)
+
+    def test_phase81_only_suppresses_invalid_header_after_ready_deasserts(self):
+        self.assertIn("static bool g6ts_ready_quiesce;", self.source)
+        self.assertIn(
+            "module_param_named(ready_quiesce, "
+            "g6ts_ready_quiesce, bool, 0444)",
+            self.source,
+        )
+        reader = function_body(self.source, "g6ts_dma_read_response")
+        invalid = reader.index("invalid HID-SPI header")
+        quiesce = reader.index("if (g6ts_ready_quiesce)")
+        deasserted = reader.index("if (!pending)", quiesce)
+        empty = reader.index("return -EAGAIN", deasserted)
+        protocol = reader.index("return -EPROTO", invalid)
+        self.assertLess(quiesce, deasserted)
+        self.assertLess(deasserted, empty)
+        self.assertLess(empty, protocol)
+        self.assertIn("quiesced_empty_reads++", reader)
+        self.assertIn("if (pending < 0)", reader)
+
+        probe = function_body(self.source, "g6ts_probe")
+        self.assertIn(
+            "g6ts_ready_quiesce && !g6ts_host_fault_recovery", probe
+        )
+
+        for token in (
+            "sp11-phase81-ready-quiesce",
+            "sp11_entry=7.1.3-phase81-ready-quiesce",
+            "mshw0485_touch.behavior_v2=1",
+            "mshw0485_touch.reset_recovery_v2=1",
+            "mshw0485_touch.host_fault_recovery=1",
+            "mshw0485_touch.ready_quiesce=1",
+        ):
+            self.assertIn(token, self.phase81_boot)
+        self.assertIn("phase75_assets", self.phase81_deploy)
+        self.assertIn(
+            "grub-reboot sp11-phase81-ready-quiesce", self.phase81_deploy
+        )
+        self.assertIn("saved GRUB default remains unchanged", self.phase81_deploy)
+        self.assertNotIn("grub-set-default", self.phase81_deploy)
 
     def test_frame_orchestrator_has_one_ordered_collection_boundary(self):
         body = function_body(self.source, "g6ts_report_heat_contacts")
