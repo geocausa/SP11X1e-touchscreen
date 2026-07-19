@@ -104,8 +104,21 @@ analysis. Ghidra's ARCv2 module reports some invalid delay-slot/offcut warnings,
 so decompiler output must be confirmed against instruction flow before it is
 used as protocol evidence.
 
-The next useful static target is the panel-side HID output dispatcher for
-report `0x09`, followed by the state fields changed by its 63-byte payload.
-That trace can then be correlated with the Windows-side producer of the A/B/C
-variants. Until both sides agree, no full report-`0x09` replay belongs in the
-production driver.
+The Windows-side producer of the A/B/C variants is now traced in
+[WINDOWS_REPORT09_FEEDBACK_RE.md](WINDOWS_REPORT09_FEEDBACK_RE.md). It proves
+that the reports carry dynamic display, persistent-host, feedback-manager and
+provider state, including retained bytes. The remaining useful static target
+is the panel-side HID output dispatcher and the state changed by each
+report-`0x09` subtype. Until both sides agree, no full report-`0x09` replay
+belongs in the production driver.
+
+An ARC-wide follow-up searched 1,341 seeded functions for an explicit
+`0xa5` comparison or switch case and found none. The only ordinary function
+containing an `0xa5` scalar uses it as a structure offset, not a feedback
+subtype; the other candidate is an invalid/offcut decode in descriptor/data
+space. Combined report-ID/length scalar searches likewise resolve to CFU or
+unrelated structure constructors. The negative result is consistent with a
+table-driven generic HID dispatcher or forwarding the feedback envelope to a
+second firmware component, but it does not prove either design. The consumer
+must therefore be reached from registration/callback flow rather than another
+literal-value search.

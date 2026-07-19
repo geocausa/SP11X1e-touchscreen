@@ -205,6 +205,16 @@ single static 63-byte report-`0x09` experiment was therefore discarded before
 build or deployment. See
 [docs/KDNET_20260718_FULL_SESSION_AUDIT.md](docs/KDNET_20260718_FULL_SESSION_AUDIT.md).
 
+Static analysis of the matching ARM64 TouchPenProcessor now identifies the
+report-`0x09` producer. The A1 packet is display-state feedback containing
+display state, hinge angle, and a persistent FastHostId. The A5 packet is a
+version-6 feedback-manager record containing a successful-send sequence,
+validity bitmap, current provider data, and bytes retained from earlier rich
+updates. The two captured `0x0190` fields are independently owned values that
+happened to match. This rules out treating any captured A/B/C packet as a
+fixed Windows mode command; see
+[docs/WINDOWS_REPORT09_FEEDBACK_RE.md](docs/WINDOWS_REPORT09_FEEDBACK_RE.md).
+
 The matching Microsoft CFU payload has also been safely unwrapped for static
 analysis. Its ARC image contains the exact 1,484-byte HID descriptor read from
 the live panel. The firmware version occurs in both GET report `0x60` and the

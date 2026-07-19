@@ -58,10 +58,13 @@ C:  [0]=8e [1]=a5 [2]=01 [3]=02 [12]=70 [13]=17 [36]=ff
     [48]=ff [49]=02
 ```
 
-The varying fields prove that a single static 63-byte replay is not yet a
-sound production replacement for the empirically stable Phase 72 short
-report. The capture establishes wire truth, not the ownership or producer of
-every dynamic field.
+The varying fields prove that a single static 63-byte replay is not a sound
+production replacement for the empirically stable Phase 72 short report.
+Static analysis has since identified the Windows producer: A variants carry
+display/hinge state and a persistent FastHostId, while B/C are version-6
+feedback-manager records with a successful-send sequence, live validity
+bitmap, provider data, and retained-buffer behavior. See
+[WINDOWS_REPORT09_FEEDBACK_RE.md](WINDOWS_REPORT09_FEEDBACK_RE.md).
 
 ## Host-timeout reset sequence
 
@@ -97,5 +100,6 @@ Independent inspection of the matching `hidspi.sys` state-machine code shows
 that class `0x03` clears cached descriptor fields. Its device-state clear path
 frees and reallocates descriptor storage before state-machine enumeration
 continues. This supports Phase 77's software descriptor re-enumeration after a
-panel reset. It does not reveal the dynamic producer of report `0x09` and does
-not justify copying cold-only CFU report `0x65` into recovery.
+panel reset. The separate TouchPenProcessor trace now identifies the dynamic
+producer of report `0x09`; neither result justifies copying cold-only CFU
+report `0x65` into recovery.

@@ -20,8 +20,10 @@ was caused by reading beyond `content_len` in a fixed-size debugger dump.
 - The returned low-level capture proves a Windows host-timeout reset and
   descriptor re-enumeration path, but it did not capture a naturally
   panel-initiated reset.
-- Five complete report-`0x09` variants contain lifecycle-dependent fields. A
-  single static 63-byte replay is therefore not ready for production.
+- Five complete report-`0x09` variants contain dynamic feedback fields. Static
+  analysis identifies display state, hinge angle, persistent FastHostId,
+  feedback-manager sequence/validity state, provider data, and retained-buffer
+  bytes. A single static 63-byte replay is therefore not valid Windows parity.
 
 ## Safe investigation order
 
@@ -33,8 +35,10 @@ experiment. Change one variable at a time:
    startup was noisy before stabilizing and did not replace the control;
 3. retain Phase 80/81 host-fault safeguards independently from feature/report
    experiments;
-4. trace both the Windows producer and ARC firmware handler for the changing
-   report-`0x09` fields before testing any complete 63-byte path;
+4. use the completed Windows producer trace in
+   [WINDOWS_REPORT09_FEEDBACK_RE.md](WINDOWS_REPORT09_FEEDBACK_RE.md) to locate
+   the ARC firmware subtype handlers and determine the minimum Heat-only
+   feedback before testing any complete 63-byte path;
 5. use a low-overhead reset-only KDNET soak to capture one genuine
    panel-initiated reset.
 
