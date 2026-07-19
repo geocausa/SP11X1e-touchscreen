@@ -13,8 +13,10 @@ was caused by reading beyond `content_len` in a fixed-size debugger dump.
   `SET_FEATURE 0x70 = 01 02` and short `OUTPUT_REPORT 0x09 = 8e 02`; Windows
   declares one logical content byte for `0x70` and 63 bytes for `0x09`.
 - The reason Phase 72 works is not isolated.
-- Report `0x65` is cold-boot-only in the Windows capture. Replaying it in the
-  common Phase 74 recovery path caused a reset loop.
+- Report `0x65` is cold-boot-only in the Windows capture. Its version bytes
+  match the touchscreen CFU offer and GET `0x60`, identifying it as
+  update-management traffic with high confidence. Replaying it in the common
+  Phase 74 recovery path caused a reset loop.
 - The returned low-level capture proves a Windows host-timeout reset and
   descriptor re-enumeration path, but it did not capture a naturally
   panel-initiated reset.
@@ -27,13 +29,13 @@ Keep Phase 75 unchanged and use a separate branch and GRUB entry for each
 experiment. Change one variable at a time:
 
 1. preserve the Phase 75 sequence as the control;
-2. test the one-byte `SET_FEATURE 0x70` while retaining the short Phase 72
-   `0x09`, isolating the appended `02`;
-3. test Phase 80's host-fault recovery independently from feature/report
-   changes;
-4. recover the owner and producer of the changing report-`0x09` fields before
-   testing a complete 63-byte path;
-5. use a low-overhead reset-only KDNET soak to capture one natural
+2. retain Phase 82 only as an observation: its one-byte `SET_FEATURE 0x70`
+   startup was noisy before stabilizing and did not replace the control;
+3. retain Phase 80/81 host-fault safeguards independently from feature/report
+   experiments;
+4. trace both the Windows producer and ARC firmware handler for the changing
+   report-`0x09` fields before testing any complete 63-byte path;
+5. use a low-overhead reset-only KDNET soak to capture one genuine
    panel-initiated reset.
 
 Do not put `0x65` in the shared recovery path. Do not infer logical content from
@@ -52,4 +54,8 @@ Phase 75 control before considering promotion.
 The 33,851-byte mode-setup log is committed under
 `evidence/kdnet/2026-07-17/`. The larger returned lifecycle logs remain in the
 private evidence store; their hashes and verified findings are recorded in
-[KDNET_20260718_LIFECYCLE_CAPTURE.md](KDNET_20260718_LIFECYCLE_CAPTURE.md).
+[KDNET_20260718_LIFECYCLE_CAPTURE.md](KDNET_20260718_LIFECYCLE_CAPTURE.md) and
+[KDNET_20260718_FULL_SESSION_AUDIT.md](KDNET_20260718_FULL_SESSION_AUDIT.md).
+The firmware payload identity, validated CFU unwrapping, exact descriptor
+match, and Ghidra analysis boundary are recorded in
+[TOUCH_FIRMWARE_UPDATE_RE.md](TOUCH_FIRMWARE_UPDATE_RE.md).

@@ -4,6 +4,10 @@ This note records the evidence boundary from the low-level Windows HID-SPI
 session returned on 2026-07-18. It supersedes lifecycle claims inferred from
 fixed-size buffer dumps without explicit transfer boundaries.
 
+The later end-to-end pass, including debugger-induced timing effects and the
+firmware-update correlation, is in
+[KDNET_20260718_FULL_SESSION_AUDIT.md](KDNET_20260718_FULL_SESSION_AUDIT.md).
+
 ## Canonical private sources
 
 The raw returned files are retained outside the public source tree because
@@ -34,7 +38,9 @@ debugger dump at `txLen`, then separates the logical HID content at
   `bc e6 4a 2e 86 78 00`.
 - OutputReport `0x09` declares 63 content bytes in a 72-byte rounded transfer.
 - OutputReport `0x65` declares 16 content bytes and was observed only on the
-  cold-start collection path.
+  cold-start collection path. Its firmware-version bytes identify it as
+  CFU/update-management traffic with high confidence; see
+  [TOUCH_FIRMWARE_UPDATE_RE.md](TOUCH_FIRMWARE_UPDATE_RE.md).
 - The write `e2 00 20 00 01 00 00 00` is the ordinary device-descriptor
   request. It is not a separate reset acknowledgement.
 
@@ -92,4 +98,4 @@ that class `0x03` clears cached descriptor fields. Its device-state clear path
 frees and reallocates descriptor storage before state-machine enumeration
 continues. This supports Phase 77's software descriptor re-enumeration after a
 panel reset. It does not reveal the dynamic producer of report `0x09` and does
-not justify copying cold-only report `0x65` into recovery.
+not justify copying cold-only CFU report `0x65` into recovery.

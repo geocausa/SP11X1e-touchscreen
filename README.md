@@ -197,6 +197,22 @@ lifecycle-dependent fields. See
 [docs/KDNET_20260718_LIFECYCLE_CAPTURE.md](docs/KDNET_20260718_LIFECYCLE_CAPTURE.md)
 and [docs/PHASE80_HOST_FAULT_RECOVERY.md](docs/PHASE80_HOST_FAULT_RECOVERY.md).
 
+An end-to-end audit of both July 18 sessions corrects the remaining scope:
+none of the armed natural panel-reset breakpoints fired. The captured resets
+were cold-start or host-timeout/debugger-perturbed paths, and the outgoing
+setup writes came from several collection and lifecycle owners. A proposed
+single static 63-byte report-`0x09` experiment was therefore discarded before
+build or deployment. See
+[docs/KDNET_20260718_FULL_SESSION_AUDIT.md](docs/KDNET_20260718_FULL_SESSION_AUDIT.md).
+
+The matching Microsoft CFU payload has also been safely unwrapped for static
+analysis. Its ARC image contains the exact 1,484-byte HID descriptor read from
+the live panel. The firmware version occurs in both GET report `0x60` and the
+cold-only report `0x65`, identifying `0x65` as firmware-update management
+traffic with high confidence rather than ordinary touch recovery. No firmware
+is flashed or redistributed. See
+[docs/TOUCH_FIRMWARE_UPDATE_RE.md](docs/TOUCH_FIRMWARE_UPDATE_RE.md).
+
 With Phase 72 the driver now delivers stable multi-touch: the long-standing
 class-3 panel-reset storm is eliminated and the touchscreen survives sustained
 stress without watchdog resets. It is still not ready for a mainline submission.
@@ -279,6 +295,8 @@ docs/PHASE80_HOST_FAULT_RECOVERY.md
 docs/PHASE81_READY_QUIESCE.md
 docs/PHASE82_SET70_LENGTH.md
 docs/KDNET_20260718_LIFECYCLE_CAPTURE.md
+docs/KDNET_20260718_FULL_SESSION_AUDIT.md
+docs/TOUCH_FIRMWARE_UPDATE_RE.md
 phase55/
 tools/analyze_spb_etw_csv.py
 tools/decode_heat_frame.py
@@ -286,6 +304,10 @@ tools/extract_windows_classifier.py
 tools/extract_windows_lifecycle.py
 tools/generate_lifecycle_header.py
 tools/extract_kdnet_hidspi.py
+tools/extract_cfu_payload.py
+tools/ghidra/SeedArcFirmware.java
+tools/ghidra/SearchStringXrefs.java
+tools/ghidra/DumpFunctions.java
 tools/windows_tracking_geometry.py
 tools/regress_heat_frames.py
 tools/track_heat_contacts.py
@@ -315,6 +337,7 @@ tests/test_windows_classifier.py
 tests/test_windows_lifecycle.py
 tests/test_windows_tracking_geometry.py
 tests/test_kdnet_hidspi.py
+tests/test_cfu_payload.py
 tests/test_source_invariants.py
 packaging/initramfs-tools/hooks/sp11-g6ts
 ```

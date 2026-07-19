@@ -66,7 +66,9 @@ natural panel-reset branch has not yet been exercised by a captured reset; see
   trailing reads with zero host faults, proving the classification fix, while
   24 genuine panel resets continued independently.
 - Phase 74 is a local reset reproducer. Replaying its captured report `0x65`
-  sequence during recovery caused 15-17 resets; see
+  sequence during recovery caused 15-17 resets. Firmware analysis now
+  identifies `0x65` as CFU/update-management traffic with high confidence,
+  independently confirming that it does not belong in ordinary recovery; see
   [PHASE74_RESET_FINDING.md](PHASE74_RESET_FINDING.md).
 - Suspend/resume callbacks exist but platform suspend is not validated and is
   not claimed safe after earlier whole-device crashes.
@@ -89,6 +91,13 @@ natural panel-reset branch has not yet been exercised by a captured reset; see
 - No firmware is flashed or modified. Windows binaries are not redistributed.
   One small textual KDNET log is retained for reproducibility; the larger
   private captures are represented by hashes and derived findings.
+
+The complete July 18 evidence boundary is recorded in
+[KDNET_20260718_FULL_SESSION_AUDIT.md](KDNET_20260718_FULL_SESSION_AUDIT.md),
+and the independently reproducible CFU/ARC extraction is documented in
+[TOUCH_FIRMWARE_UPDATE_RE.md](TOUCH_FIRMWARE_UPDATE_RE.md). The firmware image
+contains the exact live HID descriptor, but report-`0x09` field semantics and
+the natural panel-reset trigger remain unresolved.
 
 `main` represents the best validated project baseline, not a claim of generic
 hardware support, Windows parity, or upstream acceptance.

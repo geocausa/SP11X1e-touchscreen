@@ -26,13 +26,16 @@ reset to replay it.
   not remove the failure.
 
 This isolates replay of `0x65` in the recovery lifecycle as the trigger in
-that implementation. It does **not** prove that the captured bytes are
-intrinsically wrong: their lifecycle placement, required acknowledgement, or
-prerequisites may be wrong. Production Phase 75 therefore keeps `0x65` out of
-the recovery path. The derived `0x05` and readiness-verification additions were
-not promoted independently because their short axis-disabled trial was not a
-sufficient soak test. See [PHASE72_KDNET_ERRATUM.md](PHASE72_KDNET_ERRATUM.md)
-before interpreting any Phase 74 feature-report experiment.
+that implementation. Subsequent firmware analysis explains why: the cold-only
+payload carries the exact touchscreen CFU offer version also returned by GET
+`0x60`, and report `0x65` belongs to the firmware-update collection. It is
+update-management traffic with high confidence, not an ordinary recovery
+handshake. This does **not** prove that the captured bytes are intrinsically
+wrong in their real CFU lifecycle; their placement in common touch recovery
+was wrong. Production Phase 75 therefore keeps `0x65` out of that path. See
+[TOUCH_FIRMWARE_UPDATE_RE.md](TOUCH_FIRMWARE_UPDATE_RE.md) and
+[PHASE72_KDNET_ERRATUM.md](PHASE72_KDNET_ERRATUM.md) before interpreting any
+Phase 74 feature-report experiment.
 
 The local-only Phase 74 branch and boot artifact may be retained to reproduce
 the failure, but neither belongs in production releases.

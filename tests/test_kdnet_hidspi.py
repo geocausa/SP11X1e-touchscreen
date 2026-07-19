@@ -17,6 +17,16 @@ ffffbc83`a67b29e0  {dump}  rendered-ascii
 """
 
 
+def completion_block(rx: bytes, extra: bytes = b"") -> str:
+    dump = " ".join(f"{byte:02x}" for byte in rx + extra)
+    return f"""[CPL] CxClient--EvtSpbRequestCompletion
+System Uptime: 0 days 0:00:01.235
+x0=0000000000000000 x1=ffffbc839c229200
+ffffbc83`9d6f8ab0  {dump}  rendered-ascii
+ # Child-SP          RetAddr               Call Site
+"""
+
+
 class KdnetHidspiTests(unittest.TestCase):
     def test_declared_content_is_separate_from_rounded_padding(self):
         wire = bytes.fromhex("e2 00 20 00 03 01 00 70 01 a5 00 02")
@@ -53,6 +63,56 @@ next event
         self.assertEqual(transfer.content, b"\x01")
         self.assertEqual(transfer.padding, bytes.fromhex("a5 00 02"))
         self.assertNotIn(bytes.fromhex("de ad be ef"), transfer.tx)
+
+    def test_completion_is_paired_and_bounded_by_rx_len(self):
+        command = bytes.fromhex("eb 00 10 00 ff ff ff ff")
+        response = bytes.fromhex("03 01 40 5a")
+        log = mst_block(command, rx_len=4) + completion_block(
+            response, bytes.fromhex("de ad be ef")
+        )
+        transfer = next(parse_transfers(log))
+        self.assertIsNotNone(transfer.completion_line)
+        self.assertEqual(transfer.rx, response)
+        self.assertNotIn(bytes.fromhex("de ad be ef"), transfer.rx)
+
+    def test_incomplete_submission_does_not_shift_later_completion(self):
+        incomplete = """[MST-entry]
+System Uptime: 0 days 0:00:01.000
+debugger interrupted before registers
+"""
+        first_completion = completion_block(bytes.fromhex("de ad be ef"))
+        command = bytes.fromhex("eb 00 10 00 ff ff ff ff")
+        response = bytes.fromhex("03 00 00 00")
+        log = (
+            incomplete
+            + first_completion
+            + mst_block(command, rx_len=4)
+            + completion_block(response)
+        )
+        transfers = list(parse_transfers(log))
+        self.assertEqual(len(transfers), 1)
+        self.assertEqual(transfers[0].rx, response)
+
+    def test_completed_body_metadata_is_decoded_within_rx_boundary(self):
+        command = bytes.fromhex("eb 00 10 04 ff ff ff ff")
+        body = bytes.fromhex("05 01 00 70 02 00 00 00")
+        transfer = next(parse_transfers(mst_block(command, 8) + completion_block(body)))
+        self.assertTrue(transfer.is_body_read)
+        self.assertEqual(transfer.response_class, 5)
+        self.assertEqual(transfer.response_content_len, 1)
+        self.assertEqual(transfer.response_content_id, 0x70)
+        self.assertTrue(transfer.response_valid)
+
+    def test_instrumented_header_pattern_is_not_a_valid_body(self):
+        command = bytes.fromhex("eb 00 10 04 ff ff ff ff")
+        # The controller-correlation capture returned a header-like prefix in
+        # a body buffer after a deliberately expired host transaction.
+        malformed = bytes.fromhex("03 01 40 5a") + bytes.fromhex("03 00 00 00") * 64
+        transfer = next(
+            parse_transfers(mst_block(command, len(malformed)) + completion_block(malformed))
+        )
+        self.assertEqual(transfer.response_content_len, 0x4001)
+        self.assertFalse(transfer.response_valid)
 
 
 if __name__ == "__main__":
