@@ -49,17 +49,19 @@ natural panel-reset branch has not yet been exercised by a captured reset; see
   the reset branch remains experimental.
 - `mshw0485_touch.reset_storm_breaker=1` selects Phase 78's bounded escalation.
   It was hardware exercised but did not remove the underlying reset storm.
-- `mshw0485_touch.feature70_one_byte=1` is the untested Phase 79 single-axis
-  protocol experiment. It corrects the logical Windows SetFeature length while
-  deliberately retaining Phase 72's short report `0x09`.
+- `mshw0485_touch.feature70_one_byte=1` is the Phase 79/82 single-axis protocol
+  experiment. It corrects the logical Windows SetFeature length while
+  deliberately retaining Phase 72's short report `0x09`; Phase 82 combines it
+  with the validated Phase 81 host safeguards for an isolated cold test.
 - `mshw0485_touch.host_fault_recovery=1` selects Phase 80's bounded cold
   recovery after an IRQ transport/protocol/drain failure. It is backed by the
   captured Windows timeout lifecycle. Its first boot recovered five protocol
   faults successfully but was too eager to reset on an invalid trailing read.
 - `mshw0485_touch.ready_quiesce=1` selects Phase 81's guarded post-read check.
   It ignores an invalid trailing header only after GPIO51 deasserts; persistent
-  invalid headers still enter Phase 80 recovery. Warm live touch is clean, but
-  the cold-boot branch remains under test.
+  invalid headers still enter Phase 80 recovery. Its cold boot quiesced 17
+  trailing reads with zero host faults, proving the classification fix, while
+  24 genuine panel resets continued independently.
 - Phase 74 is a local reset reproducer. Replaying its captured report `0x65`
   sequence during recovery caused 15-17 resets; see
   [PHASE74_RESET_FINDING.md](PHASE74_RESET_FINDING.md).

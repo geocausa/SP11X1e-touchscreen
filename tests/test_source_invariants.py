@@ -24,6 +24,8 @@ PHASE80_BOOT = ROOT / "boot" / "67_sp11_713_phase80_host_recovery"
 PHASE80_DEPLOY = ROOT / "scripts" / "deploy_phase80_host_recovery.sh"
 PHASE81_BOOT = ROOT / "boot" / "68_sp11_713_phase81_ready_quiesce"
 PHASE81_DEPLOY = ROOT / "scripts" / "deploy_phase81_ready_quiesce.sh"
+PHASE82_BOOT = ROOT / "boot" / "69_sp11_713_phase82_set70"
+PHASE82_DEPLOY = ROOT / "scripts" / "deploy_phase82_set70.sh"
 
 
 def function_body(source: str, name: str) -> str:
@@ -60,6 +62,8 @@ class SourceInvariantTests(unittest.TestCase):
         cls.phase80_deploy = PHASE80_DEPLOY.read_text(encoding="utf-8")
         cls.phase81_boot = PHASE81_BOOT.read_text(encoding="utf-8")
         cls.phase81_deploy = PHASE81_DEPLOY.read_text(encoding="utf-8")
+        cls.phase82_boot = PHASE82_BOOT.read_text(encoding="utf-8")
+        cls.phase82_deploy = PHASE82_DEPLOY.read_text(encoding="utf-8")
 
     def test_default_build_is_the_production_dma_set(self):
         self.assertIn("all: production", self.root_makefile)
@@ -401,6 +405,31 @@ class SourceInvariantTests(unittest.TestCase):
         )
         self.assertIn("saved GRUB default remains unchanged", self.phase81_deploy)
         self.assertNotIn("grub-set-default", self.phase81_deploy)
+
+    def test_phase82_combines_phase81_with_only_the_set70_length_axis(self):
+        profile = function_body(self.source, "g6ts_profile_name")
+        phase82 = profile.index(
+            "g6ts_ready_quiesce && g6ts_feature70_one_byte"
+        )
+        phase81 = profile.index("if (g6ts_ready_quiesce)", phase82 + 1)
+        self.assertLess(phase82, phase81)
+
+        for token in (
+            "sp11-phase82-set70",
+            "sp11_entry=7.1.3-phase82-set70",
+            "mshw0485_touch.behavior_v2=1",
+            "mshw0485_touch.reset_recovery_v2=1",
+            "mshw0485_touch.host_fault_recovery=1",
+            "mshw0485_touch.ready_quiesce=1",
+            "mshw0485_touch.feature70_one_byte=1",
+        ):
+            self.assertIn(token, self.phase82_boot)
+        self.assertNotIn("reset_storm_breaker=1", self.phase82_boot)
+        self.assertIn("phase75_assets", self.phase82_deploy)
+        self.assertIn("feature70_one_byte", self.phase82_deploy)
+        self.assertIn("grub-reboot sp11-phase82-set70", self.phase82_deploy)
+        self.assertIn("saved GRUB default remains unchanged", self.phase82_deploy)
+        self.assertNotIn("grub-set-default", self.phase82_deploy)
 
     def test_frame_orchestrator_has_one_ordered_collection_boundary(self):
         body = function_body(self.source, "g6ts_report_heat_contacts")

@@ -277,6 +277,7 @@ docs/PHASE77_GATED_RECOVERY.md
 docs/PHASE78_RESET_STORM_BREAKER.md
 docs/PHASE80_HOST_FAULT_RECOVERY.md
 docs/PHASE81_READY_QUIESCE.md
+docs/PHASE82_SET70_LENGTH.md
 docs/KDNET_20260718_LIFECYCLE_CAPTURE.md
 phase55/
 tools/analyze_spb_etw_csv.py
@@ -297,6 +298,7 @@ scripts/deploy_phase76_behavior.sh
 scripts/deploy_phase77_recovery.sh
 scripts/deploy_phase80_host_recovery.sh
 scripts/deploy_phase81_ready_quiesce.sh
+scripts/deploy_phase82_set70.sh
 boot/57_sp11_711_phase70_orchestrator
 boot/58_sp11_711_phase71_score3
 boot/59_sp11_711_phase72_config
@@ -306,6 +308,7 @@ boot/63_sp11_713_phase76_behavior
 boot/64_sp11_713_phase77_recovery
 boot/67_sp11_713_phase80_host_recovery
 boot/68_sp11_713_phase81_ready_quiesce
+boot/69_sp11_713_phase82_set70
 tests/test_heat_decoder.py
 tests/test_contact_tracker.py
 tests/test_windows_classifier.py

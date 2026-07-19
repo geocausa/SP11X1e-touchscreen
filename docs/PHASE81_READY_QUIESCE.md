@@ -44,6 +44,20 @@ validates ordinary touch but not the quiesce branch. The isolated cold-boot
 entry exists specifically to reproduce the early-boot timing without changing
 the Phase 75 saved baseline.
 
+## Cold-boot result
+
+The isolated Phase 81 entry subsequently exercised the branch 17 times during
+3,127 valid Heat frames. Every suspect trailing read was accepted only after
+GPIO51 deasserted. The driver recorded zero IRQ protocol errors, zero host-fault
+recoveries, zero drain overflows, and zero Heat errors. This confirms that the
+five Phase 80 `-EPROTO` events were harmless post-read tails rather than
+persistent bus faults.
+
+The same boot independently received 24 class-3 panel reset notifications.
+All 24 software recoveries succeeded, but the reset clusters continued. Phase
+81 therefore fixes host-side fault classification; it does not explain or hide
+the panel's separate reset storm.
+
 Offline validation completed with all 141 tests passing, an exact-tree GCC
 `W=1` build, clean Sparse analysis for all three modules, clean strict kernel
 style review, and shell validation of the deployment path. The Phase 81 client

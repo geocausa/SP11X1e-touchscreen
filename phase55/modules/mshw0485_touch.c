@@ -357,6 +357,8 @@ struct g6ts {
 
 static const char *g6ts_profile_name(void)
 {
+	if (g6ts_ready_quiesce && g6ts_feature70_one_byte)
+		return "phase82";
 	if (g6ts_ready_quiesce)
 		return "phase81";
 	if (g6ts_host_fault_recovery)
@@ -2317,7 +2319,7 @@ static int g6ts_full_reinitialize_locked(struct g6ts *ts,
 	ts->initialization_stage = 6;
 	if (g6ts_feature70_one_byte) {
 		dev_info(&ts->spi->dev,
-			 "phase79: SET_FEATURE 0x70 len=1 bytes=01\n");
+			 "feature70-one-byte: SET_FEATURE 0x70 len=1 bytes=01\n");
 		ret = g6ts_dma_feature_exchange(ts, SET_FEATURE, 0x70,
 						g6ts_mode_enable,
 						sizeof(g6ts_mode_enable));
