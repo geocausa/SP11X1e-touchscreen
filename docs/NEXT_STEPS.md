@@ -24,6 +24,9 @@ was caused by reading beyond `content_len` in a fixed-size debugger dump.
   analysis identifies display state, hinge angle, persistent FastHostId,
   feedback-manager sequence/validity state, provider data, and retained-buffer
   bytes. A single static 63-byte replay is therefore not valid Windows parity.
+- The firmware resource CLI proves `PRE_OS` and `Normal (Full Frame)` modes and
+  the panel configuration independently confirms the 68-by-46 Heat geometry.
+  It does not yet connect HID Feature `0x70` to that report-mode selector.
 
 ## Safe investigation order
 
@@ -35,9 +38,11 @@ experiment. Change one variable at a time:
    startup was noisy before stabilizing and did not replace the control;
 3. retain Phase 80/81 host-fault safeguards independently from feature/report
    experiments;
-4. use the completed Windows producer trace in
+4. use the completed Windows producer trace and the decoded resource/logger
+   evidence in
    [WINDOWS_REPORT09_FEEDBACK_RE.md](WINDOWS_REPORT09_FEEDBACK_RE.md) to locate
-   the ARC firmware subtype handlers and determine the minimum Heat-only
+   the generic HID feedback dispatcher, determine whether Feature `0x70`
+   selects normal full-frame mode, and establish the minimum Heat-only
    feedback before testing any complete 63-byte path;
 5. use a low-overhead reset-only KDNET soak to capture one genuine
    panel-initiated reset.
@@ -63,3 +68,5 @@ private evidence store; their hashes and verified findings are recorded in
 The firmware payload identity, validated CFU unwrapping, exact descriptor
 match, and Ghidra analysis boundary are recorded in
 [TOUCH_FIRMWARE_UPDATE_RE.md](TOUCH_FIRMWARE_UPDATE_RE.md).
+The appended descriptor/CLI/logger/configuration records are documented in
+[FIRMWARE_RESOURCE_CONTAINER.md](FIRMWARE_RESOURCE_CONTAINER.md).

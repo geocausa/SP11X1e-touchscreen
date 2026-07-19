@@ -158,3 +158,14 @@ FeedbackManager version. It does not replay a single captured 63-byte packet.
    `0x09`, especially the subtype dispatch and which V06 validity bits affect
    raw Heat delivery. No production driver change is justified until that
    consumer trace agrees with the host-side evidence.
+
+## Firmware-side corroboration
+
+The matching firmware's appended logger dictionary names display/stitching/
+hinge feedback, V03 and V06 pen feedback, and V09 touchpad-threshold feedback.
+Its engineering CLI separately exposes display state, hinge angle, FastHostId,
+and PRE_OS versus normal full-frame report mode. These independent names agree
+with the fields recovered above, but do not by themselves map an A1/A5 subtype
+to a particular ARC handler. The exact resource layout and evidence boundary
+are documented in
+[FIRMWARE_RESOURCE_CONTAINER.md](FIRMWARE_RESOURCE_CONTAINER.md).

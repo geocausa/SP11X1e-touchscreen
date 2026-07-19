@@ -44,6 +44,12 @@ processor:        ARCv2 little-endian (firmware identifies ARC_HS/MetaWare G5.8)
 The analysis project is `/home/geoca/SP11TouchFirmwareARC.gpr`. The import is
 kept separate from the open Windows-driver Ghidra project.
 
+The ARC tail is now decoded as a five-record Denali resource chain containing
+the HID descriptor, engineering CLI descriptor, logger dictionary, and a
+compressed panel configuration. See
+[FIRMWARE_RESOURCE_CONTAINER.md](FIRMWARE_RESOURCE_CONTAINER.md) for exact
+offsets, hashes, semantics, and the reproducible extractor.
+
 ## Exact live-descriptor match
 
 The 1,484-byte descriptor read from the panel in the July 18 KDNET session has
@@ -117,8 +123,12 @@ An ARC-wide follow-up searched 1,341 seeded functions for an explicit
 containing an `0xa5` scalar uses it as a structure offset, not a feedback
 subtype; the other candidate is an invalid/offcut decode in descriptor/data
 space. Combined report-ID/length scalar searches likewise resolve to CFU or
-unrelated structure constructors. The negative result is consistent with a
-table-driven generic HID dispatcher or forwarding the feedback envelope to a
-second firmware component, but it does not prove either design. The consumer
-must therefore be reached from registration/callback flow rather than another
-literal-value search.
+unrelated structure constructors. Cross-reference and encoded-pointer searches
+to the descriptor header, start, and report-`0x09` declaration also found
+nothing. The newly decoded resource framing explains why: the descriptor is
+record `G` in a tag/length-enumerated container rather than ordinary addressed
+program data. The negative result remains consistent with a table-driven
+generic HID dispatcher or forwarding the feedback envelope to a second
+firmware component, but it does not prove either design. The consumer must
+therefore be reached from generic resource/HID registration flow rather than
+another literal-value search.

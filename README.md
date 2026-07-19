@@ -223,6 +223,15 @@ traffic with high confidence rather than ordinary touch recovery. No firmware
 is flashed or redistributed. See
 [docs/TOUCH_FIRMWARE_UPDATE_RE.md](docs/TOUCH_FIRMWARE_UPDATE_RE.md).
 
+The ARC tail is now decoded as a tagged resource container. Besides the exact
+HID descriptor it contains a 274-command engineering description, a firmware
+logger dictionary, and the compressed Denali panel configuration. These
+resources independently confirm PRE_OS versus normal full-frame modes,
+display/hinge/FastHostId feedback, on-device calibration/noise/tracking paths,
+and the 68-by-46 sensor geometry. They do not yet prove that HID Feature
+`0x70` is the report-mode selector; see
+[docs/FIRMWARE_RESOURCE_CONTAINER.md](docs/FIRMWARE_RESOURCE_CONTAINER.md).
+
 With Phase 72 the driver now delivers stable multi-touch: the long-standing
 class-3 panel-reset storm is eliminated and the touchscreen survives sustained
 stress without watchdog resets. It is still not ready for a mainline submission.
@@ -307,6 +316,7 @@ docs/PHASE82_SET70_LENGTH.md
 docs/KDNET_20260718_LIFECYCLE_CAPTURE.md
 docs/KDNET_20260718_FULL_SESSION_AUDIT.md
 docs/TOUCH_FIRMWARE_UPDATE_RE.md
+docs/FIRMWARE_RESOURCE_CONTAINER.md
 phase55/
 tools/analyze_spb_etw_csv.py
 tools/decode_heat_frame.py
@@ -315,8 +325,13 @@ tools/extract_windows_lifecycle.py
 tools/generate_lifecycle_header.py
 tools/extract_kdnet_hidspi.py
 tools/extract_cfu_payload.py
+tools/extract_firmware_resources.py
 tools/ghidra/SeedArcFirmware.java
 tools/ghidra/SearchStringXrefs.java
+tools/ghidra/SearchAddressXrefs.java
+tools/ghidra/SearchPointerEncodings.java
+tools/ghidra/DumpMemoryRange.java
+tools/ghidra/ExportMemoryRange.java
 tools/ghidra/DumpFunctions.java
 tools/windows_tracking_geometry.py
 tools/regress_heat_frames.py
@@ -348,6 +363,7 @@ tests/test_windows_lifecycle.py
 tests/test_windows_tracking_geometry.py
 tests/test_kdnet_hidspi.py
 tests/test_cfu_payload.py
+tests/test_firmware_resources.py
 tests/test_source_invariants.py
 packaging/initramfs-tools/hooks/sp11-g6ts
 ```

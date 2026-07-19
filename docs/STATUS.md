@@ -99,7 +99,11 @@ and the independently reproducible CFU/ARC extraction is documented in
 contains the exact live HID descriptor. The Windows report-`0x09` producer and
 its dynamic display/feedback fields are documented in
 [WINDOWS_REPORT09_FEEDBACK_RE.md](WINDOWS_REPORT09_FEEDBACK_RE.md); the ARC
-consumer semantics and natural panel-reset trigger remain unresolved.
+resource container and firmware-side semantic corroboration are documented in
+[FIRMWARE_RESOURCE_CONTAINER.md](FIRMWARE_RESOURCE_CONTAINER.md). The resource
+CLI proves that firmware distinguishes PRE_OS from normal full-frame mode, but
+does not prove that HID Feature `0x70` selects it. The ARC subtype consumer and
+natural panel-reset trigger remain unresolved.
 
 `main` represents the best validated project baseline, not a claim of generic
 hardware support, Windows parity, or upstream acceptance.
