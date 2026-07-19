@@ -43,3 +43,35 @@ expected one-byte SET70 log, zero panel resets, zero host faults, and zero
 transport/protocol errors during the initial quiescent observation. No touch
 was applied, so this proves initialization only; the one-shot cold boot remains
 the deciding comparison.
+
+## Cold-boot result
+
+The one-shot entry booted the intended kernel, client source version, and all
+five intended switches. During the first 72 seconds it recorded 10 genuine
+class-3 panel resets, seven safely quiesced trailing reads, and three persistent
+invalid headers. Each invalid header was the identical `2e c1 c8 23`, arrived
+44-220 milliseconds after input reopened following a reset recovery, and found
+GPIO51 still asserted. Phase 80 therefore correctly performed three bounded
+hardware recoveries. There were no transport errors, drain overflows, malformed
+Heat frames, recovery failures, or ready-frame verification failures.
+
+The last reset occurred at 71.869 seconds. At 277 seconds the driver had
+processed 7,410 valid Heat frames without another reset or fault:
+
+```text
+panel_resets=10
+host_fault_recoveries=3
+irq_protocol_errors=3
+quiesced_empty_reads=7
+heat_frames=7410
+heat_errors=0
+recovery_successes=14
+recovery_failures=0
+```
+
+This run recovered into sustained useful touch sooner than the Phase 81 cold
+run, which had 24 resets through 119 seconds. One boot cannot establish that
+the SET70 length caused the improvement, and Phase 82 was not a clean startup.
+It remains an experiment rather than replacing the Phase 75 saved baseline.
+The repeated post-recovery header is now a distinct diagnostic target; it must
+not be silently classified as an empty trailing read while GPIO51 is asserted.

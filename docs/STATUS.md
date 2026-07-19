@@ -52,7 +52,10 @@ natural panel-reset branch has not yet been exercised by a captured reset; see
 - `mshw0485_touch.feature70_one_byte=1` is the Phase 79/82 single-axis protocol
   experiment. It corrects the logical Windows SetFeature length while
   deliberately retaining Phase 72's short report `0x09`; Phase 82 combines it
-  with the validated Phase 81 host safeguards for an isolated cold test.
+  with the validated Phase 81 host safeguards. Its first cold boot had 10
+  panel resets and three recovered protocol faults during startup, then ran
+  7,410 Heat frames without another fault. This is improved but not clean and
+  does not replace Phase 75.
 - `mshw0485_touch.host_fault_recovery=1` selects Phase 80's bounded cold
   recovery after an IRQ transport/protocol/drain failure. It is backed by the
   captured Windows timeout lifecycle. Its first boot recovered five protocol
