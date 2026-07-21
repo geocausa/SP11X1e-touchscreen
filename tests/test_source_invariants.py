@@ -27,6 +27,8 @@ PHASE81_BOOT = ROOT / "boot" / "68_sp11_713_phase81_ready_quiesce"
 PHASE81_DEPLOY = ROOT / "scripts" / "deploy_phase81_ready_quiesce.sh"
 PHASE82_BOOT = ROOT / "boot" / "69_sp11_713_phase82_set70"
 PHASE82_DEPLOY = ROOT / "scripts" / "deploy_phase82_set70.sh"
+PHASE84_BOOT = ROOT / "boot" / "70_sp11_713_phase84_init_parity"
+PHASE84_DEPLOY = ROOT / "scripts" / "deploy_phase84_init_parity.sh"
 
 
 def function_body(source: str, name: str) -> str:
@@ -70,6 +72,8 @@ class SourceInvariantTests(unittest.TestCase):
         cls.phase81_deploy = PHASE81_DEPLOY.read_text(encoding="utf-8")
         cls.phase82_boot = PHASE82_BOOT.read_text(encoding="utf-8")
         cls.phase82_deploy = PHASE82_DEPLOY.read_text(encoding="utf-8")
+        cls.phase84_boot = PHASE84_BOOT.read_text(encoding="utf-8")
+        cls.phase84_deploy = PHASE84_DEPLOY.read_text(encoding="utf-8")
 
     def test_default_build_is_the_production_dma_set(self):
         self.assertIn("all: production", self.root_makefile)
@@ -246,6 +250,26 @@ class SourceInvariantTests(unittest.TestCase):
 
         recovery = function_body(self.source, "g6ts_full_reinitialize_locked")
         self.assertIn("g6ts_windows_power_on(ts) : g6ts_power_on(ts)", recovery)
+
+    def test_phase84_is_input_disabled_and_one_shot(self):
+        for token in (
+            "sp11-phase84-init-parity",
+            "sp11_entry=7.1.3-phase84-init-parity",
+            "mshw0485_touch.windows_init_parity=1",
+            "mshw0485_touch.parity_display_bitmap=1",
+            "mshw0485_touch.parity_stitching_flag=0",
+            "mshw0485_touch.parity_hinge_angle=400",
+            "mshw0485_touch.parity_fast_host_id=400",
+            "mshw0485_touch.parity_report56_identity="
+            "0xbc,0xe6,0x4a,0x2e,0x86,0x78",
+            "mshw0485_touch.parity_report56_flag=0",
+        ):
+            self.assertIn(token, self.phase84_boot)
+        self.assertNotIn("behavior_v2=1", self.phase84_boot)
+        self.assertNotIn("windows_orchestrator=1", self.phase84_boot)
+        self.assertIn("grub-reboot sp11-phase84-init-parity", self.phase84_deploy)
+        self.assertIn("saved GRUB default remains unchanged", self.phase84_deploy)
+        self.assertNotIn("grub-set-default", self.phase84_deploy)
 
     def test_assignment_initializes_every_output_slot(self):
         body = function_body(self.source, "g6ts_assign_tracks")
