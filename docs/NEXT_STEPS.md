@@ -48,7 +48,9 @@ experiment. Change one variable at a time:
    valid reset header; Phase 88 restored Linux GENI initialization but returned
    `ff ff ff ff`, so Phase 89 restores Linux's normal GPI ring geometry while
    retaining the Windows upper chronology; Phase 89 returned the same header,
-   so Phase 90 isolates Phase 75 versus Windows power/reset ordering;
+   so Phase 90 isolated Phase 75 versus Windows power/reset ordering and
+   reached Heat; Phase 91 now isolates the measured Windows response cadence
+   after an immediate Linux second-header read preceded the live reset storm;
 5. use the completed Windows producer trace and the decoded resource/logger
    evidence in
    [WINDOWS_REPORT09_FEEDBACK_RE.md](WINDOWS_REPORT09_FEEDBACK_RE.md) to locate

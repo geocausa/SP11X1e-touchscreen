@@ -107,6 +107,8 @@
 #define G6TS_WINDOWS_CFU_OFFER_LEN	16U
 #define G6TS_WINDOWS_CFU_VERSION_LEN	60U
 #define G6TS_WINDOWS_CFU_TOKEN		0xa0U
+#define G6TS_WINDOWS_HEADER_BODY_MIN_US	490U
+#define G6TS_WINDOWS_HEADER_BODY_MAX_US	550U
 
 enum g6ts_initialization_stage {
 	G6TS_INIT_IDLE,
@@ -262,6 +264,17 @@ static bool g6ts_parity_linux_power;
 module_param_named(parity_linux_power, g6ts_parity_linux_power, bool, 0444);
 MODULE_PARM_DESC(parity_linux_power,
 		 "Use the Phase 75 power/reset sequence in Windows parity mode");
+
+/*
+ * The stable Windows SPB trace never chains another header from the still-
+ * asserted GPIO level. It waits about 500 us between header and body and
+ * services one complete response per interrupt. Phase 91 isolates that
+ * measured cadence from all initialization and contact-processing choices.
+ */
+static bool g6ts_windows_read_cadence;
+module_param_named(windows_read_cadence, g6ts_windows_read_cadence, bool, 0444);
+MODULE_PARM_DESC(windows_read_cadence,
+		 "Use measured Windows header/body and one-response IRQ cadence");
 
 /*
  * Provider inputs are deliberately invalid by default.  The Windows producer
@@ -484,6 +497,7 @@ struct g6ts {
 	u64 irq_protocol_errors;
 	u64 irq_drain_overflows;
 	u64 quiesced_empty_reads;
+	u64 cadence_single_response_irqs;
 	u64 ready_heat_frames;
 	u64 ready_verification_failures;
 	u64 heat_frames;
@@ -628,6 +642,7 @@ static ssize_t behavior_stats_show(struct device *dev,
 	length = sysfs_emit(buf,
 			    "profile=%s\n"
 			    "parity_linux_power=%u\n"
+			    "windows_read_cadence=%u\n"
 			    "initialization_stage=%s\n"
 			    "parity_feedback_required=%u\n"
 			    "parity_config_owner_required=%u\n"
@@ -671,11 +686,13 @@ static ssize_t behavior_stats_show(struct device *dev,
 			    "irq_protocol_errors=%llu\n"
 			    "irq_drain_overflows=%llu\n"
 			    "quiesced_empty_reads=%llu\n"
+			    "cadence_single_response_irqs=%llu\n"
 			    "last_host_fault=%d\n"
 			    "ready_heat_frames=%llu\n"
 			    "ready_verification_failures=%llu\n",
 			    g6ts_profile_name(),
 			    g6ts_parity_linux_power,
+			    g6ts_windows_read_cadence,
 			    g6ts_initialization_stage_name(ts->initialization_stage),
 			    ts->parity_feedback_required,
 			    ts->parity_config_owner_required,
@@ -713,6 +730,7 @@ static ssize_t behavior_stats_show(struct device *dev,
 			    ts->irq_protocol_errors,
 			    ts->irq_drain_overflows,
 			    ts->quiesced_empty_reads,
+			    ts->cadence_single_response_irqs,
 			    ts->last_host_fault,
 			    ts->ready_heat_frames,
 			    ts->ready_verification_failures);
@@ -2266,6 +2284,9 @@ static int g6ts_dma_read_response(struct g6ts *ts)
 	if (body_len < HIDSPI_INPUT_BODY_HEADER_SIZE ||
 	    body_len > G6TS_MAX_BODY)
 		return -EMSGSIZE;
+	if (g6ts_windows_read_cadence)
+		usleep_range(G6TS_WINDOWS_HEADER_BODY_MIN_US,
+			     G6TS_WINDOWS_HEADER_BODY_MAX_US);
 
 	ret = g6ts_dma_read_pair(ts, g6ts_body_cmd, ts->body, body_len);
 	if (ret) {
@@ -2389,6 +2410,10 @@ static irqreturn_t g6ts_interrupt_thread(int irq, void *data)
 		}
 		if (ts->last_class == RESET_RESPONSE) {
 			g6ts_note_panel_reset_locked(ts, true);
+			break;
+		}
+		if (g6ts_windows_read_cadence) {
+			ts->cadence_single_response_irqs++;
 			break;
 		}
 	}
@@ -3216,6 +3241,9 @@ static int g6ts_probe(struct spi_device *spi)
 	    (!g6ts_windows_init_parity || !g6ts_parity_cfu_inventory))
 		return dev_err_probe(&spi->dev, -EINVAL,
 				     "parity_heat_input requires windows_init_parity and parity_cfu_inventory\n");
+	if (g6ts_windows_read_cadence && !g6ts_windows_init_parity)
+		return dev_err_probe(&spi->dev, -EINVAL,
+				     "windows_read_cadence requires windows_init_parity\n");
 
 	ts = devm_kzalloc(&spi->dev, sizeof(*ts), GFP_KERNEL);
 	if (!ts)

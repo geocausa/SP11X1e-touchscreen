@@ -42,6 +42,8 @@ PHASE89_BOOT = ROOT / "boot" / "75_sp11_713_phase89_linux_transport_heat"
 PHASE89_DEPLOY = ROOT / "scripts" / "deploy_phase89_linux_transport_heat.sh"
 PHASE90_BOOT = ROOT / "boot" / "76_sp11_713_phase90_phase75_power_heat"
 PHASE90_DEPLOY = ROOT / "scripts" / "deploy_phase90_phase75_power_heat.sh"
+PHASE91_BOOT = ROOT / "boot" / "77_sp11_713_phase91_windows_cadence"
+PHASE91_DEPLOY = ROOT / "scripts" / "deploy_phase91_windows_cadence.sh"
 
 
 def function_body(source: str, name: str) -> str:
@@ -100,6 +102,8 @@ class SourceInvariantTests(unittest.TestCase):
         cls.phase89_deploy = PHASE89_DEPLOY.read_text(encoding="utf-8")
         cls.phase90_boot = PHASE90_BOOT.read_text(encoding="utf-8")
         cls.phase90_deploy = PHASE90_DEPLOY.read_text(encoding="utf-8")
+        cls.phase91_boot = PHASE91_BOOT.read_text(encoding="utf-8")
+        cls.phase91_deploy = PHASE91_DEPLOY.read_text(encoding="utf-8")
 
     def test_default_build_is_the_production_dma_set(self):
         self.assertIn("all: production", self.root_makefile)
@@ -502,6 +506,47 @@ class SourceInvariantTests(unittest.TestCase):
         )
         show = function_body(self.source, "behavior_stats_show")
         self.assertIn("parity_linux_power=%u", show)
+
+    def test_phase91_changes_only_response_cadence_from_phase90(self):
+        shared = (
+            "mshw0485_touch.windows_init_parity=1",
+            "mshw0485_touch.parity_linux_power=1",
+            "mshw0485_touch.parity_cfu_inventory=1",
+            "mshw0485_touch.parity_heat_input=1",
+            "mshw0485_touch.behavior_v2=1",
+            "mshw0485_touch.host_fault_recovery=1",
+            "mshw0485_touch.ready_quiesce=1",
+        )
+        for token in shared:
+            self.assertIn(token, self.phase90_boot)
+            self.assertIn(token, self.phase91_boot)
+        self.assertNotIn("windows_read_cadence=1", self.phase90_boot)
+        self.assertIn(
+            "mshw0485_touch.windows_read_cadence=1", self.phase91_boot
+        )
+        self.assertIn("sp11-phase91-windows-cadence", self.phase91_boot)
+        self.assertIn(
+            "grub-reboot sp11-phase91-windows-cadence",
+            self.phase91_deploy,
+        )
+        self.assertNotIn("grub-set-default", self.phase91_deploy)
+
+    def test_phase91_cadence_is_measured_read_only_and_scoped(self):
+        self.assertIn("G6TS_WINDOWS_HEADER_BODY_MIN_US\t490U", self.source)
+        self.assertIn("G6TS_WINDOWS_HEADER_BODY_MAX_US\t550U", self.source)
+        self.assertIn(
+            "module_param_named(windows_read_cadence, "
+            "g6ts_windows_read_cadence, bool, 0444)",
+            self.source,
+        )
+        read = function_body(self.source, "g6ts_dma_read_response")
+        self.assertIn("G6TS_WINDOWS_HEADER_BODY_MIN_US", read)
+        irq = function_body(self.source, "g6ts_interrupt_thread")
+        self.assertIn("cadence_single_response_irqs++", irq)
+        probe = function_body(self.source, "g6ts_probe")
+        self.assertIn(
+            "g6ts_windows_read_cadence && !g6ts_windows_init_parity", probe
+        )
 
     def test_windows_controller_init_is_guarded_and_exactly_ordered(self):
         body = function_body(

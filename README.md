@@ -56,13 +56,19 @@ restoring Linux's generic GENI initialization and mode selection. Its untouched
 hardware boot completed with `ff ff ff ff`, so Phase 89 restores the remaining
 Phase 75 lower-stack property: Linux's normal GPI ring geometry. Phase 89 also
 returned `ff ff ff ff`, ruling out the lower transport; Phase 90 isolates the
-power/reset ordering while retaining the complete upper chronology. See
+power/reset ordering while retaining the complete upper chronology. Phase 90
+completed that chronology and delivered 1,984 valid Heat frames, but an
+immediate second header read desynchronized the stream and preceded six panel
+resets. Phase 91 applies the cadence measured from 1,381 stable Windows frames.
+See
 [docs/PHASE87_HARDWARE_RESULT.md](docs/PHASE87_HARDWARE_RESULT.md) and
 [docs/PHASE88_LINUX_SE_WINDOWS_HEAT.md](docs/PHASE88_LINUX_SE_WINDOWS_HEAT.md),
 [docs/PHASE88_HARDWARE_RESULT.md](docs/PHASE88_HARDWARE_RESULT.md), and
 [docs/PHASE89_LINUX_TRANSPORT_WINDOWS_HEAT.md](docs/PHASE89_LINUX_TRANSPORT_WINDOWS_HEAT.md),
 [docs/PHASE89_HARDWARE_RESULT.md](docs/PHASE89_HARDWARE_RESULT.md), and
-[docs/PHASE90_PHASE75_POWER_WINDOWS_HEAT.md](docs/PHASE90_PHASE75_POWER_WINDOWS_HEAT.md).
+[docs/PHASE90_PHASE75_POWER_WINDOWS_HEAT.md](docs/PHASE90_PHASE75_POWER_WINDOWS_HEAT.md),
+[docs/PHASE90_HARDWARE_RESULT.md](docs/PHASE90_HARDWARE_RESULT.md), and
+[docs/PHASE91_WINDOWS_READ_CADENCE.md](docs/PHASE91_WINDOWS_READ_CADENCE.md).
 
 ## Historical FIFO baseline: Phase 52
 

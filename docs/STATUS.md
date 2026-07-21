@@ -62,7 +62,10 @@ natural panel-reset branch has not yet been exercised by a captured reset; see
   `ff ff ff ff`. Phase 89 therefore restores the complete Phase 75 lower
   transport, including normal Linux GPI ring geometry; it returned the same
   all-ones header. Phase 90 retains that transport and isolates only the
-  power/reset chronology. See
+  power/reset chronology. It completed the full upper chronology and delivered
+  1,984 valid Heat frames, but one immediate second-header read desynchronized
+  the stream and was followed by six panel resets. Phase 91 applies the
+  measured Windows header/body delay and one-response-per-interrupt policy. See
   [PHASE84_HARDWARE_RESULT.md](PHASE84_HARDWARE_RESULT.md),
   [PHASE87_HARDWARE_RESULT.md](PHASE87_HARDWARE_RESULT.md),
   [PHASE87_LINUX_LINK_HEAT.md](PHASE87_LINUX_LINK_HEAT.md), and
@@ -70,7 +73,9 @@ natural panel-reset branch has not yet been exercised by a captured reset; see
   [PHASE88_HARDWARE_RESULT.md](PHASE88_HARDWARE_RESULT.md), and
   [PHASE89_LINUX_TRANSPORT_WINDOWS_HEAT.md](PHASE89_LINUX_TRANSPORT_WINDOWS_HEAT.md),
   [PHASE89_HARDWARE_RESULT.md](PHASE89_HARDWARE_RESULT.md), and
-  [PHASE90_PHASE75_POWER_WINDOWS_HEAT.md](PHASE90_PHASE75_POWER_WINDOWS_HEAT.md), plus
+  [PHASE90_PHASE75_POWER_WINDOWS_HEAT.md](PHASE90_PHASE75_POWER_WINDOWS_HEAT.md),
+  [PHASE90_HARDWARE_RESULT.md](PHASE90_HARDWARE_RESULT.md),
+  [PHASE91_WINDOWS_READ_CADENCE.md](PHASE91_WINDOWS_READ_CADENCE.md), and
   [WINDOWS_CONTROLLER_INIT_PARITY.md](WINDOWS_CONTROLLER_INIT_PARITY.md).
 - `mshw0485_touch.windows_orchestrator=1` enables recovered Windows lifecycle
   behavior whose provider-owned context fields are not fully proven. It is
