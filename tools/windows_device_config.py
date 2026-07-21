@@ -12,7 +12,13 @@ REPORT56_IDENTITY_OFFSETS = (20, 24, 28, 32, 36, 40)
 
 
 def report56_identity_from_report60(content: bytes) -> bytes:
-    """Extract the six report-0x56 Usage-0x03 bytes mirrored by report 0x60."""
+    """Extract the captured panel-specific 0x56 correlation from report 0x60.
+
+    The CFU header declares one component, so these later bytes are outside
+    the public CFU component table.  Their repetition is useful provenance,
+    not permission to treat them as standardized CFU fields or to reorder the
+    Windows owners.
+    """
     if len(content) != REPORT60_LENGTH:
         raise ValueError(f"report 0x60 must contain {REPORT60_LENGTH} bytes")
     return bytes(content[offset] for offset in REPORT56_IDENTITY_OFFSETS)

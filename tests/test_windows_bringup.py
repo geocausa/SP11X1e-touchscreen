@@ -78,6 +78,18 @@ class WindowsBringupTests(unittest.TestCase):
         self.assertEqual(len(events), 1)
         self.assertEqual(events[0].operation, "GET_FEATURE_RESPONSE")
 
+    def test_proven_control_data_responses_are_retained(self):
+        events = relevant_events([
+            response(1, 1, 0xA0, b"\x01"),
+            response(2, 1, 0x65, bytes.fromhex(
+                "00 00 00 a0 00 00 00 00 ff 00 00 00 01 00 00 00"
+            )),
+        ])
+        self.assertEqual(len(events), 2)
+        self.assertEqual(events[0].owner, "heat-feedback-collection")
+        self.assertEqual(events[1].owner, "cfu-collection")
+        self.assertEqual(events[1].operation, "DATA")
+
 
 if __name__ == "__main__":
     unittest.main()

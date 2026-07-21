@@ -119,8 +119,11 @@ captures and reappear at GET_FEATURE `0x60` offsets 20, 24, 28, 32, 36, and 40.
 Windows sends report `0x56` before the CFU owner reads `0x60`, so reading `0x60`
 early would change the method. The parity path instead requires the platform
 value as an input, preserves the captured ordering, then stops at
-`windows-cfu-owner-required`. It does not send report `0x65` and never admits
-Heat. See `WINDOWS_CFU_BOUNDARY.md`.
+`windows-cfu-owner-required`. Phase 84 does not send report `0x65` and never
+admits Heat. The separately installed `SurfaceCFUOverHid.dll`, its exact offer
+constructor, and all four responses have since been recovered, but that work
+is being kept behind a later checkpoint rather than changing Phase 84 in
+place. See `WINDOWS_CFU_BOUNDARY.md`.
 
 ## Lifecycle facts that must remain separate
 
@@ -165,7 +168,8 @@ Not yet claimed exact:
 - the precise Windows scheduler predicate behind the observed 476 ms gap
   between the Heat and device-config owners (the parity path preserves a
   conservative 470 ms boundary);
-- the independent CFU host's constructor and response handling;
+- hardware validation of the newly recovered, separately gated CFU inventory
+  transaction (no firmware payload path will be implemented);
 - the distinct Windows restart, D3/D0, and host-timeout state machines.
 
 These are implementation gates, not invitations to substitute plausible

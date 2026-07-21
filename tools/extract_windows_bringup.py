@@ -65,6 +65,8 @@ def response_owner(response_class: int, content_id: int) -> str:
         return "hidspi-core"
     if response_class == 4 and content_id == 1:
         return "power-lifecycle"
+    if response_class == 1 and content_id == 0xA0:
+        return "heat-feedback-collection"
     # A response has the same report ID as its initiating collection request.
     return command_owner(0, content_id)
 
@@ -147,8 +149,10 @@ def relevant_events(transfers: Iterable[Transfer]) -> list[LedgerEvent]:
         content_len = transfer.response_content_len
         assert response_class is not None and content_id is not None
         assert content_len is not None
-        # Streaming DATA is intentionally omitted: this is a control ledger.
-        if response_class == 1:
+        # Keep only DATA reports that are proven acknowledgements in the
+        # captured control flow.  Raw Heat DATA (for example report 0x12 or
+        # the reduced report 0x40) remains intentionally outside this ledger.
+        if response_class == 1 and content_id not in (0x65, 0xA0):
             continue
         events.append(
             LedgerEvent(

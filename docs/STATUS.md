@@ -44,6 +44,10 @@ natural panel-reset branch has not yet been exercised by a captured reset; see
   stops before CFU report `0x65`. Dynamic provider inputs are invalid by
   default and must be supplied explicitly; see
   [WINDOWS_INIT_PARITY.md](WINDOWS_INIT_PARITY.md).
+  The installed `SurfaceCFUOverHid` owner, its offer constructor, and the
+  panel's complete reject-old/same response path are now statically and
+  dynamically decoded. They remain outside Phase 84 pending a distinct gated
+  image; no firmware payload path is present.
 - `mshw0485_touch.windows_orchestrator=1` enables recovered Windows lifecycle
   behavior whose provider-owned context fields are not fully proven. It is
   read-only and defaults off.

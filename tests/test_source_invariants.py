@@ -29,6 +29,7 @@ PHASE82_BOOT = ROOT / "boot" / "69_sp11_713_phase82_set70"
 PHASE82_DEPLOY = ROOT / "scripts" / "deploy_phase82_set70.sh"
 PHASE84_BOOT = ROOT / "boot" / "70_sp11_713_phase84_init_parity"
 PHASE84_DEPLOY = ROOT / "scripts" / "deploy_phase84_init_parity.sh"
+PHASE85_BOOT = ROOT / "boot" / "70_sp11_713_phase85_cfu_parity"
 
 
 def function_body(source: str, name: str) -> str:
@@ -74,6 +75,7 @@ class SourceInvariantTests(unittest.TestCase):
         cls.phase82_deploy = PHASE82_DEPLOY.read_text(encoding="utf-8")
         cls.phase84_boot = PHASE84_BOOT.read_text(encoding="utf-8")
         cls.phase84_deploy = PHASE84_DEPLOY.read_text(encoding="utf-8")
+        cls.phase85_boot = PHASE85_BOOT.read_text(encoding="utf-8")
 
     def test_default_build_is_the_production_dma_set(self):
         self.assertIn("all: production", self.root_makefile)
@@ -212,6 +214,43 @@ class SourceInvariantTests(unittest.TestCase):
         ):
             self.assertIn(token, a5)
 
+    def test_windows_cfu_inventory_is_bounded_and_has_no_payload_path(self):
+        self.assertIn("static bool g6ts_parity_cfu_inventory;", self.source)
+        self.assertIn(
+            "module_param_named(parity_cfu_inventory, "
+            "g6ts_parity_cfu_inventory, bool, 0444)",
+            self.source,
+        )
+        body = function_body(self.source, "g6ts_windows_cfu_inventory_locked")
+        ordered = (
+            "G6TS_INIT_WINDOWS_CFU_GET_VERSION",
+            "G6TS_INIT_WINDOWS_CFU_START_TRANSACTION",
+            "G6TS_INIT_WINDOWS_CFU_START_LIST",
+            "G6TS_INIT_WINDOWS_CFU_OFFER",
+            "G6TS_INIT_WINDOWS_CFU_END_LIST",
+            "G6TS_INIT_WINDOWS_FINAL_FEATURE73",
+            "G6TS_INIT_WINDOWS_HEAT_OWNER_REQUIRED",
+        )
+        positions = [body.index(item) for item in ordered]
+        self.assertEqual(positions, sorted(positions))
+        self.assertIn("GET_FEATURE, 0x60", body)
+        self.assertIn("content[8] != 0 || content[12] != 0x02", body)
+        self.assertIn("ts->parity_cfu_branch_required = true", body)
+        self.assertIn("GET_FEATURE, 0x73", body)
+        self.assertNotIn("FIRMWARE_UPDATE_CONTENT", self.source)
+        self.assertNotIn("g6ts_cfu_payload", self.source)
+
+        sender = function_body(self.source, "g6ts_windows_cfu_send_locked")
+        self.assertIn("OUTPUT_REPORT, 0x65", sender)
+        self.assertIn("DATA, 0x65", sender)
+        self.assertIn("G6TS_WINDOWS_CFU_OFFER_LEN", sender)
+
+        provider = function_body(
+            self.source, "g6ts_windows_cfu_provider_valid"
+        )
+        self.assertIn("g6ts_sp11_cfu_offer", provider)
+        self.assertIn("g6ts_parity_cfu_offer_count", provider)
+
     def test_windows_init_parity_validates_exact_sp11_descriptor(self):
         body = function_body(
             self.source, "g6ts_validate_sp11_device_descriptor"
@@ -270,6 +309,22 @@ class SourceInvariantTests(unittest.TestCase):
         self.assertIn("grub-reboot sp11-phase84-init-parity", self.phase84_deploy)
         self.assertIn("saved GRUB default remains unchanged", self.phase84_deploy)
         self.assertNotIn("grub-set-default", self.phase84_deploy)
+
+    def test_phase85_is_exact_cfu_inventory_only(self):
+        required = (
+            "sp11-phase85-cfu-parity",
+            "sp11_entry=7.1.3-phase85-cfu-parity",
+            "mshw0485_touch.windows_init_parity=1",
+            "mshw0485_touch.parity_cfu_inventory=1",
+            "mshw0485_touch.parity_cfu_offer="
+            "0x00,0x00,0x12,0x00,0x89,0x14,0x00,0x3f,"
+            "0xff,0xff,0xff,0xff,0x04,0x04,0x75,0x00",
+        )
+        for token in required:
+            self.assertIn(token, self.phase85_boot)
+        self.assertNotIn("behavior_v2=1", self.phase85_boot)
+        self.assertNotIn("windows_orchestrator=1", self.phase85_boot)
+        self.assertNotIn("parity_cfu_inventory", self.phase84_boot)
 
     def test_assignment_initializes_every_output_slot(self):
         body = function_body(self.source, "g6ts_assign_tracks")

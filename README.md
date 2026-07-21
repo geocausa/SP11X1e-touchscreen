@@ -26,7 +26,9 @@ of Heat/contact processing. It validates the exact SP11 HID-SPI descriptor
 identity, reconstructs Windows' initial A1/A5 feedback from explicit provider
 state, and reproduces the device-config `0x05/0x70/0x56` exchanges. Touch input
 remains deliberately disabled and the path stops before the independently
-owned CFU `0x60/0x65` traffic. See
+owned CFU `0x60/0x65` traffic. The installed CFU owner and its complete
+no-update response path are now decoded for a later isolated checkpoint; they
+do not alter Phase 84 and no firmware payload path is implemented. See
 [docs/WINDOWS_INIT_PARITY.md](docs/WINDOWS_INIT_PARITY.md) and
 [docs/WINDOWS_CFU_BOUNDARY.md](docs/WINDOWS_CFU_BOUNDARY.md).
 

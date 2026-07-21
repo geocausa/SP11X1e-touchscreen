@@ -102,6 +102,11 @@
 #define G6TS_WINDOWS_FEEDBACK_LEN	63U
 #define G6TS_WINDOWS_REPORT56_ID_LEN	6U
 #define G6TS_WINDOWS_CONFIG_DELAY_MS	470U
+#define G6TS_WINDOWS_CFU_DELAY_MS	825U
+#define G6TS_WINDOWS_FINAL_CONFIG_DELAY_MS 600U
+#define G6TS_WINDOWS_CFU_OFFER_LEN	16U
+#define G6TS_WINDOWS_CFU_VERSION_LEN	60U
+#define G6TS_WINDOWS_CFU_TOKEN		0xa0U
 
 enum g6ts_initialization_stage {
 	G6TS_INIT_IDLE,
@@ -121,6 +126,14 @@ enum g6ts_initialization_stage {
 	G6TS_INIT_WINDOWS_SET_FEATURE70,
 	G6TS_INIT_WINDOWS_SET_FEATURE56,
 	G6TS_INIT_WINDOWS_CFU_OWNER_REQUIRED,
+	G6TS_INIT_WINDOWS_CFU_GET_VERSION,
+	G6TS_INIT_WINDOWS_CFU_START_TRANSACTION,
+	G6TS_INIT_WINDOWS_CFU_START_LIST,
+	G6TS_INIT_WINDOWS_CFU_OFFER,
+	G6TS_INIT_WINDOWS_CFU_BRANCH_REQUIRED,
+	G6TS_INIT_WINDOWS_CFU_END_LIST,
+	G6TS_INIT_WINDOWS_FINAL_FEATURE73,
+	G6TS_INIT_WINDOWS_HEAT_OWNER_REQUIRED,
 	G6TS_INIT_SET_FEATURE05,
 	G6TS_INIT_GET_FEATURE70,
 	G6TS_INIT_SET_FEATURE70,
@@ -284,6 +297,24 @@ module_param_named(parity_report56_flag, g6ts_parity_report56_flag, int, 0444);
 MODULE_PARM_DESC(parity_report56_flag,
 		 "Windows report-0x56 Usage-0x09 boolean (-1: unavailable)");
 
+/*
+ * SurfaceCFUOverHid owns report 0x60/0x65 independently. Phase 84 leaves this
+ * false and stops before CFU. A later laboratory entry may enable the bounded
+ * inventory-only transaction after supplying the exact installed offer.
+ * There is deliberately no firmware-payload parameter or implementation.
+ */
+static bool g6ts_parity_cfu_inventory;
+module_param_named(parity_cfu_inventory, g6ts_parity_cfu_inventory, bool, 0444);
+MODULE_PARM_DESC(parity_cfu_inventory,
+		 "Run Windows CFU inventory/offer check without payload transfer");
+
+static u8 g6ts_parity_cfu_offer[G6TS_WINDOWS_CFU_OFFER_LEN];
+static unsigned int g6ts_parity_cfu_offer_count;
+module_param_array_named(parity_cfu_offer, g6ts_parity_cfu_offer, byte,
+			 &g6ts_parity_cfu_offer_count, 0444);
+MODULE_PARM_DESC(parity_cfu_offer,
+		 "Exact 16-byte installed Windows CFU offer (token byte is provider-owned)");
+
 enum g6ts_recovery_path {
 	G6TS_RECOVERY_HARDWARE,
 	G6TS_RECOVERY_SOFTWARE,
@@ -307,6 +338,12 @@ static const u8 g6ts_report_descriptor_cmd[8] = {
 };
 
 static const u8 g6ts_mode_enable[] = { 0x01 };
+/* SHA-256 fc5772d4...0bd58af; metadata only, never a firmware payload. */
+static const u8 g6ts_sp11_cfu_offer[G6TS_WINDOWS_CFU_OFFER_LEN] = {
+	0x00, 0x00, 0x12, 0x00, 0x89, 0x14, 0x00, 0x3f,
+	0xff, 0xff, 0xff, 0xff, 0x04, 0x04, 0x75, 0x00,
+};
+
 static const u8 g6ts_mode_handshake[] = {
 	0xbc, 0xe6, 0x4a, 0x2e, 0x86, 0x78, 0x00,
 };
@@ -452,8 +489,13 @@ struct g6ts {
 	bool parity_feedback_required;
 	bool parity_config_owner_required;
 	bool parity_cfu_owner_required;
+	bool parity_cfu_branch_required;
+	bool parity_heat_owner_required;
 	u8 parity_feature73_early[2];
+	u8 parity_feature73_late[2];
 	u8 parity_feature06_prefix[16];
+	u8 parity_cfu_version_prefix[12];
+	u8 parity_cfu_offer_response[G6TS_WINDOWS_CFU_OFFER_LEN];
 };
 
 static const char *
@@ -494,6 +536,22 @@ g6ts_initialization_stage_name(enum g6ts_initialization_stage stage)
 		return "windows-set-feature56";
 	case G6TS_INIT_WINDOWS_CFU_OWNER_REQUIRED:
 		return "windows-cfu-owner-required";
+	case G6TS_INIT_WINDOWS_CFU_GET_VERSION:
+		return "windows-cfu-get-version";
+	case G6TS_INIT_WINDOWS_CFU_START_TRANSACTION:
+		return "windows-cfu-start-transaction";
+	case G6TS_INIT_WINDOWS_CFU_START_LIST:
+		return "windows-cfu-start-list";
+	case G6TS_INIT_WINDOWS_CFU_OFFER:
+		return "windows-cfu-offer";
+	case G6TS_INIT_WINDOWS_CFU_BRANCH_REQUIRED:
+		return "windows-cfu-branch-required";
+	case G6TS_INIT_WINDOWS_CFU_END_LIST:
+		return "windows-cfu-end-list";
+	case G6TS_INIT_WINDOWS_FINAL_FEATURE73:
+		return "windows-final-feature73";
+	case G6TS_INIT_WINDOWS_HEAT_OWNER_REQUIRED:
+		return "windows-heat-owner-required";
 	case G6TS_INIT_SET_FEATURE05:
 		return "set-feature05";
 	case G6TS_INIT_GET_FEATURE70:
@@ -548,8 +606,13 @@ static ssize_t behavior_stats_show(struct device *dev,
 			    "parity_feedback_required=%u\n"
 			    "parity_config_owner_required=%u\n"
 			    "parity_cfu_owner_required=%u\n"
+			    "parity_cfu_branch_required=%u\n"
+			    "parity_heat_owner_required=%u\n"
 			    "parity_feature73_early=%*ph\n"
+			    "parity_feature73_late=%*ph\n"
 			    "parity_feature06_prefix=%*ph\n"
+			    "parity_cfu_version_prefix=%*ph\n"
+			    "parity_cfu_offer_response=%*ph\n"
 			    "mode_enabled=%u\n"
 			    "awaiting_ready_heat=%u\n"
 			    "heat_frames=%llu\n"
@@ -586,10 +649,18 @@ static ssize_t behavior_stats_show(struct device *dev,
 			    ts->parity_feedback_required,
 			    ts->parity_config_owner_required,
 			    ts->parity_cfu_owner_required,
+			    ts->parity_cfu_branch_required,
+			    ts->parity_heat_owner_required,
 			    (int)sizeof(ts->parity_feature73_early),
 			    ts->parity_feature73_early,
+			    (int)sizeof(ts->parity_feature73_late),
+			    ts->parity_feature73_late,
 			    (int)sizeof(ts->parity_feature06_prefix),
 			    ts->parity_feature06_prefix,
+			    (int)sizeof(ts->parity_cfu_version_prefix),
+			    ts->parity_cfu_version_prefix,
+			    (int)sizeof(ts->parity_cfu_offer_response),
+			    ts->parity_cfu_offer_response,
 			    ts->mode_enabled, ts->awaiting_ready_heat,
 			    ts->heat_frames, ts->heat_errors,
 			    ts->component_total, ts->contact_total,
@@ -2442,6 +2513,166 @@ static void g6ts_build_windows_feedback_a5(u8 content[G6TS_WINDOWS_FEEDBACK_LEN]
 	put_unaligned_le16(0x0040, &content[46]);
 }
 
+static bool g6ts_windows_cfu_provider_valid(void)
+{
+	/* Force-immediate and force-ignore-version are development-only bits. */
+	return g6ts_parity_cfu_offer_count == G6TS_WINDOWS_CFU_OFFER_LEN &&
+	       !(g6ts_parity_cfu_offer[1] & (BIT(6) | BIT(7))) &&
+	       !memcmp(g6ts_parity_cfu_offer, g6ts_sp11_cfu_offer,
+		       G6TS_WINDOWS_CFU_OFFER_LEN);
+}
+
+static void
+g6ts_build_windows_cfu_info(u8 content[G6TS_WINDOWS_CFU_OFFER_LEN],
+			    u8 information_code)
+{
+	memset(content, 0, G6TS_WINDOWS_CFU_OFFER_LEN);
+	content[0] = information_code;
+	content[2] = 0xff;
+	content[3] = G6TS_WINDOWS_CFU_TOKEN;
+}
+
+static bool g6ts_windows_cfu_response_well_formed(const u8 *content)
+{
+	return content[0] == 0 && content[1] == 0 && content[2] == 0 &&
+	       content[3] == G6TS_WINDOWS_CFU_TOKEN &&
+	       get_unaligned_le32(&content[4]) == 0 &&
+	       content[9] == 0 && content[10] == 0 && content[11] == 0 &&
+	       content[13] == 0 && content[14] == 0 && content[15] == 0;
+}
+
+static int g6ts_windows_cfu_send_locked(struct g6ts *ts, const u8 *content)
+{
+	int ret;
+
+	ret = g6ts_dma_hidspi_output(ts, OUTPUT_REPORT, 0x65, content,
+				     G6TS_WINDOWS_CFU_OFFER_LEN);
+	if (ret)
+		return ret;
+
+	ret = g6ts_recovery_read_expected(ts, DATA, 0x65,
+					  G6TS_WINDOWS_CFU_OFFER_LEN);
+	if (ret || ts->last_content_len != G6TS_WINDOWS_CFU_OFFER_LEN)
+		return ret ? ret : -EPROTO;
+
+	content = ts->body + HIDSPI_INPUT_BODY_HEADER_SIZE;
+	if (!g6ts_windows_cfu_response_well_formed(content))
+		return -EPROTO;
+
+	return 0;
+}
+
+static int g6ts_windows_cfu_expect_info_accept(struct g6ts *ts)
+{
+	const u8 *content = ts->body + HIDSPI_INPUT_BODY_HEADER_SIZE;
+
+	/* The target returns 0xff in the don't-care reject-reason byte. */
+	if (content[8] != 0xff || content[12] != 0x01)
+		return -EPROTO;
+
+	return 0;
+}
+
+static int g6ts_windows_cfu_inventory_locked(struct g6ts *ts)
+{
+	u8 transaction[G6TS_WINDOWS_CFU_OFFER_LEN];
+	const u8 *content;
+	int ret;
+
+	/* Captured gap between the config owner and CFU collection attach. */
+	msleep(G6TS_WINDOWS_CFU_DELAY_MS);
+
+	ts->initialization_stage = G6TS_INIT_WINDOWS_CFU_GET_VERSION;
+	ret = g6ts_dma_feature_exchange(ts, GET_FEATURE, 0x60, NULL, 0);
+	if (ret)
+		return ret;
+	ret = g6ts_expect_response(ts, GET_FEATURE_RESPONSE, 0x60,
+				   G6TS_WINDOWS_CFU_VERSION_LEN);
+	if (ret || ts->last_content_len != G6TS_WINDOWS_CFU_VERSION_LEN)
+		return ret ? ret : -EPROTO;
+	content = ts->body + HIDSPI_INPUT_BODY_HEADER_SIZE;
+	memcpy(ts->parity_cfu_version_prefix, content,
+	       sizeof(ts->parity_cfu_version_prefix));
+	/*
+	 * Decode only the header and the one declared component. Bytes after the
+	 * component-count boundary are not inputs to the CFU decision.
+	 */
+	if (content[0] != 1 || content[1] != 0 || content[2] != 0 ||
+	    content[3] != 0x04 ||
+	    memcmp(&content[4], &g6ts_parity_cfu_offer[4], 4) ||
+	    content[9] != g6ts_parity_cfu_offer[2])
+		return -EPROTO;
+
+	ts->initialization_stage = G6TS_INIT_WINDOWS_CFU_START_TRANSACTION;
+	g6ts_build_windows_cfu_info(transaction, 0);
+	ret = g6ts_windows_cfu_send_locked(ts, transaction);
+	if (ret)
+		return ret;
+	ret = g6ts_windows_cfu_expect_info_accept(ts);
+	if (ret)
+		return ret;
+
+	ts->initialization_stage = G6TS_INIT_WINDOWS_CFU_START_LIST;
+	g6ts_build_windows_cfu_info(transaction, 1);
+	ret = g6ts_windows_cfu_send_locked(ts, transaction);
+	if (ret)
+		return ret;
+	ret = g6ts_windows_cfu_expect_info_accept(ts);
+	if (ret)
+		return ret;
+
+	ts->initialization_stage = G6TS_INIT_WINDOWS_CFU_OFFER;
+	memcpy(transaction, g6ts_parity_cfu_offer, sizeof(transaction));
+	transaction[3] = G6TS_WINDOWS_CFU_TOKEN;
+	ret = g6ts_windows_cfu_send_locked(ts, transaction);
+	if (ret)
+		return ret;
+	content = ts->body + HIDSPI_INPUT_BODY_HEADER_SIZE;
+	memcpy(ts->parity_cfu_offer_response, content,
+	       sizeof(ts->parity_cfu_offer_response));
+	if (content[8] != 0 || content[12] != 0x02) {
+		/*
+		 * Windows branches into payload, replay, or busy handling here. This
+		 * driver intentionally implements none of those firmware-update paths.
+		 */
+		ts->initialization_stage = G6TS_INIT_WINDOWS_CFU_BRANCH_REQUIRED;
+		ts->parity_cfu_branch_required = true;
+		dev_notice(&ts->spi->dev,
+			   "Windows CFU branch required: reject_reason=%#x status=%#x; no payload sent\n",
+			   content[8], content[12]);
+		return 0;
+	}
+
+	ts->initialization_stage = G6TS_INIT_WINDOWS_CFU_END_LIST;
+	g6ts_build_windows_cfu_info(transaction, 2);
+	ret = g6ts_windows_cfu_send_locked(ts, transaction);
+	if (ret)
+		return ret;
+	ret = g6ts_windows_cfu_expect_info_accept(ts);
+	if (ret)
+		return ret;
+
+	/* Captured gap before the device-config owner's post-CFU query. */
+	msleep(G6TS_WINDOWS_FINAL_CONFIG_DELAY_MS);
+	ts->initialization_stage = G6TS_INIT_WINDOWS_FINAL_FEATURE73;
+	ret = g6ts_dma_feature_exchange(ts, GET_FEATURE, 0x73, NULL, 0);
+	if (ret)
+		return ret;
+	ret = g6ts_expect_response(ts, GET_FEATURE_RESPONSE, 0x73, 2);
+	if (ret || ts->last_content_len != 2)
+		return ret ? ret : -EPROTO;
+	content = ts->body + HIDSPI_INPUT_BODY_HEADER_SIZE;
+	memcpy(ts->parity_feature73_late, content,
+	       sizeof(ts->parity_feature73_late));
+
+	ts->initialization_stage = G6TS_INIT_WINDOWS_HEAT_OWNER_REQUIRED;
+	ts->parity_heat_owner_required = true;
+	dev_notice(&ts->spi->dev,
+		   "Windows cold chronology reached Heat boundary: early73=%2ph late73=%2ph; input remains disabled\n",
+		   ts->parity_feature73_early, ts->parity_feature73_late);
+	return 0;
+}
+
 /*
  * Reproduce only the proven, serialized part of the Windows cold collection
  * attach. Dynamic values must come from their owning provider. Returning
@@ -2566,12 +2797,17 @@ static int g6ts_windows_cold_attach_locked(struct g6ts *ts)
 		return ret ? ret : -EPROTO;
 
 	/* CFU collection attach is deliberately separate from touch activation. */
-	ts->initialization_stage = G6TS_INIT_WINDOWS_CFU_OWNER_REQUIRED;
-	ts->parity_cfu_owner_required = true;
-	ts->mode_enabled = false;
-	dev_notice(&ts->spi->dev,
-		   "Windows parity reached the CFU-owner boundary; Heat/input remains disabled\n");
-	return 0;
+	if (!g6ts_parity_cfu_inventory ||
+	    !g6ts_windows_cfu_provider_valid()) {
+		ts->initialization_stage = G6TS_INIT_WINDOWS_CFU_OWNER_REQUIRED;
+		ts->parity_cfu_owner_required = true;
+		ts->mode_enabled = false;
+		dev_notice(&ts->spi->dev,
+			   "Windows parity reached the CFU-owner boundary; inventory opt-in and exact offer are required\n");
+		return 0;
+	}
+
+	return g6ts_windows_cfu_inventory_locked(ts);
 }
 
 static int g6ts_recovery_read_expected(struct g6ts *ts, u8 response_class,
@@ -2629,10 +2865,18 @@ static int g6ts_full_reinitialize_locked(struct g6ts *ts,
 	ts->parity_feedback_required = false;
 	ts->parity_config_owner_required = false;
 	ts->parity_cfu_owner_required = false;
+	ts->parity_cfu_branch_required = false;
+	ts->parity_heat_owner_required = false;
 	memset(ts->parity_feature73_early, 0,
 	       sizeof(ts->parity_feature73_early));
+	memset(ts->parity_feature73_late, 0,
+	       sizeof(ts->parity_feature73_late));
 	memset(ts->parity_feature06_prefix, 0,
 	       sizeof(ts->parity_feature06_prefix));
+	memset(ts->parity_cfu_version_prefix, 0,
+	       sizeof(ts->parity_cfu_version_prefix));
+	memset(ts->parity_cfu_offer_response, 0,
+	       sizeof(ts->parity_cfu_offer_response));
 
 	if (path == G6TS_RECOVERY_HARDWARE) {
 		ts->hardware_recovery_attempts++;
@@ -2865,7 +3109,9 @@ static void g6ts_recovery_work(struct work_struct *work)
 		ts->recovery_path = G6TS_RECOVERY_HARDWARE;
 		if (ts->parity_feedback_required ||
 		    ts->parity_config_owner_required ||
-		    ts->parity_cfu_owner_required)
+		    ts->parity_cfu_owner_required ||
+		    ts->parity_cfu_branch_required ||
+		    ts->parity_heat_owner_required)
 			dev_info(&ts->spi->dev,
 				 "Windows parity attach paused at %s; touch input intentionally disabled\n",
 				 g6ts_initialization_stage_name(ts->initialization_stage));
