@@ -56,7 +56,7 @@ spi_geni_qcom.sp11_windows_se_init=1
 gpi.sp11_windows_ring_layout=1
 ```
 
-It is present only in the input-disabled Phase 84 and Phase 85 entries. For
+It is present only in the isolated Phase 84, Phase 85, and Phase 86 entries. For
 the SP11 protocol-9 controller it:
 
 - skips generic `geni_se_init()`, whose broad clears, FIFO watermarks, and

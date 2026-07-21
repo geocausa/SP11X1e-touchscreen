@@ -34,6 +34,13 @@ do not alter Phase 84 and no firmware payload path is implemented. See
 guarded QSPI controller initialization is documented in
 [docs/WINDOWS_CONTROLLER_INIT_PARITY.md](docs/WINDOWS_CONTROLLER_INIT_PARITY.md).
 
+Phase 86 preserves those input-disabled checkpoints but continues the complete
+Windows init and bounded CFU no-update chronology into ordinary Heat
+consumption. It enables the separately tested Phase 76 contact profile and
+opens input only after every preceding response validates; no additional mode
+command and no firmware payload are sent. See
+[docs/PHASE86_WINDOWS_HEAT.md](docs/PHASE86_WINDOWS_HEAT.md).
+
 ## Historical FIFO baseline: Phase 52
 
 - Power and reset sequencing works.

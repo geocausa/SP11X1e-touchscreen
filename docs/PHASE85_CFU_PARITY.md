@@ -31,6 +31,10 @@ Phase 85 must not be armed until Phase 84 has independently reached
 `windows-cfu-owner-required` without a transport or protocol error. The saved
 GRUB default remains the working Phase 75 baseline.
 
+Phase 86 is a separate opt-in continuation which admits Heat only after this
+complete no-update path reaches its final report-`0x73` boundary. It does not
+change the Phase 85 checkpoint.
+
 Expected Phase 85 terminal state for the captured installed firmware is:
 
 ```text

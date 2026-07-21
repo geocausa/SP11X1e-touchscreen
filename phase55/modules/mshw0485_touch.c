@@ -244,12 +244,14 @@ MODULE_PARM_DESC(ready_quiesce,
  * sequence through each operation whose owner and contents are known. Dynamic
  * A1/A5 feedback and report-0x56 identity inputs are unavailable by default;
  * when explicitly supplied, the path advances through the device-config
- * owner and stops before independent CFU traffic. Heat is never enabled.
+ * owner and stops before independent CFU traffic. Heat remains disabled
+ * unless the separate parity_heat_input gate is selected together with the
+ * complete bounded CFU inventory path.
  */
 static bool g6ts_windows_init_parity;
 module_param_named(windows_init_parity, g6ts_windows_init_parity, bool, 0444);
 MODULE_PARM_DESC(windows_init_parity,
-		 "Run evidence-gated Windows cold init with Heat/input disabled (default: false)");
+		 "Run evidence-gated Windows cold initialization (default: false)");
 
 /*
  * Provider inputs are deliberately invalid by default.  The Windows producer
@@ -314,6 +316,19 @@ module_param_array_named(parity_cfu_offer, g6ts_parity_cfu_offer, byte,
 			 &g6ts_parity_cfu_offer_count, 0444);
 MODULE_PARM_DESC(parity_cfu_offer,
 		 "Exact 16-byte installed Windows CFU offer (token byte is provider-owned)");
+
+/*
+ * Phase 86 is the first end-to-end laboratory entry.  It may admit Heat only
+ * after the evidence-gated Windows cold attach and bounded CFU inventory have
+ * both completed through the captured final report-0x73 boundary.  Keeping
+ * this separate from windows_init_parity preserves Phase 84/85 as diagnostic
+ * stop points and prevents a partial attach from being mistaken for input
+ * readiness.
+ */
+static bool g6ts_parity_heat_input;
+module_param_named(parity_heat_input, g6ts_parity_heat_input, bool, 0444);
+MODULE_PARM_DESC(parity_heat_input,
+		 "Admit Heat/input only after complete Windows init+CFU parity");
 
 enum g6ts_recovery_path {
 	G6TS_RECOVERY_HARDWARE,
@@ -2665,10 +2680,27 @@ static int g6ts_windows_cfu_inventory_locked(struct g6ts *ts)
 	memcpy(ts->parity_feature73_late, content,
 	       sizeof(ts->parity_feature73_late));
 
-	ts->initialization_stage = G6TS_INIT_WINDOWS_HEAT_OWNER_REQUIRED;
-	ts->parity_heat_owner_required = true;
+	if (!g6ts_parity_heat_input) {
+		ts->initialization_stage = G6TS_INIT_WINDOWS_HEAT_OWNER_REQUIRED;
+		ts->parity_heat_owner_required = true;
+		dev_notice(&ts->spi->dev,
+			   "Windows cold chronology reached Heat boundary: early73=%2ph late73=%2ph; input remains disabled\n",
+			   ts->parity_feature73_early,
+			   ts->parity_feature73_late);
+		return 0;
+	}
+
+	/*
+	 * SET_FEATURE 0x05 already activated the Heat collection in the captured
+	 * owner order.  Do not send another mode command here: merely open the
+	 * response consumer and require the first complete report 0x12 to pass the
+	 * normal structural parser before declaring input ready.
+	 */
+	ts->initialization_stage = G6TS_INIT_WAIT_HEAT;
+	ts->awaiting_ready_heat = true;
+	ts->mode_enabled = true;
 	dev_notice(&ts->spi->dev,
-		   "Windows cold chronology reached Heat boundary: early73=%2ph late73=%2ph; input remains disabled\n",
+		   "Windows init+CFU chronology complete: early73=%2ph late73=%2ph; waiting for first valid Heat frame\n",
 		   ts->parity_feature73_early, ts->parity_feature73_late);
 	return 0;
 }
@@ -3162,6 +3194,10 @@ static int g6ts_probe(struct spi_device *spi)
 	if (g6ts_ready_quiesce && !g6ts_host_fault_recovery)
 		return dev_err_probe(&spi->dev, -EINVAL,
 				     "ready_quiesce requires host_fault_recovery\n");
+	if (g6ts_parity_heat_input &&
+	    (!g6ts_windows_init_parity || !g6ts_parity_cfu_inventory))
+		return dev_err_probe(&spi->dev, -EINVAL,
+				     "parity_heat_input requires windows_init_parity and parity_cfu_inventory\n");
 
 	ts = devm_kzalloc(&spi->dev, sizeof(*ts), GFP_KERNEL);
 	if (!ts)

@@ -42,13 +42,17 @@ experiment. Change one variable at a time:
    startup was noisy before stabilizing and did not replace the control;
 3. retain Phase 80/81 host-fault safeguards independently from feature/report
    experiments;
-4. use the completed Windows producer trace and the decoded resource/logger
+4. retain Phase 84 as the preserved initialization-only control; the
+   operator-authorized Phase 86 trial may run first because it avoids leaving
+   the activated Heat collection without a consumer, while its recorded
+   terminal stage still localizes an early failure;
+5. use the completed Windows producer trace and the decoded resource/logger
    evidence in
    [WINDOWS_REPORT09_FEEDBACK_RE.md](WINDOWS_REPORT09_FEEDBACK_RE.md) to locate
    the generic HID feedback dispatcher, determine whether Feature `0x70`
    selects normal full-frame mode, and establish the minimum Heat-only
    feedback before testing any complete 63-byte path;
-5. use a low-overhead reset-only KDNET soak to capture one genuine
+6. use a low-overhead reset-only KDNET soak to capture one genuine
    panel-initiated reset.
 
 Do not put `0x65` in the shared recovery path. Do not infer logical content from

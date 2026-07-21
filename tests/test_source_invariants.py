@@ -32,6 +32,8 @@ PHASE82_DEPLOY = ROOT / "scripts" / "deploy_phase82_set70.sh"
 PHASE84_BOOT = ROOT / "boot" / "70_sp11_713_phase84_init_parity"
 PHASE84_DEPLOY = ROOT / "scripts" / "deploy_phase84_init_parity.sh"
 PHASE85_BOOT = ROOT / "boot" / "70_sp11_713_phase85_cfu_parity"
+PHASE86_BOOT = ROOT / "boot" / "71_sp11_713_phase86_windows_heat"
+PHASE86_DEPLOY = ROOT / "scripts" / "deploy_phase86_windows_heat.sh"
 
 
 def function_body(source: str, name: str) -> str:
@@ -80,6 +82,8 @@ class SourceInvariantTests(unittest.TestCase):
         cls.phase84_boot = PHASE84_BOOT.read_text(encoding="utf-8")
         cls.phase84_deploy = PHASE84_DEPLOY.read_text(encoding="utf-8")
         cls.phase85_boot = PHASE85_BOOT.read_text(encoding="utf-8")
+        cls.phase86_boot = PHASE86_BOOT.read_text(encoding="utf-8")
+        cls.phase86_deploy = PHASE86_DEPLOY.read_text(encoding="utf-8")
 
     def test_default_build_is_the_production_dma_set(self):
         self.assertIn("all: production", self.root_makefile)
@@ -333,6 +337,43 @@ class SourceInvariantTests(unittest.TestCase):
         self.assertNotIn("behavior_v2=1", self.phase85_boot)
         self.assertNotIn("windows_orchestrator=1", self.phase85_boot)
         self.assertNotIn("parity_cfu_inventory", self.phase84_boot)
+
+    def test_phase86_admits_heat_only_after_complete_parity_chronology(self):
+        required = (
+            "sp11-phase86-windows-heat",
+            "sp11_entry=7.1.3-phase86-windows-heat",
+            "spi_geni_qcom.sp11_windows_se_init=1",
+            "gpi.sp11_windows_ring_layout=1",
+            "mshw0485_touch.windows_init_parity=1",
+            "mshw0485_touch.parity_cfu_inventory=1",
+            "mshw0485_touch.parity_heat_input=1",
+            "mshw0485_touch.behavior_v2=1",
+            "mshw0485_touch.host_fault_recovery=1",
+            "mshw0485_touch.ready_quiesce=1",
+        )
+        for token in required:
+            self.assertIn(token, self.phase86_boot)
+        self.assertIn(
+            "grub-reboot sp11-phase86-windows-heat", self.phase86_deploy
+        )
+        self.assertNotIn("grub-set-default", self.phase86_deploy)
+
+        cfu = function_body(self.source, "g6ts_windows_cfu_inventory_locked")
+        self.assertLess(
+            cfu.index("G6TS_INIT_WINDOWS_FINAL_FEATURE73"),
+            cfu.index("if (!g6ts_parity_heat_input)"),
+        )
+        self.assertLess(
+            cfu.index("if (!g6ts_parity_heat_input)"),
+            cfu.index("ts->mode_enabled = true"),
+        )
+        self.assertIn("ts->awaiting_ready_heat = true", cfu)
+
+        probe = function_body(self.source, "g6ts_probe")
+        self.assertIn(
+            "(!g6ts_windows_init_parity || !g6ts_parity_cfu_inventory)",
+            probe,
+        )
 
     def test_windows_controller_init_is_guarded_and_exactly_ordered(self):
         body = function_body(
