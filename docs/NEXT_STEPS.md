@@ -44,8 +44,9 @@ experiment. Change one variable at a time:
    experiments;
 4. retain Phase 84 as the preserved initialization-only control; the
    completed hardware run stopped at the first RX transfer with exact Windows
-   GO flags, so Phase 87 now changes only the Linux `LINK` coupling at that
-   boundary before continuing through CFU into Heat;
+   GO flags; Phase 87 proved Linux `LINK` completes RX but still returned no
+   valid reset header, so Phase 88 now restores Linux GENI initialization
+   while retaining captured rings, `LINK`, and the Windows upper chronology;
 5. use the completed Windows producer trace and the decoded resource/logger
    evidence in
    [WINDOWS_REPORT09_FEEDBACK_RE.md](WINDOWS_REPORT09_FEEDBACK_RE.md) to locate

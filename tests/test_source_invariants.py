@@ -36,6 +36,8 @@ PHASE86_BOOT = ROOT / "boot" / "71_sp11_713_phase86_windows_heat"
 PHASE86_DEPLOY = ROOT / "scripts" / "deploy_phase86_windows_heat.sh"
 PHASE87_BOOT = ROOT / "boot" / "72_sp11_713_phase87_linux_link_heat"
 PHASE87_DEPLOY = ROOT / "scripts" / "deploy_phase87_linux_link_heat.sh"
+PHASE88_BOOT = ROOT / "boot" / "74_sp11_713_phase88_linux_se_heat"
+PHASE88_DEPLOY = ROOT / "scripts" / "deploy_phase88_linux_se_heat.sh"
 
 
 def function_body(source: str, name: str) -> str:
@@ -88,6 +90,8 @@ class SourceInvariantTests(unittest.TestCase):
         cls.phase86_deploy = PHASE86_DEPLOY.read_text(encoding="utf-8")
         cls.phase87_boot = PHASE87_BOOT.read_text(encoding="utf-8")
         cls.phase87_deploy = PHASE87_DEPLOY.read_text(encoding="utf-8")
+        cls.phase88_boot = PHASE88_BOOT.read_text(encoding="utf-8")
+        cls.phase88_deploy = PHASE88_DEPLOY.read_text(encoding="utf-8")
 
     def test_default_build_is_the_production_dma_set(self):
         self.assertIn("all: production", self.root_makefile)
@@ -400,6 +404,31 @@ class SourceInvariantTests(unittest.TestCase):
         )
         self.assertNotIn("grub-set-default", self.phase87_deploy)
 
+    def test_phase88_restores_only_linux_se_initialization(self):
+        shared = (
+            "gpi.sp11_windows_ring_layout=1",
+            "gpi.sp11_qspi_linux_link=1",
+            "mshw0485_touch.windows_init_parity=1",
+            "mshw0485_touch.parity_cfu_inventory=1",
+            "mshw0485_touch.parity_heat_input=1",
+            "mshw0485_touch.behavior_v2=1",
+            "mshw0485_touch.host_fault_recovery=1",
+            "mshw0485_touch.ready_quiesce=1",
+        )
+        for token in shared:
+            self.assertIn(token, self.phase87_boot)
+            self.assertIn(token, self.phase88_boot)
+        self.assertIn("spi_geni_qcom.sp11_windows_se_init=1", self.phase87_boot)
+        self.assertNotIn(
+            "spi_geni_qcom.sp11_windows_se_init=1", self.phase88_boot
+        )
+        self.assertIn("sp11-phase88-linux-se-heat", self.phase88_boot)
+        self.assertIn(
+            "grub-reboot sp11-phase88-linux-se-heat",
+            self.phase88_deploy,
+        )
+        self.assertNotIn("grub-set-default", self.phase88_deploy)
+
     def test_windows_controller_init_is_guarded_and_exactly_ordered(self):
         body = function_body(
             self.controller_source,
@@ -526,6 +555,10 @@ class SourceInvariantTests(unittest.TestCase):
     def test_phase76_exposes_read_only_behavior_counters(self):
         show = function_body(self.source, "behavior_stats_show")
         for token in (
+            "last_header=%4ph",
+            "last_class=%u",
+            "last_content_id=%u",
+            "last_content_len=%u",
             "heat_frames",
             "components",
             "accepted_contacts",

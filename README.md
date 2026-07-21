@@ -49,6 +49,14 @@ same CFU/Heat path. See
 [docs/PHASE84_HARDWARE_RESULT.md](docs/PHASE84_HARDWARE_RESULT.md) and
 [docs/PHASE87_LINUX_LINK_HEAT.md](docs/PHASE87_LINUX_LINK_HEAT.md).
 
+Phase 87 proved that `LINK` removes the DMA timeout, but the first completed
+read still contained no valid reset header after the ready line deasserted.
+Phase 88 keeps the Windows upper chronology and captured ring sizes while
+restoring Linux's hardware-proven GENI initialization. It also exports the
+last four header bytes for an exact next result. See
+[docs/PHASE87_HARDWARE_RESULT.md](docs/PHASE87_HARDWARE_RESULT.md) and
+[docs/PHASE88_LINUX_SE_WINDOWS_HEAT.md](docs/PHASE88_LINUX_SE_WINDOWS_HEAT.md).
+
 ## Historical FIFO baseline: Phase 52
 
 - Power and reset sequencing works.

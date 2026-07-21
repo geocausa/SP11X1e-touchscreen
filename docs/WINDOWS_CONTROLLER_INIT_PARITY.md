@@ -83,6 +83,12 @@ traffic. Phase 87 keeps the captured ring geometry but opts into
 explicitly Linux-adapted, not called Windows-identical. See
 [PHASE84_HARDWARE_RESULT.md](PHASE84_HARDWARE_RESULT.md).
 
+The Phase 87 hardware run confirmed that `LINK` removed the DMA timeout, but
+the completed read was quiesced as an invalid header after GPIO51 deasserted.
+Phase 88 therefore changes the serial-engine initialization back to Linux's
+proven path while preserving the captured ring geometry and `LINK`. See
+[PHASE87_HARDWARE_RESULT.md](PHASE87_HARDWARE_RESULT.md).
+
 The default production path is byte-for-byte unchanged unless this option is
 explicitly selected.
 

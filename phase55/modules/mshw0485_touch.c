@@ -628,6 +628,10 @@ static ssize_t behavior_stats_show(struct device *dev,
 			    "parity_feature06_prefix=%*ph\n"
 			    "parity_cfu_version_prefix=%*ph\n"
 			    "parity_cfu_offer_response=%*ph\n"
+			    "last_header=%4ph\n"
+			    "last_class=%u\n"
+			    "last_content_id=%u\n"
+			    "last_content_len=%u\n"
 			    "mode_enabled=%u\n"
 			    "awaiting_ready_heat=%u\n"
 			    "heat_frames=%llu\n"
@@ -676,6 +680,8 @@ static ssize_t behavior_stats_show(struct device *dev,
 			    ts->parity_cfu_version_prefix,
 			    (int)sizeof(ts->parity_cfu_offer_response),
 			    ts->parity_cfu_offer_response,
+			    ts->last_header, ts->last_class,
+			    ts->last_content_id, ts->last_content_len,
 			    ts->mode_enabled, ts->awaiting_ready_heat,
 			    ts->heat_frames, ts->heat_errors,
 			    ts->component_total, ts->contact_total,
