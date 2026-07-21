@@ -24,6 +24,10 @@ was caused by reading beyond `content_len` in a fixed-size debugger dump.
   analysis identifies display state, hinge angle, persistent FastHostId,
   feedback-manager sequence/validity state, provider data, and retained-buffer
   bytes. A single static 63-byte replay is therefore not valid Windows parity.
+- An independent 33.336-second Windows SPB trace contains 1,381 raw Heat
+  bodies but only one adjacent attach-time A1/A5 pair. Report `0x09` is not a
+  per-frame live-contact channel; see
+  [WINDOWS_SPB_DEEP_TRACE_AUDIT.md](WINDOWS_SPB_DEEP_TRACE_AUDIT.md).
 - The firmware resource CLI proves `PRE_OS` and `Normal (Full Frame)` modes and
   the panel configuration independently confirms the 68-by-46 Heat geometry.
   It does not yet connect HID Feature `0x70` to that report-mode selector.

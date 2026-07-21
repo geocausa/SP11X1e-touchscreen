@@ -119,5 +119,11 @@ CLI proves that firmware distinguishes PRE_OS from normal full-frame mode, but
 does not prove that HID Feature `0x70` selects it. The ARC subtype consumer and
 natural panel-reset trigger remain unresolved.
 
+The older complete Windows SPB payload trace provides an independent cadence
+check: 1,381 raw Heat bodies coexist with exactly one attach-time A1/A5 pair,
+not per-frame report-`0x09` traffic. It also records a different valid
+multi-owner restart interleaving. See
+[WINDOWS_SPB_DEEP_TRACE_AUDIT.md](WINDOWS_SPB_DEEP_TRACE_AUDIT.md).
+
 `main` represents the best validated project baseline, not a claim of generic
 hardware support, Windows parity, or upstream acceptance.
