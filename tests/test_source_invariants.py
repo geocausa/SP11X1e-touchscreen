@@ -40,6 +40,8 @@ PHASE88_BOOT = ROOT / "boot" / "74_sp11_713_phase88_linux_se_heat"
 PHASE88_DEPLOY = ROOT / "scripts" / "deploy_phase88_linux_se_heat.sh"
 PHASE89_BOOT = ROOT / "boot" / "75_sp11_713_phase89_linux_transport_heat"
 PHASE89_DEPLOY = ROOT / "scripts" / "deploy_phase89_linux_transport_heat.sh"
+PHASE90_BOOT = ROOT / "boot" / "76_sp11_713_phase90_phase75_power_heat"
+PHASE90_DEPLOY = ROOT / "scripts" / "deploy_phase90_phase75_power_heat.sh"
 
 
 def function_body(source: str, name: str) -> str:
@@ -96,6 +98,8 @@ class SourceInvariantTests(unittest.TestCase):
         cls.phase88_deploy = PHASE88_DEPLOY.read_text(encoding="utf-8")
         cls.phase89_boot = PHASE89_BOOT.read_text(encoding="utf-8")
         cls.phase89_deploy = PHASE89_DEPLOY.read_text(encoding="utf-8")
+        cls.phase90_boot = PHASE90_BOOT.read_text(encoding="utf-8")
+        cls.phase90_deploy = PHASE90_DEPLOY.read_text(encoding="utf-8")
 
     def test_default_build_is_the_production_dma_set(self):
         self.assertIn("all: production", self.root_makefile)
@@ -457,6 +461,47 @@ class SourceInvariantTests(unittest.TestCase):
             self.phase89_deploy,
         )
         self.assertNotIn("grub-set-default", self.phase89_deploy)
+
+    def test_phase90_changes_only_power_selection_from_phase89(self):
+        shared = (
+            "mshw0485_touch.windows_init_parity=1",
+            "mshw0485_touch.parity_cfu_inventory=1",
+            "mshw0485_touch.parity_heat_input=1",
+            "mshw0485_touch.behavior_v2=1",
+            "mshw0485_touch.host_fault_recovery=1",
+            "mshw0485_touch.ready_quiesce=1",
+        )
+        for token in shared:
+            self.assertIn(token, self.phase89_boot)
+            self.assertIn(token, self.phase90_boot)
+        self.assertNotIn("parity_linux_power=1", self.phase89_boot)
+        self.assertIn("mshw0485_touch.parity_linux_power=1", self.phase90_boot)
+        for token in (
+            "spi_geni_qcom.sp11_windows_se_init=1",
+            "gpi.sp11_windows_ring_layout=1",
+            "gpi.sp11_qspi_linux_link=1",
+        ):
+            self.assertNotIn(token, self.phase90_boot)
+        self.assertIn("sp11-phase90-phase75-power-heat", self.phase90_boot)
+        self.assertIn(
+            "grub-reboot sp11-phase90-phase75-power-heat",
+            self.phase90_deploy,
+        )
+        self.assertNotIn("grub-set-default", self.phase90_deploy)
+
+    def test_phase90_power_override_is_read_only_and_scoped(self):
+        self.assertIn(
+            "module_param_named(parity_linux_power, "
+            "g6ts_parity_linux_power, bool, 0444)",
+            self.source,
+        )
+        reinit = function_body(self.source, "g6ts_full_reinitialize_locked")
+        self.assertIn(
+            "g6ts_windows_init_parity && !g6ts_parity_linux_power",
+            reinit,
+        )
+        show = function_body(self.source, "behavior_stats_show")
+        self.assertIn("parity_linux_power=%u", show)
 
     def test_windows_controller_init_is_guarded_and_exactly_ordered(self):
         body = function_body(

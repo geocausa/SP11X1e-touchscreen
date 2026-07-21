@@ -254,6 +254,16 @@ MODULE_PARM_DESC(windows_init_parity,
 		 "Run evidence-gated Windows cold initialization (default: false)");
 
 /*
+ * Isolate the ACPI-derived Windows _PS0 + _RST ordering from the remainder of
+ * the parity chronology. Phase 90 selects the hardware-proven Phase 75 power
+ * sequence while leaving every later Windows-parity operation unchanged.
+ */
+static bool g6ts_parity_linux_power;
+module_param_named(parity_linux_power, g6ts_parity_linux_power, bool, 0444);
+MODULE_PARM_DESC(parity_linux_power,
+		 "Use the Phase 75 power/reset sequence in Windows parity mode");
+
+/*
  * Provider inputs are deliberately invalid by default.  The Windows producer
  * obtains these from display/posture state and persistent storage; an isolated
  * parity boot may supply captured values for this exact machine, but the driver
@@ -617,6 +627,7 @@ static ssize_t behavior_stats_show(struct device *dev,
 		div64_u64(ts->processing_ns_total, ts->heat_frames) : 0;
 	length = sysfs_emit(buf,
 			    "profile=%s\n"
+			    "parity_linux_power=%u\n"
 			    "initialization_stage=%s\n"
 			    "parity_feedback_required=%u\n"
 			    "parity_config_owner_required=%u\n"
@@ -664,6 +675,7 @@ static ssize_t behavior_stats_show(struct device *dev,
 			    "ready_heat_frames=%llu\n"
 			    "ready_verification_failures=%llu\n",
 			    g6ts_profile_name(),
+			    g6ts_parity_linux_power,
 			    g6ts_initialization_stage_name(ts->initialization_stage),
 			    ts->parity_feedback_required,
 			    ts->parity_config_owner_required,
@@ -2922,7 +2934,7 @@ static int g6ts_full_reinitialize_locked(struct g6ts *ts,
 		if (ret)
 			return ret;
 		msleep(100);
-		ret = g6ts_windows_init_parity ?
+		ret = g6ts_windows_init_parity && !g6ts_parity_linux_power ?
 			g6ts_windows_power_on(ts) : g6ts_power_on(ts);
 		if (ret)
 			return ret;

@@ -47,7 +47,8 @@ experiment. Change one variable at a time:
    GO flags; Phase 87 proved Linux `LINK` completes RX but still returned no
    valid reset header; Phase 88 restored Linux GENI initialization but returned
    `ff ff ff ff`, so Phase 89 restores Linux's normal GPI ring geometry while
-   retaining the Windows upper chronology;
+   retaining the Windows upper chronology; Phase 89 returned the same header,
+   so Phase 90 isolates Phase 75 versus Windows power/reset ordering;
 5. use the completed Windows producer trace and the decoded resource/logger
    evidence in
    [WINDOWS_REPORT09_FEEDBACK_RE.md](WINDOWS_REPORT09_FEEDBACK_RE.md) to locate
