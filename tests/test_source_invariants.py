@@ -10,6 +10,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 CLIENT = ROOT / "phase55" / "modules" / "mshw0485_touch.c"
 CONTROLLER = ROOT / "phase55" / "modules" / "spi-geni-qcom.c"
+GPI = ROOT / "phase55" / "modules" / "gpi.c"
 LEGACY_CLIENT = ROOT / "src" / "g6ts_biosref.c"
 DMA_KBUILD = ROOT / "phase55" / "modules" / "Kbuild"
 LIFECYCLE_PROFILE = ROOT / "phase55" / "modules" / "g6ts_lifecycle_profile.h"
@@ -57,6 +58,7 @@ class SourceInvariantTests(unittest.TestCase):
     def setUpClass(cls):
         cls.source = CLIENT.read_text(encoding="utf-8")
         cls.controller_source = CONTROLLER.read_text(encoding="utf-8")
+        cls.gpi_source = GPI.read_text(encoding="utf-8")
         cls.legacy_source = LEGACY_CLIENT.read_text(encoding="utf-8")
         cls.dma_kbuild = DMA_KBUILD.read_text(encoding="utf-8")
         cls.lifecycle_profile = LIFECYCLE_PROFILE.read_text(encoding="utf-8")
@@ -297,6 +299,7 @@ class SourceInvariantTests(unittest.TestCase):
             "sp11-phase84-init-parity",
             "sp11_entry=7.1.3-phase84-init-parity",
             "spi_geni_qcom.sp11_windows_se_init=1",
+            "gpi.sp11_windows_ring_layout=1",
             "mshw0485_touch.windows_init_parity=1",
             "mshw0485_touch.parity_display_bitmap=1",
             "mshw0485_touch.parity_stitching_flag=0",
@@ -318,6 +321,7 @@ class SourceInvariantTests(unittest.TestCase):
             "sp11-phase85-cfu-parity",
             "sp11_entry=7.1.3-phase85-cfu-parity",
             "spi_geni_qcom.sp11_windows_se_init=1",
+            "gpi.sp11_windows_ring_layout=1",
             "mshw0485_touch.windows_init_parity=1",
             "mshw0485_touch.parity_cfu_inventory=1",
             "mshw0485_touch.parity_cfu_offer="
@@ -363,6 +367,24 @@ class SourceInvariantTests(unittest.TestCase):
             init,
         )
         self.assertIn("spi_geni_sp11_qspi_prepare_windows_hw(mas)", init)
+
+    def test_windows_gpi_ring_geometry_is_exact_and_opt_in(self):
+        self.assertIn("#define SP11_WINDOWS_CHAN_TRES\t16", self.gpi_source)
+        self.assertIn("#define SP11_WINDOWS_EVENT_TRES\t32", self.gpi_source)
+        self.assertIn(
+            "module_param(sp11_windows_ring_layout, bool, 0444)",
+            self.gpi_source,
+        )
+        alloc = function_body(self.gpi_source, "gpi_alloc_chan_resources")
+        self.assertIn("gchan->protocol == QCOM_GPI_QSPI", alloc)
+        self.assertIn("elements = SP11_WINDOWS_CHAN_TRES", alloc)
+        init = function_body(self.gpi_source, "gpi_ch_init")
+        self.assertIn("elements = SP11_WINDOWS_EVENT_TRES", init)
+        tre = function_body(self.gpi_source, "gpi_create_spi_tre")
+        self.assertIn(
+            "if (spi->rx_len && !sp11_windows_ring_layout)",
+            tre,
+        )
 
     def test_assignment_initializes_every_output_slot(self):
         body = function_body(self.source, "g6ts_assign_tracks")

@@ -109,6 +109,10 @@ if ! modinfo -p "$built_controller" | grep -q '^sp11_windows_se_init:'; then
 	echo "controller module does not expose sp11_windows_se_init" >&2
 	exit 1
 fi
+if ! modinfo -p "$built_gpi" | grep -q '^sp11_windows_ring_layout:'; then
+	echo "GPI module does not expose sp11_windows_ring_layout" >&2
+	exit 1
+fi
 
 cp -a "$legacy_client" "$backup_legacy"
 cp -a "$installed_controller" "$backup_controller"
@@ -205,6 +209,7 @@ grub-script-check /boot/grub/grub.cfg
 if ! grep -q -- "--id 'sp11-phase84-init-parity'" /boot/grub/grub.cfg ||
 	! grep -q "sp11_entry=7.1.3-phase84-init-parity" /boot/grub/grub.cfg ||
 	! grep -q "spi_geni_qcom.sp11_windows_se_init=1" /boot/grub/grub.cfg ||
+	! grep -q "gpi.sp11_windows_ring_layout=1" /boot/grub/grub.cfg ||
 	! grep -q "mshw0485_touch.windows_init_parity=1" /boot/grub/grub.cfg ||
 	! grep -q "mshw0485_touch.parity_display_bitmap=1" /boot/grub/grub.cfg ||
 	! grep -q "mshw0485_touch.parity_hinge_angle=400" /boot/grub/grub.cfg ||

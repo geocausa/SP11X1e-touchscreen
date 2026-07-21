@@ -53,6 +53,7 @@ The read-only module option is:
 
 ```text
 spi_geni_qcom.sp11_windows_se_init=1
+gpi.sp11_windows_ring_layout=1
 ```
 
 It is present only in the input-disabled Phase 84 and Phase 85 entries. For
@@ -65,6 +66,19 @@ the SP11 protocol-9 controller it:
   clear and rewrite the just-established state;
 - arms the live mask at transfer submission rather than adding a separate
   probe-time mode transition.
+
+The GPI option also selects the captured qcgpi geometry: 16 transfer-ring
+elements (`0x100` bytes) per TX/RX channel and 32 event-ring elements (`0x200`
+bytes). The existing QSPI scratch words, RX-before-TX submission, descriptor
+barrier, and high-doorbell-before-low-doorbell ordering already match the
+static and live Windows evidence.
+
+The exact option also emits Windows' bidirectional GO flags `0x00200101`.
+Production Linux adds `LINK` (`0x00200901`) because earlier Linux channel
+contexts did not advance the pre-doorbelled RX ring without it. Phase 84
+deliberately removes that workaround. Failure at this gate is useful evidence
+that channel coupling remains a Linux integration mismatch; it must not be
+hidden by calling the resulting descriptor Windows-identical.
 
 The default production path is byte-for-byte unchanged unless this option is
 explicitly selected.
