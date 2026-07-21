@@ -25,3 +25,33 @@ read-only analyzer reproduces the distribution from the private CSV.
 This is a transport-scheduling adaptation, not a new panel command. Phase 75
 remains the saved default, and Phase 90 remains preserved as the failing
 control.
+
+## First hardware boot
+
+The first Phase 91 boot on 2026-07-22 completed the full initialization
+chronology untouched, then survived rapid two-hand on-screen typing and
+multi-touch use. The final pre-reboot snapshot recorded:
+
+```text
+heat_frames=8638
+heat_errors=0
+panel_resets=0
+host_fault_recoveries=0
+irq_transport_errors=0
+irq_protocol_errors=0
+irq_drain_overflows=0
+cadence_single_response_irqs=8652
+ready_verification_failures=0
+```
+
+Phase 90 had desynchronized after 1,984 Heat frames and then produced six
+panel resets. Phase 91 therefore exceeded the Phase 90 failure point by more
+than four times without a fault. This is strong evidence for the read-cadence
+cause, but an immediate-login cold-boot stress test is retained as a second
+independent attempt to reproduce the former early storm.
+
+SHA-256 of the filtered controller/client log at the final snapshot:
+
+```text
+cafdc38b885d72818678d58a1b2dffb7613f366726e543d1924ad9f812f28cd8
+```
