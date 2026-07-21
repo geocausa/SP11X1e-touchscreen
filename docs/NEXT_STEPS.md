@@ -43,9 +43,9 @@ experiment. Change one variable at a time:
 3. retain Phase 80/81 host-fault safeguards independently from feature/report
    experiments;
 4. retain Phase 84 as the preserved initialization-only control; the
-   operator-authorized Phase 86 trial may run first because it avoids leaving
-   the activated Heat collection without a consumer, while its recorded
-   terminal stage still localizes an early failure;
+   completed hardware run stopped at the first RX transfer with exact Windows
+   GO flags, so Phase 87 now changes only the Linux `LINK` coupling at that
+   boundary before continuing through CFU into Heat;
 5. use the completed Windows producer trace and the decoded resource/logger
    evidence in
    [WINDOWS_REPORT09_FEEDBACK_RE.md](WINDOWS_REPORT09_FEEDBACK_RE.md) to locate

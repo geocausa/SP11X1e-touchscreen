@@ -53,7 +53,11 @@ natural panel-reset branch has not yet been exercised by a captured reset; see
   [PHASE86_WINDOWS_HEAT.md](PHASE86_WINDOWS_HEAT.md).
   `spi_geni_qcom.sp11_windows_se_init=1` additionally removes the generic
   Linux GENI init/mode writes and applies the cold-captured, guarded Windows
-  13-write controller sequence. It is confined to Phase 84/85/86; see
+  13-write controller sequence. Phase 84 reached the first bidirectional read
+  but timed out because the exact Windows GO omitted Linux's required `LINK`
+  coupling. Phase 87 isolates that one adaptation while retaining the Windows
+  ring geometry. See [PHASE84_HARDWARE_RESULT.md](PHASE84_HARDWARE_RESULT.md),
+  [PHASE87_LINUX_LINK_HEAT.md](PHASE87_LINUX_LINK_HEAT.md), and
   [WINDOWS_CONTROLLER_INIT_PARITY.md](WINDOWS_CONTROLLER_INIT_PARITY.md).
 - `mshw0485_touch.windows_orchestrator=1` enables recovered Windows lifecycle
   behavior whose provider-owned context fields are not fully proven. It is

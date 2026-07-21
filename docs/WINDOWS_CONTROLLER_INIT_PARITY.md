@@ -56,7 +56,7 @@ spi_geni_qcom.sp11_windows_se_init=1
 gpi.sp11_windows_ring_layout=1
 ```
 
-It is present only in the isolated Phase 84, Phase 85, and Phase 86 entries. For
+It is present only in the isolated Phase 84 through Phase 87 entries. For
 the SP11 protocol-9 controller it:
 
 - skips generic `geni_se_init()`, whose broad clears, FIFO watermarks, and
@@ -76,9 +76,12 @@ static and live Windows evidence.
 The exact option also emits Windows' bidirectional GO flags `0x00200101`.
 Production Linux adds `LINK` (`0x00200901`) because earlier Linux channel
 contexts did not advance the pre-doorbelled RX ring without it. Phase 84
-deliberately removes that workaround. Failure at this gate is useful evidence
-that channel coupling remains a Linux integration mismatch; it must not be
-hidden by calling the resulting descriptor Windows-identical.
+deliberately removed that workaround and its first hardware boot timed out on
+the initial RX transfer at `reset-response`, before any descriptor or feature
+traffic. Phase 87 keeps the captured ring geometry but opts into
+`gpi.sp11_qspi_linux_link=1` for the direct comparison. That descriptor is
+explicitly Linux-adapted, not called Windows-identical. See
+[PHASE84_HARDWARE_RESULT.md](PHASE84_HARDWARE_RESULT.md).
 
 The default production path is byte-for-byte unchanged unless this option is
 explicitly selected.

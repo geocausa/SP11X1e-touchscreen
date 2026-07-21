@@ -34,6 +34,8 @@ PHASE84_DEPLOY = ROOT / "scripts" / "deploy_phase84_init_parity.sh"
 PHASE85_BOOT = ROOT / "boot" / "70_sp11_713_phase85_cfu_parity"
 PHASE86_BOOT = ROOT / "boot" / "71_sp11_713_phase86_windows_heat"
 PHASE86_DEPLOY = ROOT / "scripts" / "deploy_phase86_windows_heat.sh"
+PHASE87_BOOT = ROOT / "boot" / "72_sp11_713_phase87_linux_link_heat"
+PHASE87_DEPLOY = ROOT / "scripts" / "deploy_phase87_linux_link_heat.sh"
 
 
 def function_body(source: str, name: str) -> str:
@@ -84,6 +86,8 @@ class SourceInvariantTests(unittest.TestCase):
         cls.phase85_boot = PHASE85_BOOT.read_text(encoding="utf-8")
         cls.phase86_boot = PHASE86_BOOT.read_text(encoding="utf-8")
         cls.phase86_deploy = PHASE86_DEPLOY.read_text(encoding="utf-8")
+        cls.phase87_boot = PHASE87_BOOT.read_text(encoding="utf-8")
+        cls.phase87_deploy = PHASE87_DEPLOY.read_text(encoding="utf-8")
 
     def test_default_build_is_the_production_dma_set(self):
         self.assertIn("all: production", self.root_makefile)
@@ -375,6 +379,27 @@ class SourceInvariantTests(unittest.TestCase):
             probe,
         )
 
+    def test_phase87_is_phase86_plus_linux_qspi_link(self):
+        for token in (
+            "sp11-phase87-linux-link-heat",
+            "sp11_entry=7.1.3-phase87-linux-link-heat",
+            "spi_geni_qcom.sp11_windows_se_init=1",
+            "gpi.sp11_windows_ring_layout=1",
+            "gpi.sp11_qspi_linux_link=1",
+            "mshw0485_touch.windows_init_parity=1",
+            "mshw0485_touch.parity_cfu_inventory=1",
+            "mshw0485_touch.parity_heat_input=1",
+            "mshw0485_touch.behavior_v2=1",
+        ):
+            self.assertIn(token, self.phase87_boot)
+        self.assertNotIn("sp11_qspi_linux_link=1", self.phase84_boot)
+        self.assertNotIn("sp11_qspi_linux_link=1", self.phase86_boot)
+        self.assertIn(
+            "grub-reboot sp11-phase87-linux-link-heat",
+            self.phase87_deploy,
+        )
+        self.assertNotIn("grub-set-default", self.phase87_deploy)
+
     def test_windows_controller_init_is_guarded_and_exactly_ordered(self):
         body = function_body(
             self.controller_source,
@@ -423,7 +448,11 @@ class SourceInvariantTests(unittest.TestCase):
         self.assertIn("elements = SP11_WINDOWS_EVENT_TRES", init)
         tre = function_body(self.gpi_source, "gpi_create_spi_tre")
         self.assertIn(
-            "if (spi->rx_len && !sp11_windows_ring_layout)",
+            "module_param(sp11_qspi_linux_link, bool, 0444)",
+            self.gpi_source,
+        )
+        self.assertIn(
+            "(!sp11_windows_ring_layout || sp11_qspi_linux_link)",
             tre,
         )
 

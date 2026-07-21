@@ -41,6 +41,14 @@ opens input only after every preceding response validates; no additional mode
 command and no firmware payload are sent. See
 [docs/PHASE86_WINDOWS_HEAT.md](docs/PHASE86_WINDOWS_HEAT.md).
 
+The first Phase 84 hardware boot stopped at the initial reset-response RX
+transfer: exact Windows GO flags did not advance Linux's pre-doorbelled RX
+ring. Phase 87 retains the recovered Windows initialization and ring sizes but
+adds the explicitly labelled Linux `LINK` coupling before continuing into the
+same CFU/Heat path. See
+[docs/PHASE84_HARDWARE_RESULT.md](docs/PHASE84_HARDWARE_RESULT.md) and
+[docs/PHASE87_LINUX_LINK_HEAT.md](docs/PHASE87_LINUX_LINK_HEAT.md).
+
 ## Historical FIFO baseline: Phase 52
 
 - Power and reset sequencing works.
