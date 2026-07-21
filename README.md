@@ -21,6 +21,15 @@ one-shot GRUB test until live keyboard, edge, crossing-finger, and reset
 validation is complete. See
 [docs/PHASE76_BEHAVIOR.md](docs/PHASE76_BEHAVIOR.md).
 
+An isolated `windows_init_parity` path now rebuilds cold bring-up independently
+of Heat/contact processing. It validates the exact SP11 HID-SPI descriptor
+identity, reconstructs Windows' initial A1/A5 feedback from explicit provider
+state, and reproduces the device-config `0x05/0x70/0x56` exchanges. Touch input
+remains deliberately disabled and the path stops before the independently
+owned CFU `0x60/0x65` traffic. See
+[docs/WINDOWS_INIT_PARITY.md](docs/WINDOWS_INIT_PARITY.md) and
+[docs/WINDOWS_CFU_BOUNDARY.md](docs/WINDOWS_CFU_BOUNDARY.md).
+
 ## Historical FIFO baseline: Phase 52
 
 - Power and reset sequencing works.

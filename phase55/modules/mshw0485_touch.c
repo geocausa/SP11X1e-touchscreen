@@ -90,6 +90,44 @@
 #define G6TS_ASSIGN_UNMATCHED_COST	1000000
 #define G6TS_ASSIGN_INVALID_COST	3000000
 
+/* Exact SP11 descriptor values observed in every complete Windows capture. */
+#define G6TS_SP11_REPORT_DESCRIPTOR_LEN	1484U
+#define G6TS_SP11_MAX_INPUT_LEN		8192U
+#define G6TS_SP11_MAX_OUTPUT_LEN		512U
+#define G6TS_SP11_MAX_FRAGMENT_LEN	8192U
+#define G6TS_SP11_VENDOR_ID		0x045eU
+#define G6TS_SP11_PRODUCT_ID		0x0c83U
+#define G6TS_SP11_VERSION_ID		0x0004U
+#define G6TS_SP11_DESCRIPTOR_FLAGS	0x0001U
+#define G6TS_WINDOWS_FEEDBACK_LEN	63U
+#define G6TS_WINDOWS_REPORT56_ID_LEN	6U
+#define G6TS_WINDOWS_CONFIG_DELAY_MS	470U
+
+enum g6ts_initialization_stage {
+	G6TS_INIT_IDLE,
+	G6TS_INIT_WINDOWS_POWER_PS0,
+	G6TS_INIT_WINDOWS_RESET_METHOD,
+	G6TS_INIT_RESET_RESPONSE,
+	G6TS_INIT_DEVICE_DESCRIPTOR,
+	G6TS_INIT_REPORT_DESCRIPTOR,
+	G6TS_INIT_WINDOWS_EARLY_FEATURE73,
+	G6TS_INIT_WINDOWS_HEAT_CAPS06,
+	G6TS_INIT_WINDOWS_FEEDBACK_REQUIRED,
+	G6TS_INIT_WINDOWS_FEEDBACK_A1,
+	G6TS_INIT_WINDOWS_FEEDBACK_A5,
+	G6TS_INIT_WINDOWS_SET_FEATURE05,
+	G6TS_INIT_WINDOWS_CONFIG_OWNER_REQUIRED,
+	G6TS_INIT_WINDOWS_GET_FEATURE70,
+	G6TS_INIT_WINDOWS_SET_FEATURE70,
+	G6TS_INIT_WINDOWS_SET_FEATURE56,
+	G6TS_INIT_WINDOWS_CFU_OWNER_REQUIRED,
+	G6TS_INIT_SET_FEATURE05,
+	G6TS_INIT_GET_FEATURE70,
+	G6TS_INIT_SET_FEATURE70,
+	G6TS_INIT_SET_FEATURE56,
+	G6TS_INIT_WAIT_HEAT,
+};
+
 /*
  * Phase 70 keeps the hardware-validated Phase 68 policy as the default.  The
  * recovered Windows profile is opt-in until its provider-owned frame flags
@@ -187,6 +225,64 @@ static bool g6ts_ready_quiesce;
 module_param_named(ready_quiesce, g6ts_ready_quiesce, bool, 0444);
 MODULE_PARM_DESC(ready_quiesce,
 		 "Ignore one invalid trailing header after GPIO51 deasserts (default: false)");
+
+/*
+ * Evidence-only cold-attach path.  It follows the byte-exact Windows cold
+ * sequence through each operation whose owner and contents are known. Dynamic
+ * A1/A5 feedback and report-0x56 identity inputs are unavailable by default;
+ * when explicitly supplied, the path advances through the device-config
+ * owner and stops before independent CFU traffic. Heat is never enabled.
+ */
+static bool g6ts_windows_init_parity;
+module_param_named(windows_init_parity, g6ts_windows_init_parity, bool, 0444);
+MODULE_PARM_DESC(windows_init_parity,
+		 "Run evidence-gated Windows cold init with Heat/input disabled (default: false)");
+
+/*
+ * Provider inputs are deliberately invalid by default.  The Windows producer
+ * obtains these from display/posture state and persistent storage; an isolated
+ * parity boot may supply captured values for this exact machine, but the driver
+ * must never silently manufacture them.
+ */
+static int g6ts_parity_display_bitmap = -1;
+module_param_named(parity_display_bitmap, g6ts_parity_display_bitmap, int, 0444);
+MODULE_PARM_DESC(parity_display_bitmap,
+		 "Windows A1 display bitmap; required by windows_init_parity (-1: unavailable)");
+
+static int g6ts_parity_stitching_flag = -1;
+module_param_named(parity_stitching_flag, g6ts_parity_stitching_flag, int, 0444);
+MODULE_PARM_DESC(parity_stitching_flag,
+		 "Windows A1 stitching flag; required by windows_init_parity (-1: unavailable)");
+
+static int g6ts_parity_hinge_angle = -1;
+module_param_named(parity_hinge_angle, g6ts_parity_hinge_angle, int, 0444);
+MODULE_PARM_DESC(parity_hinge_angle,
+		 "Windows A1 hinge-angle value; required by windows_init_parity (-1: unavailable)");
+
+static int g6ts_parity_fast_host_id = -1;
+module_param_named(parity_fast_host_id, g6ts_parity_fast_host_id, int, 0444);
+MODULE_PARM_DESC(parity_fast_host_id,
+		 "Windows persistent FastHostId; required by windows_init_parity (-1: unavailable)");
+
+/*
+ * Report 0x56 carries six bytes of device identity (Usage 0x03) and one
+ * boolean (Usage 0x09).  The six bytes are repeated in GET_FEATURE 0x60 at
+ * offsets 20,24,28,32,36,40, but Windows sends 0x56 before its CFU owner
+ * requests 0x60.  Require the owning platform value rather than changing the
+ * observed ordering or silently borrowing one machine's identity.
+ */
+static u8 g6ts_parity_report56_identity[G6TS_WINDOWS_REPORT56_ID_LEN];
+static unsigned int g6ts_parity_report56_identity_count;
+module_param_array_named(parity_report56_identity,
+			 g6ts_parity_report56_identity, byte,
+			 &g6ts_parity_report56_identity_count, 0444);
+MODULE_PARM_DESC(parity_report56_identity,
+		 "Six Windows report-0x56 Usage-0x03 identity bytes");
+
+static int g6ts_parity_report56_flag = -1;
+module_param_named(parity_report56_flag, g6ts_parity_report56_flag, int, 0444);
+MODULE_PARM_DESC(parity_report56_flag,
+		 "Windows report-0x56 Usage-0x09 boolean (-1: unavailable)");
 
 enum g6ts_recovery_path {
 	G6TS_RECOVERY_HARDWARE,
@@ -343,7 +439,7 @@ struct g6ts {
 	u64 processing_ns_max;
 	unsigned long last_reset_jiffies;
 	u8 nsr_bin_count;
-	u8 initialization_stage;
+	enum g6ts_initialization_stage initialization_stage;
 	u8 recovery_fail_streak;
 	u8 rapid_reset_streak;
 	int last_host_fault;
@@ -353,10 +449,70 @@ struct g6ts {
 	bool mode_enabled;
 	bool fatal_transport_error;
 	bool stopping;
+	bool parity_feedback_required;
+	bool parity_config_owner_required;
+	bool parity_cfu_owner_required;
+	u8 parity_feature73_early[2];
+	u8 parity_feature06_prefix[16];
 };
+
+static const char *
+g6ts_initialization_stage_name(enum g6ts_initialization_stage stage)
+{
+	switch (stage) {
+	case G6TS_INIT_IDLE:
+		return "idle";
+	case G6TS_INIT_WINDOWS_POWER_PS0:
+		return "windows-power-ps0";
+	case G6TS_INIT_WINDOWS_RESET_METHOD:
+		return "windows-reset-method";
+	case G6TS_INIT_RESET_RESPONSE:
+		return "reset-response";
+	case G6TS_INIT_DEVICE_DESCRIPTOR:
+		return "device-descriptor";
+	case G6TS_INIT_REPORT_DESCRIPTOR:
+		return "report-descriptor";
+	case G6TS_INIT_WINDOWS_EARLY_FEATURE73:
+		return "windows-early-feature73";
+	case G6TS_INIT_WINDOWS_HEAT_CAPS06:
+		return "windows-heat-caps06";
+	case G6TS_INIT_WINDOWS_FEEDBACK_REQUIRED:
+		return "windows-feedback-required";
+	case G6TS_INIT_WINDOWS_FEEDBACK_A1:
+		return "windows-feedback-a1";
+	case G6TS_INIT_WINDOWS_FEEDBACK_A5:
+		return "windows-feedback-a5";
+	case G6TS_INIT_WINDOWS_SET_FEATURE05:
+		return "windows-set-feature05";
+	case G6TS_INIT_WINDOWS_CONFIG_OWNER_REQUIRED:
+		return "windows-config-owner-required";
+	case G6TS_INIT_WINDOWS_GET_FEATURE70:
+		return "windows-get-feature70";
+	case G6TS_INIT_WINDOWS_SET_FEATURE70:
+		return "windows-set-feature70";
+	case G6TS_INIT_WINDOWS_SET_FEATURE56:
+		return "windows-set-feature56";
+	case G6TS_INIT_WINDOWS_CFU_OWNER_REQUIRED:
+		return "windows-cfu-owner-required";
+	case G6TS_INIT_SET_FEATURE05:
+		return "set-feature05";
+	case G6TS_INIT_GET_FEATURE70:
+		return "get-feature70";
+	case G6TS_INIT_SET_FEATURE70:
+		return "set-feature70";
+	case G6TS_INIT_SET_FEATURE56:
+		return "set-feature56";
+	case G6TS_INIT_WAIT_HEAT:
+		return "wait-heat";
+	}
+
+	return "invalid";
+}
 
 static const char *g6ts_profile_name(void)
 {
+	if (g6ts_windows_init_parity)
+		return "windows-init-parity";
 	if (g6ts_ready_quiesce && g6ts_feature70_one_byte)
 		return "phase82";
 	if (g6ts_ready_quiesce)
@@ -388,6 +544,12 @@ static ssize_t behavior_stats_show(struct device *dev,
 		div64_u64(ts->processing_ns_total, ts->heat_frames) : 0;
 	length = sysfs_emit(buf,
 			    "profile=%s\n"
+			    "initialization_stage=%s\n"
+			    "parity_feedback_required=%u\n"
+			    "parity_config_owner_required=%u\n"
+			    "parity_cfu_owner_required=%u\n"
+			    "parity_feature73_early=%*ph\n"
+			    "parity_feature06_prefix=%*ph\n"
 			    "mode_enabled=%u\n"
 			    "awaiting_ready_heat=%u\n"
 			    "heat_frames=%llu\n"
@@ -420,6 +582,14 @@ static ssize_t behavior_stats_show(struct device *dev,
 			    "ready_heat_frames=%llu\n"
 			    "ready_verification_failures=%llu\n",
 			    g6ts_profile_name(),
+			    g6ts_initialization_stage_name(ts->initialization_stage),
+			    ts->parity_feedback_required,
+			    ts->parity_config_owner_required,
+			    ts->parity_cfu_owner_required,
+			    (int)sizeof(ts->parity_feature73_early),
+			    ts->parity_feature73_early,
+			    (int)sizeof(ts->parity_feature06_prefix),
+			    ts->parity_feature06_prefix,
 			    ts->mode_enabled, ts->awaiting_ready_heat,
 			    ts->heat_frames, ts->heat_errors,
 			    ts->component_total, ts->contact_total,
@@ -493,6 +663,44 @@ static int g6ts_power_on(struct g6ts *ts)
 				     "ACPI _RST failed\n");
 	}
 
+	return 0;
+}
+
+/*
+ * Reproduce the GPIO effects and delays in the SP11 GTCH _PS0 followed by
+ * _RST. The production helper above retains its hardware-validated sequence;
+ * only the input-disabled parity path uses this ACPI-derived ordering.
+ */
+static int g6ts_windows_power_on(struct g6ts *ts)
+{
+	int ret;
+
+	if (!ts->power_gpio || !ts->reset_gpio) {
+		ts->initialization_stage = G6TS_INIT_WINDOWS_POWER_PS0;
+		ret = g6ts_acpi_method(&ts->spi->dev, "_PS0");
+		if (ret)
+			return dev_err_probe(&ts->spi->dev, ret,
+					     "ACPI _PS0 failed\n");
+
+		ts->initialization_stage = G6TS_INIT_WINDOWS_RESET_METHOD;
+		ret = g6ts_acpi_method(&ts->spi->dev, "_RST");
+		if (ret) {
+			g6ts_acpi_method(&ts->spi->dev, "_PS3");
+			return dev_err_probe(&ts->spi->dev, ret,
+					     "ACPI _RST failed\n");
+		}
+		return 0;
+	}
+
+	ts->initialization_stage = G6TS_INIT_WINDOWS_POWER_PS0;
+	gpiod_set_value_cansleep(ts->power_gpio, 1);
+	msleep(500);
+	gpiod_set_value_cansleep(ts->reset_gpio, 1);
+
+	ts->initialization_stage = G6TS_INIT_WINDOWS_RESET_METHOD;
+	gpiod_set_value_cansleep(ts->reset_gpio, 0);
+	msleep(300);
+	gpiod_set_value_cansleep(ts->reset_gpio, 1);
 	return 0;
 }
 
@@ -2159,6 +2367,213 @@ static int g6ts_expect_response(struct g6ts *ts, u8 response_class,
 	return 0;
 }
 
+static int g6ts_validate_sp11_device_descriptor(struct g6ts *ts)
+{
+	const struct hidspi_dev_descriptor *descriptor;
+
+	if (ts->last_class != DEVICE_DESCRIPTOR_RESPONSE ||
+	    ts->last_content_id != 0 ||
+	    ts->last_content_len != HIDSPI_DEVICE_DESCRIPTOR_SIZE)
+		return -EPROTO;
+
+	descriptor = (const struct hidspi_dev_descriptor *)
+		(ts->body + HIDSPI_INPUT_BODY_HEADER_SIZE);
+	if (le16_to_cpu(descriptor->dev_desc_len) !=
+			HIDSPI_DEVICE_DESCRIPTOR_SIZE ||
+	    le16_to_cpu(descriptor->bcd_ver) != 0x0300 ||
+	    le16_to_cpu(descriptor->rep_desc_len) !=
+			G6TS_SP11_REPORT_DESCRIPTOR_LEN ||
+	    le16_to_cpu(descriptor->max_input_len) != G6TS_SP11_MAX_INPUT_LEN ||
+	    le16_to_cpu(descriptor->max_output_len) != G6TS_SP11_MAX_OUTPUT_LEN ||
+	    le16_to_cpu(descriptor->max_frag_len) != G6TS_SP11_MAX_FRAGMENT_LEN ||
+	    le16_to_cpu(descriptor->vendor_id) != G6TS_SP11_VENDOR_ID ||
+	    le16_to_cpu(descriptor->product_id) != G6TS_SP11_PRODUCT_ID ||
+	    le16_to_cpu(descriptor->version_id) != G6TS_SP11_VERSION_ID ||
+	    le16_to_cpu(descriptor->flags) != G6TS_SP11_DESCRIPTOR_FLAGS ||
+	    le32_to_cpu(descriptor->reserved) != 0)
+		return -ENODEV;
+
+	return 0;
+}
+
+static int g6ts_recovery_read_expected(struct g6ts *ts, u8 response_class,
+				       u8 content_id, size_t min_content_len);
+
+static bool g6ts_windows_feedback_provider_valid(void)
+{
+	return g6ts_parity_display_bitmap >= 0 &&
+	       g6ts_parity_display_bitmap <= U8_MAX &&
+	       (g6ts_parity_stitching_flag == 0 ||
+		g6ts_parity_stitching_flag == 1) &&
+	       g6ts_parity_hinge_angle >= 0 &&
+	       g6ts_parity_fast_host_id >= 0 &&
+	       g6ts_parity_fast_host_id <= U16_MAX;
+}
+
+static bool g6ts_windows_config_provider_valid(void)
+{
+	return g6ts_parity_report56_identity_count ==
+			G6TS_WINDOWS_REPORT56_ID_LEN &&
+	       (g6ts_parity_report56_flag == 0 ||
+		g6ts_parity_report56_flag == 1);
+}
+
+static void g6ts_build_windows_feedback_a1(u8 content[G6TS_WINDOWS_FEEDBACK_LEN])
+{
+	memset(content, 0, G6TS_WINDOWS_FEEDBACK_LEN);
+	content[0] = 0x8e;
+	content[1] = 0xa1;
+	content[2] = g6ts_parity_display_bitmap;
+	content[3] = g6ts_parity_stitching_flag;
+	put_unaligned_le32(g6ts_parity_hinge_angle, &content[4]);
+	put_unaligned_le16(g6ts_parity_fast_host_id, &content[40]);
+}
+
+static void g6ts_build_windows_feedback_a5(u8 content[G6TS_WINDOWS_FEEDBACK_LEN])
+{
+	memset(content, 0, G6TS_WINDOWS_FEEDBACK_LEN);
+	content[0] = 0x8e;
+	content[1] = 0xa5;
+	/* Initial V06 sequence and current-feedback flags with no pen record. */
+	content[2] = 0;
+	content[3] = BIT(1);
+	put_unaligned_le16(g6ts_parity_fast_host_id, &content[39]);
+	/* The V06 sender unconditionally adds validity bit 0x0040. */
+	put_unaligned_le16(0x0040, &content[46]);
+}
+
+/*
+ * Reproduce only the proven, serialized part of the Windows cold collection
+ * attach. Dynamic values must come from their owning provider. Returning
+ * success with mode_enabled clear intentionally leaves this diagnostic driver
+ * bound and observable without claiming that normal touch mode was reached.
+ */
+static int g6ts_windows_cold_attach_locked(struct g6ts *ts)
+{
+	u8 feedback[G6TS_WINDOWS_FEEDBACK_LEN];
+	u8 report56[G6TS_WINDOWS_REPORT56_ID_LEN + 1];
+	const u8 *content;
+	int ret;
+
+	ts->initialization_stage = G6TS_INIT_WINDOWS_EARLY_FEATURE73;
+	ret = g6ts_dma_feature_exchange(ts, GET_FEATURE, 0x73, NULL, 0);
+	if (ret)
+		return ret;
+	ret = g6ts_expect_response(ts, GET_FEATURE_RESPONSE, 0x73, 2);
+	if (ret || ts->last_content_len != 2)
+		return ret ? ret : -EPROTO;
+	content = ts->body + HIDSPI_INPUT_BODY_HEADER_SIZE;
+	memcpy(ts->parity_feature73_early, content,
+	       sizeof(ts->parity_feature73_early));
+	if (content[0] != 0xfe || content[1] != 0xff)
+		return -EPROTO;
+
+	ts->initialization_stage = G6TS_INIT_WINDOWS_HEAT_CAPS06;
+	ret = g6ts_dma_feature_exchange(ts, GET_FEATURE, 0x06, NULL, 0);
+	if (ret)
+		return ret;
+	ret = g6ts_expect_response(ts, GET_FEATURE_RESPONSE, 0x06, 119);
+	if (ret || ts->last_content_len != 119)
+		return ret ? ret : -EPROTO;
+	content = ts->body + HIDSPI_INPUT_BODY_HEADER_SIZE;
+	memcpy(ts->parity_feature06_prefix, content,
+	       sizeof(ts->parity_feature06_prefix));
+
+	if (!g6ts_windows_feedback_provider_valid()) {
+		ts->initialization_stage = G6TS_INIT_WINDOWS_FEEDBACK_REQUIRED;
+		ts->parity_feedback_required = true;
+		ts->mode_enabled = false;
+		dev_notice(&ts->spi->dev,
+			   "Windows parity boundary reached: early feature73=%2ph; A1/A5 provider inputs are required\n",
+			   ts->parity_feature73_early);
+		return 0;
+	}
+
+	ts->initialization_stage = G6TS_INIT_WINDOWS_FEEDBACK_A1;
+	g6ts_build_windows_feedback_a1(feedback);
+	ret = g6ts_dma_hidspi_output(ts, OUTPUT_REPORT, 0x09, feedback,
+				     sizeof(feedback));
+	if (ret)
+		return ret;
+	/* The captured SP11 cold attach acknowledges A1 with DATA report A0={01}. */
+	ret = g6ts_recovery_read_expected(ts, DATA, 0xa0, 1);
+	if (ret || ts->last_content_len != 1 ||
+	    ts->body[HIDSPI_INPUT_BODY_HEADER_SIZE] != 0x01)
+		return ret ? ret : -EPROTO;
+
+	ts->initialization_stage = G6TS_INIT_WINDOWS_FEEDBACK_A5;
+	g6ts_build_windows_feedback_a5(feedback);
+	ret = g6ts_dma_hidspi_output(ts, OUTPUT_REPORT, 0x09, feedback,
+				     sizeof(feedback));
+	if (ret)
+		return ret;
+
+	ts->initialization_stage = G6TS_INIT_WINDOWS_SET_FEATURE05;
+	ret = g6ts_dma_feature_exchange(ts, SET_FEATURE, 0x05,
+					g6ts_mode_enable,
+					sizeof(g6ts_mode_enable));
+	if (ret)
+		return ret;
+	ret = g6ts_expect_response(ts, SET_FEATURE_RESPONSE, 0x05, 0);
+	if (ret || ts->last_content_len != 0)
+		return ret ? ret : -EPROTO;
+
+	if (!g6ts_windows_config_provider_valid()) {
+		ts->initialization_stage = G6TS_INIT_WINDOWS_CONFIG_OWNER_REQUIRED;
+		ts->parity_config_owner_required = true;
+		ts->mode_enabled = false;
+		dev_notice(&ts->spi->dev,
+			   "Windows parity boundary reached: report56 platform identity and flag are required\n");
+		return 0;
+	}
+
+	/*
+	 * The complete cold KDNET trace places 476 ms between the SET_FEATURE 0x05
+	 * response and the independent config owner's GET_FEATURE 0x70.  Preserve
+	 * a conservative 470 ms owner boundary; this is not a panel retry delay.
+	 */
+	msleep(G6TS_WINDOWS_CONFIG_DELAY_MS);
+
+	ts->initialization_stage = G6TS_INIT_WINDOWS_GET_FEATURE70;
+	ret = g6ts_dma_feature_exchange(ts, GET_FEATURE, 0x70, NULL, 0);
+	if (ret)
+		return ret;
+	ret = g6ts_expect_response(ts, GET_FEATURE_RESPONSE, 0x70, 1);
+	if (ret || ts->last_content_len != 1 ||
+	    ts->body[HIDSPI_INPUT_BODY_HEADER_SIZE] != 0x02)
+		return ret ? ret : -EPROTO;
+
+	ts->initialization_stage = G6TS_INIT_WINDOWS_SET_FEATURE70;
+	ret = g6ts_dma_feature_exchange(ts, SET_FEATURE, 0x70,
+					g6ts_mode_enable,
+					sizeof(g6ts_mode_enable));
+	if (ret)
+		return ret;
+	ret = g6ts_expect_response(ts, SET_FEATURE_RESPONSE, 0x70, 0);
+	if (ret || ts->last_content_len != 0)
+		return ret ? ret : -EPROTO;
+
+	memcpy(report56, g6ts_parity_report56_identity,
+	       G6TS_WINDOWS_REPORT56_ID_LEN);
+	report56[G6TS_WINDOWS_REPORT56_ID_LEN] = g6ts_parity_report56_flag;
+	ts->initialization_stage = G6TS_INIT_WINDOWS_SET_FEATURE56;
+	ret = g6ts_dma_feature_exchange(ts, SET_FEATURE, 0x56,
+					report56, sizeof(report56));
+	if (ret)
+		return ret;
+	ret = g6ts_expect_response(ts, SET_FEATURE_RESPONSE, 0x56, 0);
+	if (ret || ts->last_content_len != 0)
+		return ret ? ret : -EPROTO;
+
+	/* CFU collection attach is deliberately separate from touch activation. */
+	ts->initialization_stage = G6TS_INIT_WINDOWS_CFU_OWNER_REQUIRED;
+	ts->parity_cfu_owner_required = true;
+	ts->mode_enabled = false;
+	dev_notice(&ts->spi->dev,
+		   "Windows parity reached the CFU-owner boundary; Heat/input remains disabled\n");
+	return 0;
+}
+
 static int g6ts_recovery_read_expected(struct g6ts *ts, u8 response_class,
 				       u8 content_id, size_t min_content_len)
 {
@@ -2210,7 +2625,14 @@ static int g6ts_full_reinitialize_locked(struct g6ts *ts,
 	ts->mode_enabled = false;
 	ts->awaiting_ready_heat = false;
 	ts->expected_report_descriptor_len = 0;
-	ts->initialization_stage = 0;
+	ts->initialization_stage = G6TS_INIT_IDLE;
+	ts->parity_feedback_required = false;
+	ts->parity_config_owner_required = false;
+	ts->parity_cfu_owner_required = false;
+	memset(ts->parity_feature73_early, 0,
+	       sizeof(ts->parity_feature73_early));
+	memset(ts->parity_feature06_prefix, 0,
+	       sizeof(ts->parity_feature06_prefix));
 
 	if (path == G6TS_RECOVERY_HARDWARE) {
 		ts->hardware_recovery_attempts++;
@@ -2218,11 +2640,12 @@ static int g6ts_full_reinitialize_locked(struct g6ts *ts,
 		if (ret)
 			return ret;
 		msleep(100);
-		ret = g6ts_power_on(ts);
+		ret = g6ts_windows_init_parity ?
+			g6ts_windows_power_on(ts) : g6ts_power_on(ts);
 		if (ret)
 			return ret;
 
-		ts->initialization_stage = 1;
+		ts->initialization_stage = G6TS_INIT_RESET_RESPONSE;
 		ret = g6ts_wait_pending(ts, 1000);
 		if (ret)
 			goto out;
@@ -2234,10 +2657,10 @@ static int g6ts_full_reinitialize_locked(struct g6ts *ts,
 			goto out;
 	} else {
 		ts->software_recovery_attempts++;
-		ts->initialization_stage = 1;
+		ts->initialization_stage = G6TS_INIT_RESET_RESPONSE;
 	}
 
-	ts->initialization_stage = 2;
+	ts->initialization_stage = G6TS_INIT_DEVICE_DESCRIPTOR;
 	ret = g6ts_dma_output(ts, g6ts_device_descriptor_cmd,
 			      sizeof(g6ts_device_descriptor_cmd));
 	if (ret) {
@@ -2248,6 +2671,9 @@ static int g6ts_full_reinitialize_locked(struct g6ts *ts,
 					  HIDSPI_DEVICE_DESCRIPTOR_SIZE);
 	if (ret)
 		goto out;
+	ret = g6ts_validate_sp11_device_descriptor(ts);
+	if (ret)
+		goto out;
 	if (!ts->expected_report_descriptor_len ||
 	    ts->expected_report_descriptor_len >
 		    G6TS_MAX_BODY - HIDSPI_INPUT_BODY_HEADER_SIZE) {
@@ -2255,7 +2681,7 @@ static int g6ts_full_reinitialize_locked(struct g6ts *ts,
 		goto out;
 	}
 
-	ts->initialization_stage = 3;
+	ts->initialization_stage = G6TS_INIT_REPORT_DESCRIPTOR;
 	ret = g6ts_dma_output(ts, g6ts_report_descriptor_cmd,
 			      sizeof(g6ts_report_descriptor_cmd));
 	if (ret) {
@@ -2270,6 +2696,18 @@ static int g6ts_full_reinitialize_locked(struct g6ts *ts,
 		goto out;
 	}
 
+	if (g6ts_windows_init_parity) {
+		/* A software reset has a different, multi-owner Windows ordering. */
+		if (path != G6TS_RECOVERY_HARDWARE) {
+			ret = -EOPNOTSUPP;
+			goto out;
+		}
+		ret = g6ts_windows_cold_attach_locked(ts);
+		if (ret)
+			goto out;
+		return 0;
+	}
+
 	/*
 	 * Enter the panel's streaming personality with the smallest sequence
 	 * proven by the Phase 55 through Phase 65 cold boots and reset recoveries.
@@ -2277,7 +2715,7 @@ static int g6ts_full_reinitialize_locked(struct g6ts *ts,
 	 * belong to collection/application setup. Replaying them here prevented
 	 * Heat from starting in both the Phase 66 and Phase 67 hardware trials.
 	 */
-	ts->initialization_stage = 4;
+	ts->initialization_stage = G6TS_INIT_SET_FEATURE05;
 	ret = g6ts_dma_feature_exchange(ts, SET_FEATURE, 0x05,
 					g6ts_mode_enable,
 					sizeof(g6ts_mode_enable));
@@ -2287,7 +2725,7 @@ static int g6ts_full_reinitialize_locked(struct g6ts *ts,
 	if (ret)
 		goto out;
 
-	ts->initialization_stage = 5;
+	ts->initialization_stage = G6TS_INIT_GET_FEATURE70;
 	ts->mode_config_valid = false;
 	ts->mode_config_len = 0;
 	ret = g6ts_dma_feature_exchange(ts, GET_FEATURE, 0x70, NULL, 0);
@@ -2316,7 +2754,7 @@ static int g6ts_full_reinitialize_locked(struct g6ts *ts,
 			 cfg_len, (int)cfg_len, ts->mode_config);
 	}
 
-	ts->initialization_stage = 6;
+	ts->initialization_stage = G6TS_INIT_SET_FEATURE70;
 	if (g6ts_feature70_one_byte) {
 		dev_info(&ts->spi->dev,
 			 "feature70-one-byte: SET_FEATURE 0x70 len=1 bytes=01\n");
@@ -2374,7 +2812,7 @@ static int g6ts_full_reinitialize_locked(struct g6ts *ts,
 		}
 	}
 
-	ts->initialization_stage = 7;
+	ts->initialization_stage = G6TS_INIT_SET_FEATURE56;
 	ret = g6ts_dma_feature_exchange(ts, SET_FEATURE, 0x56,
 					g6ts_mode_handshake,
 					sizeof(g6ts_mode_handshake));
@@ -2385,7 +2823,7 @@ static int g6ts_full_reinitialize_locked(struct g6ts *ts,
 		goto out;
 
 	if (g6ts_reset_recovery_v2) {
-		ts->initialization_stage = 8;
+		ts->initialization_stage = G6TS_INIT_WAIT_HEAT;
 		/*
 		 * Do not synchronously wait here.  The panel produces Heat on touch,
 		 * so waiting before enabling the IRQ response path deadlocks startup.
@@ -2425,10 +2863,19 @@ static void g6ts_recovery_work(struct work_struct *work)
 		if (path == G6TS_RECOVERY_HARDWARE)
 			ts->rapid_reset_streak = 0;
 		ts->recovery_path = G6TS_RECOVERY_HARDWARE;
-		dev_info(&ts->spi->dev,
-			 "touch controller initialized path=%s recoveries=%llu resets=%llu\n",
-			 path == G6TS_RECOVERY_SOFTWARE ? "software" : "hardware",
-			 ts->recovery_successes, ts->reset_notifications);
+		if (ts->parity_feedback_required ||
+		    ts->parity_config_owner_required ||
+		    ts->parity_cfu_owner_required)
+			dev_info(&ts->spi->dev,
+				 "Windows parity attach paused at %s; touch input intentionally disabled\n",
+				 g6ts_initialization_stage_name(ts->initialization_stage));
+		else
+			dev_info(&ts->spi->dev,
+				 "touch controller initialized path=%s recoveries=%llu resets=%llu\n",
+				 path == G6TS_RECOVERY_SOFTWARE ?
+					 "software" : "hardware",
+				 ts->recovery_successes,
+				 ts->reset_notifications);
 	} else {
 		ts->recovery_failures++;
 		ts->recovery_fail_streak++;
@@ -2442,9 +2889,10 @@ static void g6ts_recovery_work(struct work_struct *work)
 				ts->recovery_fail_streak < G6TS_RECOVERY_LIMIT;
 		}
 		dev_warn(&ts->spi->dev,
-			 "touch controller initialization failed path=%s stage=%u ret=%d failures=%llu%s\n",
+			 "touch controller initialization failed path=%s stage=%s ret=%d failures=%llu%s\n",
 			 path == G6TS_RECOVERY_SOFTWARE ? "software" : "hardware",
-			 ts->initialization_stage, ret, ts->recovery_failures,
+			 g6ts_initialization_stage_name(ts->initialization_stage),
+			 ret, ts->recovery_failures,
 			 retry ? "; retrying" : "");
 	}
 	mutex_unlock(&ts->io_lock);

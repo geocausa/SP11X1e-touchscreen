@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import re
 import unittest
 
 
@@ -29,8 +30,13 @@ PHASE82_DEPLOY = ROOT / "scripts" / "deploy_phase82_set70.sh"
 
 
 def function_body(source: str, name: str) -> str:
-    start = source.index(name)
-    opening = source.index("{", start)
+    definition = re.search(
+        rf"\b{re.escape(name)}\s*\([^;{{]*\)\s*\{{",
+        source,
+    )
+    if definition is None:
+        raise AssertionError(f"function definition not found: {name}")
+    opening = source.index("{", definition.start())
     depth = 0
     for offset in range(opening, len(source)):
         if source[offset] == "{":
@@ -125,6 +131,121 @@ class SourceInvariantTests(unittest.TestCase):
             "g6ts_etw_firmware_version",
         ):
             self.assertNotIn(removed_symbol, self.source)
+
+    def test_windows_init_parity_gates_each_unresolved_owner(self):
+        self.assertIn("static bool g6ts_windows_init_parity;", self.source)
+        self.assertIn(
+            "module_param_named(windows_init_parity, "
+            "g6ts_windows_init_parity, bool, 0444)",
+            self.source,
+        )
+        body = function_body(self.source, "g6ts_windows_cold_attach_locked")
+        get73 = body.index("GET_FEATURE, 0x73")
+        get06 = body.index("GET_FEATURE, 0x06")
+        feedback_boundary = body.index("G6TS_INIT_WINDOWS_FEEDBACK_REQUIRED")
+        a1 = body.index("G6TS_INIT_WINDOWS_FEEDBACK_A1")
+        a5 = body.index("G6TS_INIT_WINDOWS_FEEDBACK_A5")
+        set05 = body.index("G6TS_INIT_WINDOWS_SET_FEATURE05")
+        config_boundary = body.index(
+            "G6TS_INIT_WINDOWS_CONFIG_OWNER_REQUIRED"
+        )
+        get70 = body.index("G6TS_INIT_WINDOWS_GET_FEATURE70")
+        set70 = body.index("G6TS_INIT_WINDOWS_SET_FEATURE70")
+        set56 = body.index("G6TS_INIT_WINDOWS_SET_FEATURE56")
+        cfu_boundary = body.index("G6TS_INIT_WINDOWS_CFU_OWNER_REQUIRED")
+        self.assertLess(get73, get06)
+        self.assertLess(get06, feedback_boundary)
+        self.assertLess(feedback_boundary, a1)
+        self.assertLess(a1, a5)
+        self.assertLess(a5, set05)
+        self.assertLess(set05, config_boundary)
+        self.assertLess(config_boundary, get70)
+        self.assertLess(get70, set70)
+        self.assertLess(set70, set56)
+        self.assertLess(set56, cfu_boundary)
+        self.assertIn("ts->mode_enabled = false", body)
+        for forbidden in (
+            "0x60",
+            "0x65",
+        ):
+            self.assertNotIn(forbidden, body)
+
+        self.assertIn("content[0] != 0xfe || content[1] != 0xff", body)
+        self.assertIn("ts->last_content_len != 1", body)
+        self.assertIn(
+            "ts->body[HIDSPI_INPUT_BODY_HEADER_SIZE] != 0x02", body
+        )
+        self.assertIn("msleep(G6TS_WINDOWS_CONFIG_DELAY_MS)", body)
+        self.assertIn("g6ts_parity_report56_identity", body)
+        self.assertIn("g6ts_parity_report56_flag", body)
+
+        config_provider = function_body(
+            self.source, "g6ts_windows_config_provider_valid"
+        )
+        self.assertIn("g6ts_parity_report56_identity_count", config_provider)
+        self.assertIn("G6TS_WINDOWS_REPORT56_ID_LEN", config_provider)
+
+    def test_windows_feedback_builders_match_recovered_offsets(self):
+        a1 = function_body(self.source, "g6ts_build_windows_feedback_a1")
+        for token in (
+            "content[0] = 0x8e",
+            "content[1] = 0xa1",
+            "content[2] = g6ts_parity_display_bitmap",
+            "content[3] = g6ts_parity_stitching_flag",
+            "put_unaligned_le32(g6ts_parity_hinge_angle, &content[4])",
+            "put_unaligned_le16(g6ts_parity_fast_host_id, &content[40])",
+        ):
+            self.assertIn(token, a1)
+
+        a5 = function_body(self.source, "g6ts_build_windows_feedback_a5")
+        for token in (
+            "content[0] = 0x8e",
+            "content[1] = 0xa5",
+            "content[2] = 0",
+            "content[3] = BIT(1)",
+            "put_unaligned_le16(g6ts_parity_fast_host_id, &content[39])",
+            "put_unaligned_le16(0x0040, &content[46])",
+        ):
+            self.assertIn(token, a5)
+
+    def test_windows_init_parity_validates_exact_sp11_descriptor(self):
+        body = function_body(
+            self.source, "g6ts_validate_sp11_device_descriptor"
+        )
+        for token in (
+            "G6TS_SP11_REPORT_DESCRIPTOR_LEN",
+            "G6TS_SP11_MAX_INPUT_LEN",
+            "G6TS_SP11_MAX_OUTPUT_LEN",
+            "G6TS_SP11_MAX_FRAGMENT_LEN",
+            "G6TS_SP11_VENDOR_ID",
+            "G6TS_SP11_PRODUCT_ID",
+            "G6TS_SP11_VERSION_ID",
+            "G6TS_SP11_DESCRIPTOR_FLAGS",
+        ):
+            self.assertIn(token, body)
+
+    def test_windows_init_parity_uses_recovered_acpi_power_order(self):
+        power = function_body(self.source, "g6ts_windows_power_on")
+        for token in (
+            'g6ts_acpi_method(&ts->spi->dev, "_PS0")',
+            'g6ts_acpi_method(&ts->spi->dev, "_RST")',
+            "gpiod_set_value_cansleep(ts->power_gpio, 1)",
+            "msleep(500)",
+            "gpiod_set_value_cansleep(ts->reset_gpio, 0)",
+            "msleep(300)",
+        ):
+            self.assertIn(token, power)
+        self.assertLess(
+            power.index("gpiod_set_value_cansleep(ts->power_gpio, 1)"),
+            power.index("msleep(500)"),
+        )
+        self.assertLess(
+            power.index("gpiod_set_value_cansleep(ts->reset_gpio, 0)"),
+            power.index("msleep(300)"),
+        )
+
+        recovery = function_body(self.source, "g6ts_full_reinitialize_locked")
+        self.assertIn("g6ts_windows_power_on(ts) : g6ts_power_on(ts)", recovery)
 
     def test_assignment_initializes_every_output_slot(self):
         body = function_body(self.source, "g6ts_assign_tracks")

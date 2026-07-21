@@ -38,6 +38,12 @@ natural panel-reset branch has not yet been exercised by a captured reset; see
 
 ## Explicitly experimental
 
+- `mshw0485_touch.windows_init_parity=1` is an input-disabled cold-bring-up
+  laboratory path. It follows captured Windows collection ownership through
+  provider-built A1/A5 feedback and the exact device-config exchange, then
+  stops before CFU report `0x65`. Dynamic provider inputs are invalid by
+  default and must be supplied explicitly; see
+  [WINDOWS_INIT_PARITY.md](WINDOWS_INIT_PARITY.md).
 - `mshw0485_touch.windows_orchestrator=1` enables recovered Windows lifecycle
   behavior whose provider-owned context fields are not fully proven. It is
   read-only and defaults off.
