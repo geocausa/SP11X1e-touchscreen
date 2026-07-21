@@ -86,8 +86,18 @@ explicitly Linux-adapted, not called Windows-identical. See
 The Phase 87 hardware run confirmed that `LINK` removed the DMA timeout, but
 the completed read was quiesced as an invalid header after GPIO51 deasserted.
 Phase 88 therefore changes the serial-engine initialization back to Linux's
-proven path while preserving the captured ring geometry and `LINK`. See
-[PHASE87_HARDWARE_RESULT.md](PHASE87_HARDWARE_RESULT.md).
+generic path while preserving the captured ring geometry and `LINK`. Its
+untouched hardware boot returned `ff ff ff ff`. Phase 89 restores the final
+Phase 75 lower-stack difference, Linux's normal ring sizes. See
+[PHASE87_HARDWARE_RESULT.md](PHASE87_HARDWARE_RESULT.md) and
+[PHASE88_HARDWARE_RESULT.md](PHASE88_HARDWARE_RESULT.md).
+
+The normal SP11 Linux path already includes a Linux-integrated version of the
+same 13 register writes recovered from KDNET. Phase 88 therefore did not omit
+those writes: it restored the surrounding `geni_se_init()` and
+`geni_se_select_mode()` calls, used a read-modify-write for DMA mode, and did
+not apply the Windows FIFO-disabled guard. Documentation must distinguish that
+Linux integration path from the isolated literal Windows path.
 
 The default production path is byte-for-byte unchanged unless this option is
 explicitly selected.

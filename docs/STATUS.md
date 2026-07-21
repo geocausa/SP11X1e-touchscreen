@@ -57,11 +57,16 @@ natural panel-reset branch has not yet been exercised by a captured reset; see
   but timed out because the exact Windows GO omitted Linux's required `LINK`
   coupling. Phase 87 isolates that one adaptation while retaining the Windows
   ring geometry. It completed RX but received no valid reset header. Phase 88
-  therefore retains the rings and `LINK` while restoring Linux's proven GENI
-  initialization. See [PHASE84_HARDWARE_RESULT.md](PHASE84_HARDWARE_RESULT.md),
+  retained the rings and `LINK` while restoring Linux's generic GENI
+  initialization and mode selection; its untouched boot returned
+  `ff ff ff ff`. Phase 89 therefore restores the complete Phase 75 lower
+  transport, including normal Linux GPI ring geometry. See
+  [PHASE84_HARDWARE_RESULT.md](PHASE84_HARDWARE_RESULT.md),
   [PHASE87_HARDWARE_RESULT.md](PHASE87_HARDWARE_RESULT.md),
   [PHASE87_LINUX_LINK_HEAT.md](PHASE87_LINUX_LINK_HEAT.md), and
-  [PHASE88_LINUX_SE_WINDOWS_HEAT.md](PHASE88_LINUX_SE_WINDOWS_HEAT.md), plus
+  [PHASE88_LINUX_SE_WINDOWS_HEAT.md](PHASE88_LINUX_SE_WINDOWS_HEAT.md),
+  [PHASE88_HARDWARE_RESULT.md](PHASE88_HARDWARE_RESULT.md), and
+  [PHASE89_LINUX_TRANSPORT_WINDOWS_HEAT.md](PHASE89_LINUX_TRANSPORT_WINDOWS_HEAT.md), plus
   [WINDOWS_CONTROLLER_INIT_PARITY.md](WINDOWS_CONTROLLER_INIT_PARITY.md).
 - `mshw0485_touch.windows_orchestrator=1` enables recovered Windows lifecycle
   behavior whose provider-owned context fields are not fully proven. It is

@@ -52,10 +52,13 @@ same CFU/Heat path. See
 Phase 87 proved that `LINK` removes the DMA timeout, but the first completed
 read still contained no valid reset header after the ready line deasserted.
 Phase 88 keeps the Windows upper chronology and captured ring sizes while
-restoring Linux's hardware-proven GENI initialization. It also exports the
-last four header bytes for an exact next result. See
+restoring Linux's generic GENI initialization and mode selection. Its untouched
+hardware boot completed with `ff ff ff ff`, so Phase 89 restores the remaining
+Phase 75 lower-stack property: Linux's normal GPI ring geometry. See
 [docs/PHASE87_HARDWARE_RESULT.md](docs/PHASE87_HARDWARE_RESULT.md) and
-[docs/PHASE88_LINUX_SE_WINDOWS_HEAT.md](docs/PHASE88_LINUX_SE_WINDOWS_HEAT.md).
+[docs/PHASE88_LINUX_SE_WINDOWS_HEAT.md](docs/PHASE88_LINUX_SE_WINDOWS_HEAT.md),
+[docs/PHASE88_HARDWARE_RESULT.md](docs/PHASE88_HARDWARE_RESULT.md), and
+[docs/PHASE89_LINUX_TRANSPORT_WINDOWS_HEAT.md](docs/PHASE89_LINUX_TRANSPORT_WINDOWS_HEAT.md).
 
 ## Historical FIFO baseline: Phase 52
 

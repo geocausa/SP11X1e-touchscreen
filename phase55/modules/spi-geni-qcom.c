@@ -170,7 +170,7 @@ static void spi_geni_sp11_qspi_prepare_hw(struct spi_geni_master *mas)
 	wmb();
 
 	dev_info_once(mas->dev,
-		      "SP11: applied KDNET QSPI 13-write SE init before GPI channel start\n");
+		      "SP11: applied Linux-integrated QSPI SE preparation before GPI channel start\n");
 }
 
 static void spi_geni_sp11_qspi_prepare_windows_hw(struct spi_geni_master *mas)

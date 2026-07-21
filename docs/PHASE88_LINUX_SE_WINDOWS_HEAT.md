@@ -5,7 +5,8 @@ active lower-stack axis:
 
 ```text
 Phase 87: captured Windows 13-write GENI initialization
-Phase 88: hardware-proven Linux GENI initialization and mode selection
+Phase 88: Linux GENI initialization and mode selection around the shared
+          SP11 QSPI preparation writes
 ```
 
 It retains:
@@ -24,6 +25,13 @@ Windows controller claim. If it returns a valid reset response, the Windows
 serial-engine register profile—not Heat gating—was the remaining incompatible
 lower-layer axis. If it still returns an invalid header, the captured ring
 geometry or power/reset boundary remains for the next isolated comparison.
+
+Clarification after the hardware boot: the production Linux SP11 QSPI helper
+already programs a Linux-integrated form of the same 13 registers. Phase 88
+restored generic `geni_se_init()` and `geni_se_select_mode()` and changed the
+DMA-mode write/guard behavior; it did not remove every recovered register
+write. The earlier phrase "restores Linux initialization" remains correct only
+with that narrower meaning.
 
 The client exports `last_header`, `last_class`, `last_content_id`, and
 `last_content_len` in `behavior_stats`, so an empty or malformed result remains

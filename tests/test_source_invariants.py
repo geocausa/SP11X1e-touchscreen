@@ -38,6 +38,8 @@ PHASE87_BOOT = ROOT / "boot" / "72_sp11_713_phase87_linux_link_heat"
 PHASE87_DEPLOY = ROOT / "scripts" / "deploy_phase87_linux_link_heat.sh"
 PHASE88_BOOT = ROOT / "boot" / "74_sp11_713_phase88_linux_se_heat"
 PHASE88_DEPLOY = ROOT / "scripts" / "deploy_phase88_linux_se_heat.sh"
+PHASE89_BOOT = ROOT / "boot" / "75_sp11_713_phase89_linux_transport_heat"
+PHASE89_DEPLOY = ROOT / "scripts" / "deploy_phase89_linux_transport_heat.sh"
 
 
 def function_body(source: str, name: str) -> str:
@@ -92,6 +94,8 @@ class SourceInvariantTests(unittest.TestCase):
         cls.phase87_deploy = PHASE87_DEPLOY.read_text(encoding="utf-8")
         cls.phase88_boot = PHASE88_BOOT.read_text(encoding="utf-8")
         cls.phase88_deploy = PHASE88_DEPLOY.read_text(encoding="utf-8")
+        cls.phase89_boot = PHASE89_BOOT.read_text(encoding="utf-8")
+        cls.phase89_deploy = PHASE89_DEPLOY.read_text(encoding="utf-8")
 
     def test_default_build_is_the_production_dma_set(self):
         self.assertIn("all: production", self.root_makefile)
@@ -428,6 +432,31 @@ class SourceInvariantTests(unittest.TestCase):
             self.phase88_deploy,
         )
         self.assertNotIn("grub-set-default", self.phase88_deploy)
+
+    def test_phase89_restores_phase75_gpi_geometry(self):
+        shared = (
+            "mshw0485_touch.windows_init_parity=1",
+            "mshw0485_touch.parity_cfu_inventory=1",
+            "mshw0485_touch.parity_heat_input=1",
+            "mshw0485_touch.behavior_v2=1",
+            "mshw0485_touch.host_fault_recovery=1",
+            "mshw0485_touch.ready_quiesce=1",
+        )
+        for token in shared:
+            self.assertIn(token, self.phase88_boot)
+            self.assertIn(token, self.phase89_boot)
+        for token in (
+            "spi_geni_qcom.sp11_windows_se_init=1",
+            "gpi.sp11_windows_ring_layout=1",
+            "gpi.sp11_qspi_linux_link=1",
+        ):
+            self.assertNotIn(token, self.phase89_boot)
+        self.assertIn("sp11-phase89-linux-transport-heat", self.phase89_boot)
+        self.assertIn(
+            "grub-reboot sp11-phase89-linux-transport-heat",
+            self.phase89_deploy,
+        )
+        self.assertNotIn("grub-set-default", self.phase89_deploy)
 
     def test_windows_controller_init_is_guarded_and_exactly_ordered(self):
         body = function_body(
