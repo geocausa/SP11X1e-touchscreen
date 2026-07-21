@@ -13,6 +13,7 @@ The experimental module option is:
 
 ```text
 mshw0485_touch.windows_init_parity=1
+spi_geni_qcom.sp11_windows_se_init=1
 ```
 
 It is read-only.  When selected, the driver intentionally leaves
@@ -42,6 +43,7 @@ Their identities are:
 f2405158054c4475a5c225446eccc7873af1e1fa1a6066406a34876ea9ca2d23  sp11_touch_deep_boot2_0924_2026-07-18_23-02-40-797.log
 431d48d05a78de130f3d05bc0e2132b62ee1ed9cbb71d41bd1abfd20f6858ed4  sp11_touch_deep_20c4_2026-07-18_22-43-41-830.log
 ca7ba016fec4dc60f0161ed5ef30d0b6d76334613f930de4f2099aa3742f7050  sp11_touch_deep_boot3_1e90_2026-07-20_07-23-54-390.log
+d4c620e66de94318962c2c745fbeec9ff83725bb4c3139652336e56bb271a5c3  sp11_seinit_capture_280c_2026-07-20_08-39-54-630.log
 ```
 
 `tools/extract_kdnet_hidspi.py` reconstructs completed transfers and enforces
@@ -152,6 +154,8 @@ Exact in the parity path:
   still forces a preceding `_PS3`-equivalent cold cycle for determinism;
 - 40 MHz mode-0, quad TX/RX transaction shape already correlated with Windows
   GPI-DMA descriptors;
+- the guarded 13-write QSPI serial-engine initialization order, isolated from
+  Linux's generic GENI initialization and mode-selection writes;
 - HID-SPI request headers and rounded wire lengths;
 - reset, descriptor, early `0x73`, and `0x06` order;
 - exact SP11 device descriptor identity and declared limits;
@@ -162,8 +166,8 @@ Exact in the parity path:
 
 Not yet claimed exact:
 
-- the controller's complete Windows D0 electrical/MMIO transition (the capture
-  proved active DMA traffic but did not hit the serial-engine init routine);
+- parent resource/clock and TLMM ownership surrounding the now-recovered
+  serial-engine MMIO transition;
 - the host source and encoding of every dynamic A1/A5 field;
 - the precise Windows scheduler predicate behind the observed 476 ms gap
   between the Heat and device-config owners (the parity path preserves a

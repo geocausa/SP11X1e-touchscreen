@@ -9,6 +9,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 CLIENT = ROOT / "phase55" / "modules" / "mshw0485_touch.c"
+CONTROLLER = ROOT / "phase55" / "modules" / "spi-geni-qcom.c"
 LEGACY_CLIENT = ROOT / "src" / "g6ts_biosref.c"
 DMA_KBUILD = ROOT / "phase55" / "modules" / "Kbuild"
 LIFECYCLE_PROFILE = ROOT / "phase55" / "modules" / "g6ts_lifecycle_profile.h"
@@ -55,6 +56,7 @@ class SourceInvariantTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.source = CLIENT.read_text(encoding="utf-8")
+        cls.controller_source = CONTROLLER.read_text(encoding="utf-8")
         cls.legacy_source = LEGACY_CLIENT.read_text(encoding="utf-8")
         cls.dma_kbuild = DMA_KBUILD.read_text(encoding="utf-8")
         cls.lifecycle_profile = LIFECYCLE_PROFILE.read_text(encoding="utf-8")
@@ -294,6 +296,7 @@ class SourceInvariantTests(unittest.TestCase):
         for token in (
             "sp11-phase84-init-parity",
             "sp11_entry=7.1.3-phase84-init-parity",
+            "spi_geni_qcom.sp11_windows_se_init=1",
             "mshw0485_touch.windows_init_parity=1",
             "mshw0485_touch.parity_display_bitmap=1",
             "mshw0485_touch.parity_stitching_flag=0",
@@ -314,6 +317,7 @@ class SourceInvariantTests(unittest.TestCase):
         required = (
             "sp11-phase85-cfu-parity",
             "sp11_entry=7.1.3-phase85-cfu-parity",
+            "spi_geni_qcom.sp11_windows_se_init=1",
             "mshw0485_touch.windows_init_parity=1",
             "mshw0485_touch.parity_cfu_inventory=1",
             "mshw0485_touch.parity_cfu_offer="
@@ -325,6 +329,40 @@ class SourceInvariantTests(unittest.TestCase):
         self.assertNotIn("behavior_v2=1", self.phase85_boot)
         self.assertNotIn("windows_orchestrator=1", self.phase85_boot)
         self.assertNotIn("parity_cfu_inventory", self.phase84_boot)
+
+    def test_windows_controller_init_is_guarded_and_exactly_ordered(self):
+        body = function_body(
+            self.controller_source,
+            "spi_geni_sp11_qspi_prepare_windows_hw",
+        )
+        self.assertIn("GENI_IF_DISABLE_RO", body)
+        self.assertIn("FIFO_IF_DISABLE", body)
+        writes = (
+            "GENI_DMA_MODE_EN, se->base + SE_GENI_DMA_MODE_EN",
+            "0, se->base + SE_GSI_IRQ_EN",
+            "0xf, se->base + SE_GSI_EVENT_EN",
+            "SP11_QSPI_M_IRQ_INIT, se->base + SE_GENI_M_IRQ_EN",
+            "SP11_QSPI_S_IRQ_INIT, se->base + SE_GENI_S_IRQ_EN",
+            "0xf, se->base + SE_DMA_TX_IRQ_MSK",
+            "0xd, se->base + SE_DMA_TX_IRQ_EN",
+            "0xfff, se->base + SE_DMA_RX_IRQ_MSK",
+            "0x1d, se->base + SE_DMA_RX_IRQ_EN",
+            "SP11_QSPI_M_IRQ_CLEAR, se->base + SE_GENI_M_IRQ_CLEAR",
+            "SP11_QSPI_S_IRQ_CLEAR, se->base + SE_GENI_S_IRQ_CLEAR",
+            "0xf, se->base + SE_DMA_TX_IRQ_CLR",
+            "0xfff, se->base + SE_DMA_RX_IRQ_CLR",
+        )
+        positions = [body.index(write) for write in writes]
+        self.assertEqual(positions, sorted(positions))
+        self.assertIn("module_param(sp11_windows_se_init, bool, 0444)",
+                      self.controller_source)
+
+        init = function_body(self.controller_source, "spi_geni_init")
+        self.assertIn(
+            "if (!sp11_windows_se_init || !spi_geni_is_sp11_qspi(mas))",
+            init,
+        )
+        self.assertIn("spi_geni_sp11_qspi_prepare_windows_hw(mas)", init)
 
     def test_assignment_initializes_every_output_slot(self):
         body = function_body(self.source, "g6ts_assign_tracks")

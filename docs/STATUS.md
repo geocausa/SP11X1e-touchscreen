@@ -48,6 +48,10 @@ natural panel-reset branch has not yet been exercised by a captured reset; see
   panel's complete reject-old/same response path are now statically and
   dynamically decoded. They remain outside Phase 84 pending a distinct gated
   image; no firmware payload path is present.
+  `spi_geni_qcom.sp11_windows_se_init=1` additionally removes the generic
+  Linux GENI init/mode writes and applies the cold-captured, guarded Windows
+  13-write controller sequence. It is confined to Phase 84/85; see
+  [WINDOWS_CONTROLLER_INIT_PARITY.md](WINDOWS_CONTROLLER_INIT_PARITY.md).
 - `mshw0485_touch.windows_orchestrator=1` enables recovered Windows lifecycle
   behavior whose provider-owned context fields are not fully proven. It is
   read-only and defaults off.

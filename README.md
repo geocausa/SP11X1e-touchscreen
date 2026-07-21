@@ -30,7 +30,9 @@ owned CFU `0x60/0x65` traffic. The installed CFU owner and its complete
 no-update response path are now decoded for a later isolated checkpoint; they
 do not alter Phase 84 and no firmware payload path is implemented. See
 [docs/WINDOWS_INIT_PARITY.md](docs/WINDOWS_INIT_PARITY.md) and
-[docs/WINDOWS_CFU_BOUNDARY.md](docs/WINDOWS_CFU_BOUNDARY.md).
+[docs/WINDOWS_CFU_BOUNDARY.md](docs/WINDOWS_CFU_BOUNDARY.md). The matching
+guarded QSPI controller initialization is documented in
+[docs/WINDOWS_CONTROLLER_INIT_PARITY.md](docs/WINDOWS_CONTROLLER_INIT_PARITY.md).
 
 ## Historical FIFO baseline: Phase 52
 
