@@ -18,6 +18,10 @@ Phase 91 is the current hardware-validated baseline for the OLED Surface Pro
 - 14,950 Heat frames across two cold boots with zero panel resets, invalid
   headers, transport faults, host-fault recoveries, or Heat errors.
 
+This focused validation is not yet an extensive multi-day soak. Phase 91 is
+the best current baseline for the tested OLED SP11 and exact kernel; the
+previous DMA and FIFO fallbacks remain required.
+
 The production driver is `phase55/modules/mshw0485_touch.c`. Running `make`
 builds its matched client, GENI controller, and GPI-DMA modules. Phase 75 is
 the previous DMA rescue image and the 7.1.3 FIFO build is the final fallback.

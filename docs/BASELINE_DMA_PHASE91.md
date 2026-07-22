@@ -18,6 +18,14 @@ It does not enable the experimental Windows GENI register sequence or Windows
 GPI ring layout. It does not flash firmware, send a CFU payload, or implement
 pen support.
 
+## Validation caveat
+
+The promotion is based on two clean cold boots and focused login-screen,
+typing, and multi-touch stress. It has not yet completed an extensive
+multi-day real-world soak. Treat Phase 91 as the best current baseline for the
+tested OLED SP11 and exact kernel, not as a universal stability guarantee.
+Retain both the previous DMA and FIFO fallback entries.
+
 ## Root cause and hardware result
 
 Phase 90 reached Heat and decoded 1,984 valid frames, then immediately tried a

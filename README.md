@@ -10,6 +10,12 @@ reset, invalid header, or transport error. See
 [docs/STATUS.md](docs/STATUS.md) for the exact supported, experimental, and
 unsupported boundaries.
 
+> **Validation caveat:** Phase 91 has passed two cold boots and focused
+> login/typing/multi-touch stress, but it has not yet completed an extensive
+> multi-day real-world soak. It is the best current baseline for the tested
+> OLED SP11 and exact kernel, not a universal stability claim. Keep both
+> fallback entries.
+
 The installed boot layout retains two rollback paths: the previous Phase 75 DMA
 image and the 7.1.3 FIFO image. Historical experimental menu scripts are
 archived during promotion, while their boot assets and repository recipes are
