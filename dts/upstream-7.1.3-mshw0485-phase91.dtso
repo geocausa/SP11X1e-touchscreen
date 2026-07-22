@@ -1,0 +1,59 @@
+/dts-v1/;
+/plugin/;
+
+/*
+ * Phase 91 wiring for the pristine upstream v7.1.3 Denali OLED DTB.
+ *
+ * Upstream already describes QUP1 SE2 as spi10 and GPI DMA instance 1, but
+ * leaves both disabled and has no MSHW0485 child.  QCOM GPI protocol 4 is the
+ * protocol-9/QSPI extension implemented by this repository's matched gpi and
+ * spi-geni-qcom modules.
+ *
+ * Numeric GPIO/IRQ flags keep this overlay self-contained:
+ *   0 = GPIO_ACTIVE_HIGH, 1 = GPIO_ACTIVE_LOW, 8 = IRQ_TYPE_LEVEL_LOW.
+ */
+
+&gpi_dma1 {
+	status = "okay";
+};
+
+&i2c10 {
+	status = "disabled";
+};
+
+&tlmm {
+	g6ts_qspi_data23: g6ts-qspi-data23-state {
+		pins = "gpio49", "gpio50";
+		function = "qup1_se2";
+		drive-strength = <6>;
+		bias-disable;
+	};
+};
+
+&spi10 {
+	status = "okay";
+	qcom,biosref-qspi;
+	qcom,enable-gsi-dma;
+	#address-cells = <1>;
+	#size-cells = <0>;
+
+	dmas = <&gpi_dma1 0 2 4>, <&gpi_dma1 1 2 4>;
+	dma-names = "tx", "rx";
+
+	pinctrl-names = "default";
+	pinctrl-0 = <&qup_spi10_data_clk>, <&qup_spi10_cs>,
+		    <&g6ts_qspi_data23>;
+
+	touchscreen@0 {
+		compatible = "microsoft,mshw0485";
+		reg = <0>;
+		spi-max-frequency = <40000000>;
+
+		interrupt-parent = <&tlmm>;
+		interrupts = <51 8>;
+		interrupt-gpios = <&tlmm 51 1>;
+
+		power-gpios = <&tlmm 64 0>;
+		reset-gpios = <&tlmm 48 0>;
+	};
+};
