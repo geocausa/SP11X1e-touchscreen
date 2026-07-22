@@ -115,6 +115,8 @@ class PortableUpstreamBundleTests(unittest.TestCase):
         self.assertIn("prebuilt modules included: no", self.packager)
         self.assertIn("-name '*.ko'", self.packager)
         self.assertIn("git archive --format=tar HEAD", self.packager)
+        self.assertIn('output_name=$(basename -- "$output")', self.packager)
+        self.assertIn('sha256sum "$output_name"', self.packager)
 
 
 if __name__ == "__main__":

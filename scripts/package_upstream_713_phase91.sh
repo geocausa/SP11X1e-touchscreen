@@ -76,6 +76,11 @@ mv "$manifest" "$stage/$name/SHA256SUMS"
 mkdir -p "$(dirname -- "$output")"
 tar --sort=name --owner=0 --group=0 --numeric-owner \
 	--mtime="@$timestamp" -C "$stage" -czf "$output" "$name"
-sha256sum "$output" >"$output.sha256"
+output_dir=$(dirname -- "$output")
+output_name=$(basename -- "$output")
+(
+	cd "$output_dir"
+	sha256sum "$output_name"
+) >"$output.sha256"
 echo "$output"
 echo "$output.sha256"
