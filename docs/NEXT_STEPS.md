@@ -1,4 +1,4 @@
-# Current lead / next steps (updated 2026-07-19)
+# Current lead / next steps (updated 2026-07-22)
 
 Start with [PHASE72_KDNET_ERRATUM.md](PHASE72_KDNET_ERRATUM.md). The earlier
 claim that Windows sends six logical bytes in feature reports `0x05` and `0x70`
@@ -6,7 +6,9 @@ was caused by reading beyond `content_len` in a fixed-size debugger dump.
 
 ## Current known state
 
-- Phase 75 is the hardware-validated production baseline.
+- Phase 91 is the hardware-validated production DMA baseline. Two cold boots
+  completed 14,950 Heat frames with zero reset, protocol, transport, or Heat
+  errors. Phase 75 is retained as the previous DMA rescue entry.
 - Its coupled Phase 72 sequence eliminated the observed reset storm over a
   roughly six-hour stress session.
 - The sequence differs from captured Windows traffic: Linux sends derived
@@ -34,10 +36,11 @@ was caused by reading beyond `content_len` in a fixed-size debugger dump.
 
 ## Safe investigation order
 
-Keep Phase 75 unchanged and use a separate branch and GRUB entry for each
+Keep Phase 91 unchanged and use a separate branch and one-shot GRUB entry for each
 experiment. Change one variable at a time:
 
-1. preserve the Phase 75 sequence as the control;
+1. preserve Phase 91 as the production control and Phase 75 as the previous
+   lower-chronology comparison;
 2. retain Phase 82 only as an observation: its one-byte `SET_FEATURE 0x70`
    startup was noisy before stabilizing and did not replace the control;
 3. retain Phase 80/81 host-fault safeguards independently from feature/report
@@ -49,8 +52,9 @@ experiment. Change one variable at a time:
    `ff ff ff ff`, so Phase 89 restores Linux's normal GPI ring geometry while
    retaining the Windows upper chronology; Phase 89 returned the same header,
    so Phase 90 isolated Phase 75 versus Windows power/reset ordering and
-   reached Heat; Phase 91 now isolates the measured Windows response cadence
-   after an immediate Linux second-header read preceded the live reset storm;
+   reached Heat; Phase 91 applies the measured Windows response cadence after
+   an immediate Linux second-header read preceded the live reset storm, and is
+   now validated across normal and immediate-login cold-boot stress;
 5. use the completed Windows producer trace and the decoded resource/logger
    evidence in
    [WINDOWS_REPORT09_FEEDBACK_RE.md](WINDOWS_REPORT09_FEEDBACK_RE.md) to locate

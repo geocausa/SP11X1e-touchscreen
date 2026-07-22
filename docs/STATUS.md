@@ -2,24 +2,26 @@
 
 ## Production baseline
 
-Phase 75 is the current hardware-validated baseline for the OLED Surface Pro
+Phase 91 is the current hardware-validated baseline for the OLED Surface Pro
 11 (`MSHW0485`) on `7.1.3-sp11-baseline1+`:
 
 - QSPI protocol 9 over GPI-DMA;
+- Phase 75's Linux-integrated lower transport and power/reset sequence;
+- recovered Windows upper initialization and bounded CFU no-update chronology;
+- Windows-measured 490--550 microsecond header/body cadence and one complete
+  response per IRQ;
 - raw Heat report decoding and up to ten type-B multi-touch slots;
 - single-finger input, dragging, two-finger pinch/zoom, and three-finger
   desktop gestures;
-- empirically validated Phase 72 exchange (`GET 0x70 = 02`, derived
-  `SET 0x70 = 01 02`, `OUTPUT 0x09 = 8e 02`), whose benefit is not yet
-  causally isolated and whose bytes do not reproduce the captured Windows
-  exchange;
-- bounded class-3 reset recovery;
+- bounded class-3 and host-fault recovery;
 - distinct production and FIFO module/DT identities;
-- zero panel resets and zero transport errors in the Phase 75 validation boot.
+- 14,950 Heat frames across two cold boots with zero panel resets, invalid
+  headers, transport faults, host-fault recoveries, or Heat errors.
 
 The production driver is `phase55/modules/mshw0485_touch.c`. Running `make`
-builds its matched client, GENI controller, and GPI-DMA modules. Phase 73 and
-the 7.1.3 FIFO build remain bootable fallbacks.
+builds its matched client, GENI controller, and GPI-DMA modules. Phase 75 is
+the previous DMA rescue image and the 7.1.3 FIFO build is the final fallback.
+See [BASELINE_DMA_PHASE91.md](BASELINE_DMA_PHASE91.md).
 
 The corrected KDNET interpretation is recorded in
 [PHASE72_KDNET_ERRATUM.md](PHASE72_KDNET_ERRATUM.md). It retracts the former
@@ -68,8 +70,7 @@ natural panel-reset branch has not yet been exercised by a captured reset; see
   measured Windows header/body delay and one-response-per-interrupt policy.
   Two Phase 91 cold boots, including immediate login-screen stress, completed
   14,950 Heat frames with zero resets, invalid headers, or transport faults,
-  making it the strongest validated candidate while Phase 75 remains the saved
-  default. See
+  making it the promoted production baseline. See
   [PHASE84_HARDWARE_RESULT.md](PHASE84_HARDWARE_RESULT.md),
   [PHASE87_HARDWARE_RESULT.md](PHASE87_HARDWARE_RESULT.md),
   [PHASE87_LINUX_LINK_HEAT.md](PHASE87_LINUX_LINK_HEAT.md), and

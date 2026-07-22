@@ -44,6 +44,9 @@ PHASE90_BOOT = ROOT / "boot" / "76_sp11_713_phase90_phase75_power_heat"
 PHASE90_DEPLOY = ROOT / "scripts" / "deploy_phase90_phase75_power_heat.sh"
 PHASE91_BOOT = ROOT / "boot" / "77_sp11_713_phase91_windows_cadence"
 PHASE91_DEPLOY = ROOT / "scripts" / "deploy_phase91_windows_cadence.sh"
+DMA_BASELINE_BOOT = ROOT / "boot" / "60_sp11_713_dma_baseline"
+DMA_PREVIOUS_BOOT = ROOT / "boot" / "61_sp11_713_dma_previous"
+DMA_BASELINE_PROMOTE = ROOT / "scripts" / "promote_phase91_dma_baseline.sh"
 
 
 def function_body(source: str, name: str) -> str:
@@ -104,6 +107,11 @@ class SourceInvariantTests(unittest.TestCase):
         cls.phase90_deploy = PHASE90_DEPLOY.read_text(encoding="utf-8")
         cls.phase91_boot = PHASE91_BOOT.read_text(encoding="utf-8")
         cls.phase91_deploy = PHASE91_DEPLOY.read_text(encoding="utf-8")
+        cls.dma_baseline_boot = DMA_BASELINE_BOOT.read_text(encoding="utf-8")
+        cls.dma_previous_boot = DMA_PREVIOUS_BOOT.read_text(encoding="utf-8")
+        cls.dma_baseline_promote = DMA_BASELINE_PROMOTE.read_text(
+            encoding="utf-8"
+        )
 
     def test_default_build_is_the_production_dma_set(self):
         self.assertIn("all: production", self.root_makefile)
@@ -546,6 +554,41 @@ class SourceInvariantTests(unittest.TestCase):
         probe = function_body(self.source, "g6ts_probe")
         self.assertIn(
             "g6ts_windows_read_cadence && !g6ts_windows_init_parity", probe
+        )
+
+    def test_promoted_dma_baseline_is_phase91_with_two_fallbacks(self):
+        for token in (
+            "mshw0485_touch.windows_init_parity=1",
+            "mshw0485_touch.parity_linux_power=1",
+            "mshw0485_touch.windows_read_cadence=1",
+            "mshw0485_touch.parity_cfu_inventory=1",
+            "mshw0485_touch.parity_heat_input=1",
+            "mshw0485_touch.behavior_v2=1",
+            "mshw0485_touch.host_fault_recovery=1",
+            "mshw0485_touch.ready_quiesce=1",
+        ):
+            self.assertIn(token, self.phase91_boot)
+            self.assertIn(token, self.dma_baseline_boot)
+        for token in (
+            "spi_geni_qcom.sp11_windows_se_init=1",
+            "gpi.sp11_windows_ring_layout=1",
+            "gpi.sp11_qspi_linux_link=1",
+        ):
+            self.assertNotIn(token, self.dma_baseline_boot)
+        self.assertIn("--id 'sp11-dma-baseline'", self.dma_baseline_boot)
+        self.assertIn("--id 'sp11-dma-previous'", self.dma_previous_boot)
+        self.assertIn(
+            "mshw0485_touch.mode_config_fix=1", self.dma_previous_boot
+        )
+        self.assertIn(
+            "grub-set-default sp11-dma-baseline", self.dma_baseline_promote
+        )
+        self.assertIn(
+            "grub-archive/$stamp", self.dma_baseline_promote
+        )
+        self.assertIn(
+            "sp11-baseline-fifo sp11-dma-baseline sp11-dma-previous",
+            self.dma_baseline_promote,
         )
 
     def test_windows_controller_init_is_guarded_and_exactly_ordered(self):

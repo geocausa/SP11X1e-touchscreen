@@ -1,17 +1,20 @@
 # Surface Pro 11 X Elite touchscreen driver
 
 Linux support for the `MSHW0485` G6 touchscreen in the OLED Microsoft Surface
-Pro 11. The hardware-validated production baseline is Phase 75: QSPI/GPI-DMA
-multi-touch on `7.1.3-sp11-baseline1+`, with a unique `mshw0485_touch` module
-identity and the empirically stable Phase 72 exchange. See
+Pro 11. The hardware-validated production baseline is Phase 91: QSPI/GPI-DMA
+multi-touch on `7.1.3-sp11-baseline1+`, with the recovered Windows upper
+initialization chronology and measured response cadence. Two cold boots,
+including immediate login-screen stress, completed 14,950 Heat frames with no
+reset, invalid header, or transport error. See
+[docs/BASELINE_DMA_PHASE91.md](docs/BASELINE_DMA_PHASE91.md) and
 [docs/STATUS.md](docs/STATUS.md) for the exact supported, experimental, and
 unsupported boundaries.
 
-The repository retains two rollback paths: Phase 73 provides the same DMA
-behavior under the historical `g6ts_biosref` name, and the 7.1.3 FIFO entry
-provides the UEFI-derived single-touch implementation. The deliberately
-resetting Phase 74 code is excluded from production; only its negative result
-is documented.
+The installed boot layout retains two rollback paths: the previous Phase 75 DMA
+image and the 7.1.3 FIFO image. Historical experimental menu scripts are
+archived during promotion, while their boot assets and repository recipes are
+preserved. The deliberately resetting Phase 74 code is excluded from
+production; only its negative result is documented.
 
 Phase 76 is a separate, opt-in behavior experiment over the unchanged Phase 75
 transport and recovery baseline. It combines recovered sensor-space
@@ -61,7 +64,8 @@ completed that chronology and delivered 1,984 valid Heat frames, but an
 immediate second header read desynchronized the stream and preceded six panel
 resets. Phase 91 applies the cadence measured from 1,381 stable Windows frames.
 Two Phase 91 cold boots, including immediate login-screen stress, processed
-14,950 Heat frames with no panel reset, invalid header, or transport fault.
+14,950 Heat frames with no panel reset, invalid header, or transport fault;
+Phase 91 is therefore the promoted DMA baseline.
 See
 [docs/PHASE87_HARDWARE_RESULT.md](docs/PHASE87_HARDWARE_RESULT.md) and
 [docs/PHASE88_LINUX_SE_WINDOWS_HEAT.md](docs/PHASE88_LINUX_SE_WINDOWS_HEAT.md),
@@ -283,14 +287,12 @@ and the 68-by-46 sensor geometry. They do not yet prove that HID Feature
 `0x70` is the report-mode selector; see
 [docs/FIRMWARE_RESOURCE_CONTAINER.md](docs/FIRMWARE_RESOURCE_CONTAINER.md).
 
-With Phase 72 the driver now delivers stable multi-touch: the long-standing
-class-3 panel-reset storm is eliminated and the touchscreen survives sustained
-stress without watchdog resets. It is still not ready for a mainline submission.
+Phase 72 first delivered sustained multi-touch without the earlier class-3
+reset storm, providing the control that led through Phase 75 to Phase 91. The
+driver is still not ready for a mainline submission.
 Labelled palm and physical-edge captures, measured edge calibration, pressure,
 merged-contact separation, suspend/resume hardware validation, and broader
-kernel compatibility remain open. The Phase 72 sequence has been validated
-over a single multi-hour session and should accrue longer soak time before
-promotion to the default boot entry. Pen support is deliberately out of scope.
+kernel compatibility remain open. Pen support is deliberately out of scope.
 
 Phase 73 re-homes the full QSPI/GPI-DMA multi-touch stack and the Phase 72
 sequence onto the `7.1.3` baseline kernel, retiring the `7.1.1`
@@ -304,8 +306,8 @@ it. On `7.1.3-sp11-baseline1+` with the DMA device tree live, touch initialized
 over GPI-DMA with no timeout, the Phase 72 combined exchange ran, and the panel
 initialized with zero resets. At that point this was the furthest project
 milestone: a working DMA multi-touch touchscreen on the intended baseline
-kernel. It is not full Windows parity. Phase 75 subsequently became the saved
-production baseline after separating the driver identity. See
+kernel. It is not full Windows parity. Phase 75 subsequently became the first
+saved DMA production baseline after separating the driver identity. See
 [docs/PHASE73_BASELINE_DMA.md](docs/PHASE73_BASELINE_DMA.md) and
 [dts/PHASE73_BASELINE_DMA_DTB.patch.md](dts/PHASE73_BASELINE_DMA_DTB.patch.md).
 
@@ -318,8 +320,9 @@ silently referring to different implementations under the same name. See
 [docs/PHASE75_DRIVER_IDENTITY.md](docs/PHASE75_DRIVER_IDENTITY.md).
 It has now booted successfully on the 7.1.3 baseline with the renamed client,
 explicit DMA device tree, zero panel resets, zero transport errors, and normal
-single- and multi-touch behaviour. Phase 75 is the saved default; Phase 73 and
-the FIFO baseline remain rollback entries.
+single- and multi-touch behaviour. Phase 75 is retained as the previous DMA
+rescue image after the Phase 91 promotion; the FIFO baseline remains the final
+rollback entry.
 
 ## Repository layout
 
@@ -328,6 +331,8 @@ Kbuild
 src/g6ts_biosref.c
 src/spi-geni-qcom.c
 phase55/modules/mshw0485_touch.c
+phase55/modules/spi-geni-qcom.c
+phase55/modules/gpi.c
 include/linux/spi/spi-geni-qcom-biosref.h
 dts/x1-microsoft-denali.dtsi
 docs/BUILD.md
@@ -364,6 +369,7 @@ docs/PHASE78_RESET_STORM_BREAKER.md
 docs/PHASE80_HOST_FAULT_RECOVERY.md
 docs/PHASE81_READY_QUIESCE.md
 docs/PHASE82_SET70_LENGTH.md
+docs/BASELINE_DMA_PHASE91.md
 docs/KDNET_20260718_LIFECYCLE_CAPTURE.md
 docs/KDNET_20260718_FULL_SESSION_AUDIT.md
 docs/TOUCH_FIRMWARE_UPDATE_RE.md
@@ -397,6 +403,9 @@ scripts/deploy_phase77_recovery.sh
 scripts/deploy_phase80_host_recovery.sh
 scripts/deploy_phase81_ready_quiesce.sh
 scripts/deploy_phase82_set70.sh
+scripts/deploy_phase91_windows_cadence.sh
+scripts/promote_phase91_dma_baseline.sh
+scripts/package_dma_baseline.sh
 boot/57_sp11_711_phase70_orchestrator
 boot/58_sp11_711_phase71_score3
 boot/59_sp11_711_phase72_config
@@ -407,6 +416,8 @@ boot/64_sp11_713_phase77_recovery
 boot/67_sp11_713_phase80_host_recovery
 boot/68_sp11_713_phase81_ready_quiesce
 boot/69_sp11_713_phase82_set70
+boot/60_sp11_713_dma_baseline
+boot/61_sp11_713_dma_previous
 tests/test_heat_decoder.py
 tests/test_contact_tracker.py
 tests/test_windows_classifier.py
@@ -445,7 +456,7 @@ whole-device crashes.
 - QUP1 SE2 at `0x0a88000`
 - Ubuntu Concept kernel `7.0.0-32-qcom-x1e`
 - Experimental kernel `7.1.1-sp11-gpicmp1+` for Phase 55
-- Hardware-validated production kernel `7.1.3-sp11-baseline1+` for Phase 75
+- Hardware-validated production kernel `7.1.3-sp11-baseline1+` for Phase 91
 
 ## License
 
