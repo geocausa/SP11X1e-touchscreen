@@ -55,3 +55,33 @@ SHA-256 of the filtered controller/client log at the final snapshot:
 ```text
 cafdc38b885d72818678d58a1b2dffb7613f366726e543d1924ad9f812f28cd8
 ```
+
+## Immediate-login cold-boot stress
+
+A second independent Phase 91 cold boot deliberately began touchscreen use at
+8.894 seconds, immediately at the login screen. Rapid on-screen typing and
+multi-finger stress then completed with:
+
+```text
+heat_frames=6312
+heat_errors=0
+accepted_contacts=8165
+panel_resets=0
+host_fault_recoveries=0
+irq_transport_errors=0
+irq_protocol_errors=0
+irq_drain_overflows=0
+cadence_single_response_irqs=6325
+ready_verification_failures=0
+```
+
+SHA-256 of the second filtered controller/client log:
+
+```text
+c760ff3f55655e33a80c4788cfbad742a403ba7775d992780cc3920aba2a0de4
+```
+
+Across the two boots Phase 91 processed 14,950 Heat frames with no panel reset,
+invalid header, transport fault, host-fault recovery, or Heat error. Phase 91
+is therefore the strongest validated candidate, while Phase 75 remains the
+saved boot default until a deliberate baseline promotion.

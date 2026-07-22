@@ -60,6 +60,8 @@ power/reset ordering while retaining the complete upper chronology. Phase 90
 completed that chronology and delivered 1,984 valid Heat frames, but an
 immediate second header read desynchronized the stream and preceded six panel
 resets. Phase 91 applies the cadence measured from 1,381 stable Windows frames.
+Two Phase 91 cold boots, including immediate login-screen stress, processed
+14,950 Heat frames with no panel reset, invalid header, or transport fault.
 See
 [docs/PHASE87_HARDWARE_RESULT.md](docs/PHASE87_HARDWARE_RESULT.md) and
 [docs/PHASE88_LINUX_SE_WINDOWS_HEAT.md](docs/PHASE88_LINUX_SE_WINDOWS_HEAT.md),

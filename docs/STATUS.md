@@ -65,7 +65,11 @@ natural panel-reset branch has not yet been exercised by a captured reset; see
   power/reset chronology. It completed the full upper chronology and delivered
   1,984 valid Heat frames, but one immediate second-header read desynchronized
   the stream and was followed by six panel resets. Phase 91 applies the
-  measured Windows header/body delay and one-response-per-interrupt policy. See
+  measured Windows header/body delay and one-response-per-interrupt policy.
+  Two Phase 91 cold boots, including immediate login-screen stress, completed
+  14,950 Heat frames with zero resets, invalid headers, or transport faults,
+  making it the strongest validated candidate while Phase 75 remains the saved
+  default. See
   [PHASE84_HARDWARE_RESULT.md](PHASE84_HARDWARE_RESULT.md),
   [PHASE87_HARDWARE_RESULT.md](PHASE87_HARDWARE_RESULT.md),
   [PHASE87_LINUX_LINK_HEAT.md](PHASE87_LINUX_LINK_HEAT.md), and
