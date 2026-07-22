@@ -25,9 +25,8 @@ MAX_CONTACTS = 10
 # ample margin for faster live motion while rejecting unrelated blobs.
 TRACK_MATCH_MAX = 4096
 TRACK_HOLD_FRAMES = 6
-# Two consecutive classifier-approved frames preserve the anti-ghost gate
-# while keeping short touchscreen-keyboard taps visible long enough for the
-# compositor. Weak and split candidates retain their longer evidence windows.
+# The Phase 75 baseline retains three-frame admission. Phase 76 selects two
+# frames explicitly while preserving the longer weak and split windows.
 TRACK_CONFIRM_NORMAL = 3
 TRACK_CONFIRM_WEAK = 5
 TRACK_CONFIRM_SPLIT = 8
@@ -261,11 +260,13 @@ class ContactTracker:
         match_gate: int = TRACK_MATCH_MAX,
         hold_frames: int = TRACK_HOLD_FRAMES,
         confirm_frames: int = TRACK_CONFIRM_NORMAL,
+        direct_coordinates: bool = False,
     ) -> None:
         self.max_contacts = max_contacts
         self.match_gate = match_gate
         self.hold_frames = hold_frames
         self.confirm_frames = confirm_frames
+        self.direct_coordinates = direct_coordinates
         self.tracks: dict[int, Track] = {}
 
     def _confirmation_requirement(self, sample: Measurement) -> int:
@@ -306,8 +307,12 @@ class ContactTracker:
             track.raw_x, track.raw_y = sample.x, sample.y
             track.velocity_x = sample.x - old_raw_x
             track.velocity_y = sample.y - old_raw_y
-            track.output_x = _smooth(track.output_x, sample.x)
-            track.output_y = _smooth(track.output_y, sample.y)
+            if self.direct_coordinates:
+                track.output_x = sample.x
+                track.output_y = sample.y
+            else:
+                track.output_x = _smooth(track.output_x, sample.x)
+                track.output_y = _smooth(track.output_y, sample.y)
             track.age += 1
             if not track.confirmed:
                 track.evidence += 1

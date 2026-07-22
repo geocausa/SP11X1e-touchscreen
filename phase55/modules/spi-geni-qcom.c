@@ -64,6 +64,15 @@
 #define SP11_QSPI_M_IRQ_CLEAR	0xffc07fff
 #define SP11_QSPI_S_IRQ_CLEAR	0x0fc07f3f
 
+/*
+ * Laboratory-only controller checkpoint. The default path remains unchanged;
+ * Phase 84/85 opt in to the exact qcspi8380 cold PrepareHardware sequence.
+ */
+static bool sp11_windows_se_init;
+module_param(sp11_windows_se_init, bool, 0444);
+MODULE_PARM_DESC(sp11_windows_se_init,
+		 "Use the captured Windows SP11 QSPI cold SE initialization");
+
 #define SE_SPI_DELAY_COUNTERS	0x278
 #define SPI_INTER_WORDS_DELAY_MSK	GENMASK(9, 0)
 #define SPI_CS_CLK_DELAY_MSK		GENMASK(19, 10)
@@ -161,7 +170,42 @@ static void spi_geni_sp11_qspi_prepare_hw(struct spi_geni_master *mas)
 	wmb();
 
 	dev_info_once(mas->dev,
-		      "SP11: applied KDNET QSPI 13-write SE init before GPI channel start\n");
+		      "SP11: applied Linux-integrated QSPI SE preparation before GPI channel start\n");
+}
+
+static void spi_geni_sp11_qspi_prepare_windows_hw(struct spi_geni_master *mas)
+{
+	struct geni_se *se = &mas->se;
+
+	if (!spi_geni_is_sp11_qspi(mas))
+		return;
+
+	/* qcspi8380 skips this block when the FIFO interface is disabled. */
+	if (readl(se->base + GENI_IF_DISABLE_RO) & FIFO_IF_DISABLE) {
+		dev_info_once(mas->dev,
+			      "SP11: Windows SE init guard skipped 13-write block\n");
+		return;
+	}
+
+	/* Exact FUN_14001b3c8 write order, confirmed by cold KDNET capture. */
+	writel(GENI_DMA_MODE_EN, se->base + SE_GENI_DMA_MODE_EN);
+	writel(0, se->base + SE_GSI_IRQ_EN);
+	writel(0xf, se->base + SE_GSI_EVENT_EN);
+	writel(SP11_QSPI_M_IRQ_INIT, se->base + SE_GENI_M_IRQ_EN);
+	writel(SP11_QSPI_S_IRQ_INIT, se->base + SE_GENI_S_IRQ_EN);
+	writel(0xf, se->base + SE_DMA_TX_IRQ_MSK);
+	writel(0xd, se->base + SE_DMA_TX_IRQ_EN);
+	writel(0xfff, se->base + SE_DMA_RX_IRQ_MSK);
+	writel(0x1d, se->base + SE_DMA_RX_IRQ_EN);
+	writel(SP11_QSPI_M_IRQ_CLEAR, se->base + SE_GENI_M_IRQ_CLEAR);
+	writel(SP11_QSPI_S_IRQ_CLEAR, se->base + SE_GENI_S_IRQ_CLEAR);
+	writel(0xf, se->base + SE_DMA_TX_IRQ_CLR);
+	writel(0xfff, se->base + SE_DMA_RX_IRQ_CLR);
+	/* Publish the complete Windows SE sequence before channel allocation. */
+	wmb();
+
+	dev_info_once(mas->dev,
+		      "SP11: applied exact Windows QSPI cold SE init sequence\n");
 }
 
 static void spi_geni_sp11_qspi_arm_live(struct spi_geni_master *mas)
@@ -863,6 +907,8 @@ static int setup_gsi_xfer(struct spi_transfer *xfer, struct spi_geni_master *mas
 
 	spi_gsi_fill_config(mas, spi_slv, &peripheral, peripheral.rx_len,
 			    peripheral.cmd);
+	if (sp11_windows_se_init)
+		spi_geni_sp11_qspi_arm_live(mas);
 
 	ret = get_spi_clk_cfg(mas->cur_speed_hz, mas,
 			      &peripheral.clk_src, &peripheral.clk_div);
@@ -1071,7 +1117,9 @@ static int spi_geni_init(struct spi_geni_master *mas)
 	 * Hardware programming guide suggests to configure
 	 * RX FIFO RFR level to fifo_depth-2.
 	 */
-	geni_se_init(se, mas->tx_fifo_depth - 3, mas->tx_fifo_depth - 2);
+	if (!sp11_windows_se_init || !spi_geni_is_sp11_qspi(mas))
+		geni_se_init(se, mas->tx_fifo_depth - 3,
+			     mas->tx_fifo_depth - 2);
 	/* Transmit an entire FIFO worth of data per IRQ */
 	mas->tx_wm = 1;
 	ver = geni_se_get_qup_hw_version(se);
@@ -1097,12 +1145,17 @@ static int spi_geni_init(struct spi_geni_master *mas)
 		 * vs. previously reaching real TRE/event processing).
 		 * Rely on the TZ-provided firmware as before.
 		 */
-		spi_geni_sp11_qspi_prepare_hw(mas);
+		if (sp11_windows_se_init)
+			spi_geni_sp11_qspi_prepare_windows_hw(mas);
+		else
+			spi_geni_sp11_qspi_prepare_hw(mas);
 		ret = spi_geni_grab_gpi_chan(mas);
 		if (!ret) {
 			mas->cur_xfer_mode = GENI_GPI_DMA;
-			geni_se_select_mode(se, GENI_GPI_DMA);
-			spi_geni_sp11_qspi_arm_live(mas);
+			if (!sp11_windows_se_init) {
+				geni_se_select_mode(se, GENI_GPI_DMA);
+				spi_geni_sp11_qspi_arm_live(mas);
+			}
 			dev_info(mas->dev, "SP11: QSPI using GPI DMA descriptor mode\n");
 			goto setup_cs;
 		} else if (ret == -EPROBE_DEFER) {

@@ -19,6 +19,7 @@ WINDOWS_SIGNAL_ZERO = 180
 HEAT_THRESHOLD = 9
 WINDOWS_ACTIVE_MAX = WINDOWS_SIGNAL_ZERO - HEAT_THRESHOLD
 WINDOWS_STRONG_MAX = 162
+WINDOWS_NORMAL_CENTROID_BASELINE = 171
 MIN_CONTACT_PIXELS = 3
 PALM_MAX_PIXELS = 48
 PALM_MAX_SPAN = 12
@@ -459,6 +460,37 @@ def connected_components(
         )
     components.sort(key=lambda item: item["strength"], reverse=True)
     return components
+
+
+def phase76_output_centroid(
+    grid: bytes, component: dict[str, object]
+) -> tuple[int, int]:
+    """Mirror the kernel's fixed-point normal FUN_180047078 centroid branch.
+
+    Project 0x0c83 selects level-table index 171 when the captured ordinary
+    context flags are clear. The linear signal scale cancels from the weighted
+    ratio, leaving integer weights ``171 - raw``. Assignment continues to use
+    the detector centroid; this result is only the final Linux output point.
+    """
+    pixels = tuple(int(index) for index in component["pixel_indices"])
+    weighted_x = 0
+    weighted_y = 0
+    total = 0
+    for index in pixels:
+        value = grid[index]
+        if value >= WINDOWS_NORMAL_CENTROID_BASELINE:
+            continue
+        weight = WINDOWS_NORMAL_CENTROID_BASELINE - value
+        row, column = divmod(index, GRID_COLS)
+        weighted_x += column * weight
+        weighted_y += row * weight
+        total += weight
+    if not total:
+        return int(component["x32767"]), int(component["y32767"])
+    return (
+        weighted_x * 32767 // (total * (GRID_COLS - 1)),
+        weighted_y * 32767 // (total * (GRID_ROWS - 1)),
+    )
 
 
 def secondary_detector_features(

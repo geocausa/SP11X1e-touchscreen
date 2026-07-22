@@ -253,6 +253,25 @@ enum msm_gpi_tce_code {
 #define EV_FACTOR		(2)
 #define REQ_OF_DMA_ARGS		(5) /* # of arguments required from client */
 #define CHAN_TRES		64
+#define SP11_WINDOWS_CHAN_TRES	16
+#define SP11_WINDOWS_EVENT_TRES	32
+
+/* Exact qcspi/qcgpi ring geometry, isolated to the Windows-parity laboratory. */
+static bool sp11_windows_ring_layout;
+module_param(sp11_windows_ring_layout, bool, 0444);
+MODULE_PARM_DESC(sp11_windows_ring_layout,
+		 "Use the captured Windows SP11 QSPI transfer/event ring sizes");
+
+/*
+ * Phase 84 proved that removing LINK together with the Windows ring geometry
+ * leaves Linux's pre-doorbelled RX channel stalled at the first bidirectional
+ * transfer. Keep the captured geometry while allowing the one Linux channel-
+ * coupling adaptation to be selected independently.
+ */
+static bool sp11_qspi_linux_link;
+module_param(sp11_qspi_linux_link, bool, 0444);
+MODULE_PARM_DESC(sp11_qspi_linux_link,
+		 "Add Linux-required LINK to a bidirectional SP11 QSPI GO");
 
 struct __packed xfer_compl_event {
 	u64 ptr;
@@ -2154,7 +2173,8 @@ static int gpi_create_spi_tre(struct gchan *chan, struct gpi_desc *desc,
 			 * Linux GPI context needs LINK on a bidirectional QSPI GO or
 			 * the pre-doorbelled RX ring never advances.
 			 */
-			if (spi->rx_len)
+			if (spi->rx_len &&
+			    (!sp11_windows_ring_layout || sp11_qspi_linux_link))
 				tre->dword[3] |= u32_encode_bits(1, TRE_FLAGS_LINK);
 		} else if (spi->cmd == SPI_RX) {
 			tre->dword[3] |= u32_encode_bits(1, TRE_FLAGS_IEOB);
@@ -2366,7 +2386,11 @@ static int gpi_ch_init(struct gchan *gchan)
 	}
 
 	/* allocate memory for event ring */
-	elements = CHAN_TRES << ev_factor;
+	if (sp11_windows_ring_layout &&
+	    gpii->gchan[0].protocol == QCOM_GPI_QSPI)
+		elements = SP11_WINDOWS_EVENT_TRES;
+	else
+		elements = CHAN_TRES << ev_factor;
 	ret = gpi_alloc_ring(&gpii->ev_ring, elements,
 			     sizeof(union gpi_event), gpii);
 	if (ret)
@@ -2501,12 +2525,15 @@ static int gpi_alloc_chan_resources(struct dma_chan *chan)
 {
 	struct gchan *gchan = to_gchan(chan);
 	struct gpii *gpii = gchan->gpii;
+	u32 elements = CHAN_TRES;
 	int ret;
 
 	mutex_lock(&gpii->ctrl_lock);
 
 	/* allocate memory for transfer ring */
-	ret = gpi_alloc_ring(&gchan->ch_ring, CHAN_TRES,
+	if (sp11_windows_ring_layout && gchan->protocol == QCOM_GPI_QSPI)
+		elements = SP11_WINDOWS_CHAN_TRES;
+	ret = gpi_alloc_ring(&gchan->ch_ring, elements,
 			     sizeof(struct gpi_tre), gpii);
 	if (ret)
 		goto xfer_alloc_err;

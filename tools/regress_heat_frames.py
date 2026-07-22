@@ -33,6 +33,7 @@ from tools.decode_heat_frame import (
     modal_baseline,
     parse_metadata_records,
     parse_sections,
+    phase76_output_centroid,
     windows_classifier_features,
 )
 from tools.extract_windows_classifier import ProjectClassifier
@@ -121,6 +122,8 @@ def main() -> int:
     y_values: list[float] = []
     axis_ratios: list[float] = []
     normalized_spreads: list[float] = []
+    phase76_delta_x: list[float] = []
+    phase76_delta_y: list[float] = []
     classifier_classes: Counter[int] = Counter()
     classifier_mismatches = 0
     peak_count_distribution: Counter[tuple[int, int]] = Counter()
@@ -208,6 +211,9 @@ def main() -> int:
             y_values.append(contact["y32767"])
             axis_ratios.append(contact["axis_ratio"])
             normalized_spreads.append(contact["normalized_spread"])
+            phase76_x, phase76_y = phase76_output_centroid(grid, contact)
+            phase76_delta_x.append(abs(phase76_x - contact["x32767"]))
+            phase76_delta_y.append(abs(phase76_y - contact["y32767"]))
             if assignment_scales is not None:
                 strength = int(contact["strength"])
                 weighted_x = round(float(contact["col"]) * strength)
@@ -315,6 +321,13 @@ def main() -> int:
             f"axis_ratio:{min(axis_ratios):.6f}..{max(axis_ratios):.6f} "
             f"normalized_spread:{min(normalized_spreads):.6f}.."
             f"{max(normalized_spreads):.6f}"
+        )
+        print(
+            "phase76_normal_centroid_delta="
+            f"x_mean:{sum(phase76_delta_x) / len(phase76_delta_x):.3f} "
+            f"x_max:{max(phase76_delta_x):.3f} "
+            f"y_mean:{sum(phase76_delta_y) / len(phase76_delta_y):.3f} "
+            f"y_max:{max(phase76_delta_y):.3f}"
         )
     if classifier is not None:
         print(

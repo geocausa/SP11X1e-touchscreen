@@ -115,6 +115,21 @@ class ContactTrackerTests(unittest.TestCase):
         self.assertEqual(tracker.update([point(12000, 8000)]), [])
         self.assertEqual(tracker.update([]), [])
 
+    def test_phase76_emits_strong_contact_on_second_frame(self):
+        tracker = ContactTracker(confirm_frames=2, direct_coordinates=True)
+
+        self.assertEqual(tracker.update([point(12000, 8000)]), [])
+        reported = tracker.update([point(12040, 8020)])
+        self.assertEqual([(item.x, item.y) for item in reported], [(12040, 8020)])
+
+    def test_phase76_keeps_weak_and_split_admission_windows(self):
+        tracker = ContactTracker(confirm_frames=2, direct_coordinates=True)
+        weak = Measurement(x=12000, y=8000, pixels=2, strength=30)
+
+        for _ in range(4):
+            self.assertEqual(tracker.update([weak]), [])
+        self.assertEqual(len(tracker.update([weak])), 1)
+
     def test_nearby_weak_split_requires_long_history(self):
         tracker = ContactTracker()
         primary = point(12000, 8000)

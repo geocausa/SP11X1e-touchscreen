@@ -1,17 +1,80 @@
 # Surface Pro 11 X Elite touchscreen driver
 
 Linux support for the `MSHW0485` G6 touchscreen in the OLED Microsoft Surface
-Pro 11. The hardware-validated production baseline is Phase 75: QSPI/GPI-DMA
-multi-touch on `7.1.3-sp11-baseline1+`, with a unique `mshw0485_touch` module
-identity and the empirically stable Phase 72 exchange. See
+Pro 11. The hardware-validated production baseline is Phase 91: QSPI/GPI-DMA
+multi-touch on `7.1.3-sp11-baseline1+`, with the recovered Windows upper
+initialization chronology and measured response cadence. Two cold boots,
+including immediate login-screen stress, completed 14,950 Heat frames with no
+reset, invalid header, or transport error. See
+[docs/BASELINE_DMA_PHASE91.md](docs/BASELINE_DMA_PHASE91.md) and
 [docs/STATUS.md](docs/STATUS.md) for the exact supported, experimental, and
 unsupported boundaries.
 
-The repository retains two rollback paths: Phase 73 provides the same DMA
-behavior under the historical `g6ts_biosref` name, and the 7.1.3 FIFO entry
-provides the UEFI-derived single-touch implementation. The deliberately
-resetting Phase 74 code is excluded from production; only its negative result
-is documented.
+The installed boot layout retains two rollback paths: the previous Phase 75 DMA
+image and the 7.1.3 FIFO image. Historical experimental menu scripts are
+archived during promotion, while their boot assets and repository recipes are
+preserved. The deliberately resetting Phase 74 code is excluded from
+production; only its negative result is documented.
+
+Phase 76 is a separate, opt-in behavior experiment over the unchanged Phase 75
+transport and recovery baseline. It combines recovered sensor-space
+assignment, a bounded normal output-centroid branch, direct coordinates, and
+the previously hardware-tested two-frame strong-contact gate. It remains a
+one-shot GRUB test until live keyboard, edge, crossing-finger, and reset
+validation is complete. See
+[docs/PHASE76_BEHAVIOR.md](docs/PHASE76_BEHAVIOR.md).
+
+An isolated `windows_init_parity` path now rebuilds cold bring-up independently
+of Heat/contact processing. It validates the exact SP11 HID-SPI descriptor
+identity, reconstructs Windows' initial A1/A5 feedback from explicit provider
+state, and reproduces the device-config `0x05/0x70/0x56` exchanges. Touch input
+remains deliberately disabled and the path stops before the independently
+owned CFU `0x60/0x65` traffic. The installed CFU owner and its complete
+no-update response path are now decoded for a later isolated checkpoint; they
+do not alter Phase 84 and no firmware payload path is implemented. See
+[docs/WINDOWS_INIT_PARITY.md](docs/WINDOWS_INIT_PARITY.md) and
+[docs/WINDOWS_CFU_BOUNDARY.md](docs/WINDOWS_CFU_BOUNDARY.md). The matching
+guarded QSPI controller initialization is documented in
+[docs/WINDOWS_CONTROLLER_INIT_PARITY.md](docs/WINDOWS_CONTROLLER_INIT_PARITY.md).
+
+Phase 86 preserves those input-disabled checkpoints but continues the complete
+Windows init and bounded CFU no-update chronology into ordinary Heat
+consumption. It enables the separately tested Phase 76 contact profile and
+opens input only after every preceding response validates; no additional mode
+command and no firmware payload are sent. See
+[docs/PHASE86_WINDOWS_HEAT.md](docs/PHASE86_WINDOWS_HEAT.md).
+
+The first Phase 84 hardware boot stopped at the initial reset-response RX
+transfer: exact Windows GO flags did not advance Linux's pre-doorbelled RX
+ring. Phase 87 retains the recovered Windows initialization and ring sizes but
+adds the explicitly labelled Linux `LINK` coupling before continuing into the
+same CFU/Heat path. See
+[docs/PHASE84_HARDWARE_RESULT.md](docs/PHASE84_HARDWARE_RESULT.md) and
+[docs/PHASE87_LINUX_LINK_HEAT.md](docs/PHASE87_LINUX_LINK_HEAT.md).
+
+Phase 87 proved that `LINK` removes the DMA timeout, but the first completed
+read still contained no valid reset header after the ready line deasserted.
+Phase 88 keeps the Windows upper chronology and captured ring sizes while
+restoring Linux's generic GENI initialization and mode selection. Its untouched
+hardware boot completed with `ff ff ff ff`, so Phase 89 restores the remaining
+Phase 75 lower-stack property: Linux's normal GPI ring geometry. Phase 89 also
+returned `ff ff ff ff`, ruling out the lower transport; Phase 90 isolates the
+power/reset ordering while retaining the complete upper chronology. Phase 90
+completed that chronology and delivered 1,984 valid Heat frames, but an
+immediate second header read desynchronized the stream and preceded six panel
+resets. Phase 91 applies the cadence measured from 1,381 stable Windows frames.
+Two Phase 91 cold boots, including immediate login-screen stress, processed
+14,950 Heat frames with no panel reset, invalid header, or transport fault;
+Phase 91 is therefore the promoted DMA baseline.
+See
+[docs/PHASE87_HARDWARE_RESULT.md](docs/PHASE87_HARDWARE_RESULT.md) and
+[docs/PHASE88_LINUX_SE_WINDOWS_HEAT.md](docs/PHASE88_LINUX_SE_WINDOWS_HEAT.md),
+[docs/PHASE88_HARDWARE_RESULT.md](docs/PHASE88_HARDWARE_RESULT.md), and
+[docs/PHASE89_LINUX_TRANSPORT_WINDOWS_HEAT.md](docs/PHASE89_LINUX_TRANSPORT_WINDOWS_HEAT.md),
+[docs/PHASE89_HARDWARE_RESULT.md](docs/PHASE89_HARDWARE_RESULT.md), and
+[docs/PHASE90_PHASE75_POWER_WINDOWS_HEAT.md](docs/PHASE90_PHASE75_POWER_WINDOWS_HEAT.md),
+[docs/PHASE90_HARDWARE_RESULT.md](docs/PHASE90_HARDWARE_RESULT.md), and
+[docs/PHASE91_WINDOWS_READ_CADENCE.md](docs/PHASE91_WINDOWS_READ_CADENCE.md).
 
 ## Historical FIFO baseline: Phase 52
 
@@ -162,7 +225,8 @@ Phase 72 closes the frequent class-3 panel-reset regression that Phases 66-68
 narrowed but could not resolve. A live KDNET session against the shipping
 Windows stack (Surface Pro 11, build 26100, resolved `hidspi.sys` PDB symbols)
 confirmed that 63-byte report `0x09` participates in initialization and
-device-reset recovery and that report `0x65` is cold-boot-only. Phase 72 then
+host-reset/shallow-wake setup and that report `0x65` is cold-boot-only. A
+natural panel-initiated reset was not captured. Phase 72 then
 captured Linux's one-byte `GET_FEATURE 0x70` result (`02`), sent derived
 `SET_FEATURE 0x70 = {0x01,0x02}`, and emitted short
 `OUTPUT_REPORT 0x09 = {0x8e,0x02}`. The combined sequence produced zero panel
@@ -178,14 +242,57 @@ byte-for-byte Windows traffic. See
 [docs/PHASE72_LIVE_KDNET_ROOT_CAUSE.md](docs/PHASE72_LIVE_KDNET_ROOT_CAUSE.md)
 and [docs/PHASE72_KDNET_ERRATUM.md](docs/PHASE72_KDNET_ERRATUM.md).
 
-With Phase 72 the driver now delivers stable multi-touch: the long-standing
-class-3 panel-reset storm is eliminated and the touchscreen survives sustained
-stress without watchdog resets. It is still not ready for a mainline submission.
+The returned July lifecycle capture closes another concrete gap: Windows
+actively resets and re-enumerates after a host-side HID-SPI timeout, whereas
+the Linux IRQ reader could stop permanently on a transport, framing, or drain
+failure. Phase 80 adds an isolated, bounded host-fault recovery using the
+existing cold path and separate diagnostics; it deliberately retains the
+Phase 72 mode exchange because five complete report-`0x09` variants contain
+lifecycle-dependent fields. See
+[docs/KDNET_20260718_LIFECYCLE_CAPTURE.md](docs/KDNET_20260718_LIFECYCLE_CAPTURE.md)
+and [docs/PHASE80_HOST_FAULT_RECOVERY.md](docs/PHASE80_HOST_FAULT_RECOVERY.md).
+
+An end-to-end audit of both July 18 sessions corrects the remaining scope:
+none of the armed natural panel-reset breakpoints fired. The captured resets
+were cold-start or host-timeout/debugger-perturbed paths, and the outgoing
+setup writes came from several collection and lifecycle owners. A proposed
+single static 63-byte report-`0x09` experiment was therefore discarded before
+build or deployment. See
+[docs/KDNET_20260718_FULL_SESSION_AUDIT.md](docs/KDNET_20260718_FULL_SESSION_AUDIT.md).
+
+Static analysis of the matching ARM64 TouchPenProcessor now identifies the
+report-`0x09` producer. The A1 packet is display-state feedback containing
+display state, hinge angle, and a persistent FastHostId. The A5 packet is a
+version-6 feedback-manager record containing a successful-send sequence,
+validity bitmap, current provider data, and bytes retained from earlier rich
+updates. The two captured `0x0190` fields are independently owned values that
+happened to match. This rules out treating any captured A/B/C packet as a
+fixed Windows mode command; see
+[docs/WINDOWS_REPORT09_FEEDBACK_RE.md](docs/WINDOWS_REPORT09_FEEDBACK_RE.md).
+
+The matching Microsoft CFU payload has also been safely unwrapped for static
+analysis. Its ARC image contains the exact 1,484-byte HID descriptor read from
+the live panel. The firmware version occurs in both GET report `0x60` and the
+cold-only report `0x65`, identifying `0x65` as firmware-update management
+traffic with high confidence rather than ordinary touch recovery. No firmware
+is flashed or redistributed. See
+[docs/TOUCH_FIRMWARE_UPDATE_RE.md](docs/TOUCH_FIRMWARE_UPDATE_RE.md).
+
+The ARC tail is now decoded as a tagged resource container. Besides the exact
+HID descriptor it contains a 274-command engineering description, a firmware
+logger dictionary, and the compressed Denali panel configuration. These
+resources independently confirm PRE_OS versus normal full-frame modes,
+display/hinge/FastHostId feedback, on-device calibration/noise/tracking paths,
+and the 68-by-46 sensor geometry. They do not yet prove that HID Feature
+`0x70` is the report-mode selector; see
+[docs/FIRMWARE_RESOURCE_CONTAINER.md](docs/FIRMWARE_RESOURCE_CONTAINER.md).
+
+Phase 72 first delivered sustained multi-touch without the earlier class-3
+reset storm, providing the control that led through Phase 75 to Phase 91. The
+driver is still not ready for a mainline submission.
 Labelled palm and physical-edge captures, measured edge calibration, pressure,
 merged-contact separation, suspend/resume hardware validation, and broader
-kernel compatibility remain open. The Phase 72 sequence has been validated
-over a single multi-hour session and should accrue longer soak time before
-promotion to the default boot entry. Pen support is deliberately out of scope.
+kernel compatibility remain open. Pen support is deliberately out of scope.
 
 Phase 73 re-homes the full QSPI/GPI-DMA multi-touch stack and the Phase 72
 sequence onto the `7.1.3` baseline kernel, retiring the `7.1.1`
@@ -199,8 +306,8 @@ it. On `7.1.3-sp11-baseline1+` with the DMA device tree live, touch initialized
 over GPI-DMA with no timeout, the Phase 72 combined exchange ran, and the panel
 initialized with zero resets. At that point this was the furthest project
 milestone: a working DMA multi-touch touchscreen on the intended baseline
-kernel. It is not full Windows parity. Phase 75 subsequently became the saved
-production baseline after separating the driver identity. See
+kernel. It is not full Windows parity. Phase 75 subsequently became the first
+saved DMA production baseline after separating the driver identity. See
 [docs/PHASE73_BASELINE_DMA.md](docs/PHASE73_BASELINE_DMA.md) and
 [dts/PHASE73_BASELINE_DMA_DTB.patch.md](dts/PHASE73_BASELINE_DMA_DTB.patch.md).
 
@@ -213,8 +320,9 @@ silently referring to different implementations under the same name. See
 [docs/PHASE75_DRIVER_IDENTITY.md](docs/PHASE75_DRIVER_IDENTITY.md).
 It has now booted successfully on the 7.1.3 baseline with the renamed client,
 explicit DMA device tree, zero panel resets, zero transport errors, and normal
-single- and multi-touch behaviour. Phase 75 is the saved default; Phase 73 and
-the FIFO baseline remain rollback entries.
+single- and multi-touch behaviour. Phase 75 is retained as the previous DMA
+rescue image after the Phase 91 promotion; the FIFO baseline remains the final
+rollback entry.
 
 ## Repository layout
 
@@ -223,6 +331,8 @@ Kbuild
 src/g6ts_biosref.c
 src/spi-geni-qcom.c
 phase55/modules/mshw0485_touch.c
+phase55/modules/spi-geni-qcom.c
+phase55/modules/gpi.c
 include/linux/spi/spi-geni-qcom-biosref.h
 dts/x1-microsoft-denali.dtsi
 docs/BUILD.md
@@ -252,12 +362,34 @@ docs/PHASE71_SCORE3_PRODUCER.md
 docs/PHASE72_LIVE_KDNET_ROOT_CAUSE.md
 docs/PHASE72_KDNET_ERRATUM.md
 docs/PHASE73_BASELINE_DMA.md
+docs/PHASE75_DRIVER_IDENTITY.md
+docs/PHASE76_BEHAVIOR.md
+docs/PHASE77_GATED_RECOVERY.md
+docs/PHASE78_RESET_STORM_BREAKER.md
+docs/PHASE80_HOST_FAULT_RECOVERY.md
+docs/PHASE81_READY_QUIESCE.md
+docs/PHASE82_SET70_LENGTH.md
+docs/BASELINE_DMA_PHASE91.md
+docs/KDNET_20260718_LIFECYCLE_CAPTURE.md
+docs/KDNET_20260718_FULL_SESSION_AUDIT.md
+docs/TOUCH_FIRMWARE_UPDATE_RE.md
+docs/FIRMWARE_RESOURCE_CONTAINER.md
 phase55/
 tools/analyze_spb_etw_csv.py
 tools/decode_heat_frame.py
 tools/extract_windows_classifier.py
 tools/extract_windows_lifecycle.py
 tools/generate_lifecycle_header.py
+tools/extract_kdnet_hidspi.py
+tools/extract_cfu_payload.py
+tools/extract_firmware_resources.py
+tools/ghidra/SeedArcFirmware.java
+tools/ghidra/SearchStringXrefs.java
+tools/ghidra/SearchAddressXrefs.java
+tools/ghidra/SearchPointerEncodings.java
+tools/ghidra/DumpMemoryRange.java
+tools/ghidra/ExportMemoryRange.java
+tools/ghidra/DumpFunctions.java
 tools/windows_tracking_geometry.py
 tools/regress_heat_frames.py
 tools/track_heat_contacts.py
@@ -265,15 +397,35 @@ scripts/deploy_phase70.sh
 scripts/deploy_phase71.sh
 scripts/deploy_phase72.sh
 scripts/deploy_phase73_dma.sh
+scripts/deploy_phase75_identity.sh
+scripts/deploy_phase76_behavior.sh
+scripts/deploy_phase77_recovery.sh
+scripts/deploy_phase80_host_recovery.sh
+scripts/deploy_phase81_ready_quiesce.sh
+scripts/deploy_phase82_set70.sh
+scripts/deploy_phase91_windows_cadence.sh
+scripts/promote_phase91_dma_baseline.sh
+scripts/package_dma_baseline.sh
 boot/57_sp11_711_phase70_orchestrator
 boot/58_sp11_711_phase71_score3
 boot/59_sp11_711_phase72_config
 boot/60_sp11_713_phase73_dma
+boot/62_sp11_713_phase75_identity
+boot/63_sp11_713_phase76_behavior
+boot/64_sp11_713_phase77_recovery
+boot/67_sp11_713_phase80_host_recovery
+boot/68_sp11_713_phase81_ready_quiesce
+boot/69_sp11_713_phase82_set70
+boot/60_sp11_713_dma_baseline
+boot/61_sp11_713_dma_previous
 tests/test_heat_decoder.py
 tests/test_contact_tracker.py
 tests/test_windows_classifier.py
 tests/test_windows_lifecycle.py
 tests/test_windows_tracking_geometry.py
+tests/test_kdnet_hidspi.py
+tests/test_cfu_payload.py
+tests/test_firmware_resources.py
 tests/test_source_invariants.py
 packaging/initramfs-tools/hooks/sp11-g6ts
 ```
@@ -283,10 +435,12 @@ adds the isolated BIOS-reference transfer helper required by this device.
 
 ## Safety and scope
 
-This repository does not contain Microsoft firmware, EFI binaries, firmware
-updates, captures, boot images or initramfs files. The driver does not flash
-the touchscreen and contains no CFU or FRU-unlock path. The GPI-DMA
-experiments are isolated under `phase54/` and `phase55/`.
+This repository does not contain Microsoft firmware, EFI/driver binaries,
+firmware updates, boot images, or initramfs files. It does contain the small
+July 17 textual KDNET mode-setup log needed to audit transfer boundaries; the
+larger lifecycle logs remain private and are identified only by hashes. The
+driver does not flash the touchscreen and contains no CFU or FRU-unlock path.
+The GPI-DMA experiments are isolated under `phase54/` and `phase55/`.
 
 Use a separate boot entry and retain a known-good kernel. See
 [docs/BUILD.md](docs/BUILD.md) and [docs/TESTING.md](docs/TESTING.md).
@@ -302,7 +456,7 @@ whole-device crashes.
 - QUP1 SE2 at `0x0a88000`
 - Ubuntu Concept kernel `7.0.0-32-qcom-x1e`
 - Experimental kernel `7.1.1-sp11-gpicmp1+` for Phase 55
-- Hardware-validated production kernel `7.1.3-sp11-baseline1+` for Phase 75
+- Hardware-validated production kernel `7.1.3-sp11-baseline1+` for Phase 91
 
 ## License
 
