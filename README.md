@@ -16,6 +16,15 @@ unsupported boundaries.
 > OLED SP11 and exact kernel, not a universal stability claim. Keep both
 > fallback entries.
 
+For another Surface Pro 11 OLED already running a clean upstream 7.1.3
+kernel, a source-building portable installer is available. It derives the
+missing QSPI touchscreen DTB, builds the three matched modules against that
+machine's exact kernel ABI, and creates an isolated one-shot GRUB entry without
+overwriting the stock kernel or modules. This path has passed pristine-v7.1.3
+compile and DTB validation but still awaits its first second-machine hardware
+boot. See
+[docs/PORTABLE_UPSTREAM_713.md](docs/PORTABLE_UPSTREAM_713.md).
+
 The installed boot layout retains two rollback paths: the previous Phase 75 DMA
 image and the 7.1.3 FIFO image. Historical experimental menu scripts are
 archived during promotion, while their boot assets and repository recipes are

@@ -12,6 +12,12 @@ The controller source reaches into the exact `spi-geni-qcom` implementation,
 so treat other kernel versions as ports requiring review rather than as
 drop-in compatible builds.
 
+A separate installer supports an intentionally clean upstream 7.1.3 build by
+compiling the complete GPI/GENI/client set against the recipient machine's
+exact headers and symbol versions. It does not make the prebuilt
+`7.1.3-sp11-baseline1+` modules portable. See
+[PORTABLE_UPSTREAM_713.md](PORTABLE_UPSTREAM_713.md).
+
 ## Production DMA build
 
 With the matching kernel and headers installed:
@@ -95,6 +101,17 @@ It includes the complete GPL source snapshot, the three exact-target modules,
 build identity, and SHA-256 manifests. It does not include Microsoft files.
 `scripts/package_phase68.sh` is retained only to reproduce the historical
 7.1.1 Phase 68 artifact.
+
+To create the source-only clean-upstream 7.1.3 installer bundle instead:
+
+```bash
+scripts/package_upstream_713_phase91.sh
+```
+
+That archive deliberately contains no `.ko` files. Its top-level `install.sh`
+builds on the target, checks the exact vermagic against the stock kernel,
+derives the Phase 91 DTB from the installed pristine Denali OLED DTB, and adds
+only an isolated one-shot GRUB entry.
 
 The Phase 64 panel profile is checked in as generated configuration. To
 reproduce it from a locally supplied Windows component without copying the DLL
