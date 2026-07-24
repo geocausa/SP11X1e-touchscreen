@@ -10,12 +10,9 @@ reset, invalid header, or transport error. See
 [docs/STATUS.md](docs/STATUS.md) for the exact supported, experimental, and
 unsupported boundaries.
 
-> **Validation caveat:** Phase 91 has passed two cold boots and focused
-> login/typing/multi-touch stress, but it has not yet completed an extensive
-> multi-day real-world soak. It is the best current baseline for the tested
-> OLED SP11 and exact kernel, not a universal stability claim. Keep both
-> fallback entries.
-
+> **Validation caveat:** Phase 91 has passed multiple cold boots and focused
+> login/typing/multi-touch stress and so far looks stable enough for daily driving. It is the best current baseline for the tested
+> OLED SP11 and exact kernel
 For another Surface Pro 11 OLED already running a clean upstream 7.1.3
 kernel, a source-building portable installer is available. It derives the
 missing QSPI touchscreen DTB, builds the three matched modules against that
