@@ -30,6 +30,12 @@ was caused by reading beyond `content_len` in a fixed-size debugger dump.
   bodies but only one adjacent attach-time A1/A5 pair. Report `0x09` is not a
   per-frame live-contact channel; see
   [WINDOWS_SPB_DEEP_TRACE_AUDIT.md](WINDOWS_SPB_DEEP_TRACE_AUDIT.md).
+- A fresh build-26200 Windows SPB capture after a controlled MSHW0485 PnP
+  restart reproduces the one-byte `SET_FEATURE 0x70 = 01`, the 63-byte A1/A5
+  feedback model, and 1,241 Heat bodies while showing a third valid
+  cross-owner attach interleaving. Native `logman` + `tracerpt` preserves the
+  payload stream, so this bus-level work no longer requires WPA or KDNET. See
+  [WINDOWS_SPB_20260804_LIVE_RESTART.md](WINDOWS_SPB_20260804_LIVE_RESTART.md).
 - The firmware resource CLI proves `PRE_OS` and `Normal (Full Frame)` modes and
   the panel configuration independently confirms the 68-by-46 Heat geometry.
   It does not yet connect HID Feature `0x70` to that report-mode selector.
