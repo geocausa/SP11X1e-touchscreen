@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Summarize MSHW0485 SPB buffers exported from an ETW trace.
 
-The input is the CSV produced by Windows Performance Analyzer for the
-Microsoft-Windows-SPB-ClassExtension provider.  This tool does not open ETL
-files, communicate with the touchscreen, or replay captured commands.
+The input is a CSV export of the Microsoft-Windows-SPB-ClassExtension
+provider produced by Windows Performance Analyzer or the built-in tracerpt
+tool.  This tool does not open ETL files, communicate with the touchscreen,
+or replay captured commands.
 """
 
 from __future__ import annotations
@@ -155,7 +156,9 @@ def find_report_descriptor(rx_buffers):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("csv", type=Path, help="WPA-exported SPB CSV")
+    parser.add_argument(
+        "csv", type=Path, help="WPA- or tracerpt-exported SPB CSV"
+    )
     parser.add_argument(
         "--write-report-descriptor",
         type=Path,

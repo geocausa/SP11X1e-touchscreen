@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Measure HID-SPI header/body and inter-frame cadence in a WPA SPB CSV."""
+"""Measure HID-SPI cadence in a WPA- or tracerpt-exported SPB CSV."""
 
 from __future__ import annotations
 
@@ -140,7 +140,9 @@ def print_summary(label, values):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("csv", type=Path, help="WPA-exported SPB CSV")
+    parser.add_argument(
+        "csv", type=Path, help="WPA- or tracerpt-exported SPB CSV"
+    )
     args = parser.parse_args()
 
     events = list(iter_timed_buffers(args.csv))
