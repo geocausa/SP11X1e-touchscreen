@@ -111,7 +111,15 @@ the observed `DATA 0xa0={01}` response, emits initial A5, sends exact
 `SET_FEATURE 0x05={01}`, and stops again before the independently scheduled
 device-config owner issues `GET_FEATURE 0x70`.
 
-That second stop is intentional.  The Windows capture shows initial report
-`0x2e`/`0x08` traffic and about 471 ms between SET05 acknowledgement and GET70,
-but static analysis has not yet recovered the activation predicate.  A fixed
-sleep would imitate one trace without reproducing the Windows state machine.
+That second stop remains intentional because the following device-config owner
+is independently scheduled.  The Heat-side activation itself is now recovered:
+TouchPenProcessor calls the Feature-`0x05` path **Switch Mode Feedback**,
+resolves vendor usage `0xff00:0x00c8`, hard-codes value `1`, and sends it only
+when its FeedbackManager is enabled during Heat initialization.  A normal
+initializer explicitly requests that switch.  The fresh Windows restart trace
+then enters continuous 3,636-byte Heat streaming 163.965 ms after `SET_FEATURE
+0x05={01}`.  The later `GET_FEATURE 0x70` still belongs to the separately
+scheduled pen auto-bonding owner, so neither the older ~471 ms cross-owner gap
+nor the fresh 163.965 ms switch-to-Heat interval should be copied into Linux as
+a fixed sleep.  See
+[WINDOWS_FEATURE05_SWITCH_MODE_RE.md](WINDOWS_FEATURE05_SWITCH_MODE_RE.md).

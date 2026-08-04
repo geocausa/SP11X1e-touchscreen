@@ -152,9 +152,15 @@ its dynamic display/feedback fields are documented in
 [WINDOWS_REPORT09_FEEDBACK_RE.md](WINDOWS_REPORT09_FEEDBACK_RE.md); the ARC
 resource container and firmware-side semantic corroboration are documented in
 [FIRMWARE_RESOURCE_CONTAINER.md](FIRMWARE_RESOURCE_CONTAINER.md). The resource
-CLI proves that firmware distinguishes PRE_OS from normal full-frame mode, but
-does not prove that HID Feature `0x70` selects it. The ARC subtype consumer and
-natural panel-reset trigger remain unresolved.
+CLI proves that firmware distinguishes PRE_OS from normal full-frame mode.
+Feature `0x70` is now ruled out as that selector, while the Heat software
+processor identifies Feature `0x05 = 01` as **Switch Mode Feedback** and sends
+it during normal Heat initialization. Its value and observed transition into
+continuous Heat streaming strongly match firmware report-mode value `1 = Normal
+(Full Frame)`, but the table-driven panel-side HID consumer has not yet been
+connected directly to that firmware state. See
+[WINDOWS_FEATURE05_SWITCH_MODE_RE.md](WINDOWS_FEATURE05_SWITCH_MODE_RE.md).
+The ARC subtype consumer and natural panel-reset trigger remain unresolved.
 
 The older complete Windows SPB payload trace provides an independent cadence
 check: 1,381 raw Heat bodies coexist with exactly one attach-time A1/A5 pair,

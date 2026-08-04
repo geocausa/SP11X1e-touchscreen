@@ -73,12 +73,23 @@ and their declared semantics include:
 
 This proves that the shipped firmware distinguishes PRE_OS reports from normal
 full-frame delivery and owns substantial acquisition, noise, calibration, and
-posture state. Later handler-level analysis now rules out HID Feature `0x70` as
+posture state. Later handler-level analysis rules out HID Feature `0x70` as
 the bridge to CLI command 107: Microsoft's installed Surface pen adaptation
 driver identifies `0x70` as the host/OOB auto-bonding capability report for
-Slim Pen 2 / MPP 2.6 hardware. The CLI command IDs and HID report IDs remain
-separate namespaces; the production HID route to command 107 is still unknown.
-See [WINDOWS_FEATURE70_AUTOBONDING_RE.md](WINDOWS_FEATURE70_AUTOBONDING_RE.md).
+Slim Pen 2 / MPP 2.6 hardware.
+
+The Heat software processor instead identifies Feature `0x05 = 01` as
+**Switch Mode Feedback**. It resolves vendor Usage Page `0xff00`, Usage
+`0x00c8`, constructs the report from the live HID descriptor, and sends it
+during normal Heat initialization. A fresh Windows restart trace enters
+continuous 3,636-byte Heat streaming after that switch, while the firmware
+engineering interface independently defines report-mode value `1` as
+`Normal (Full Frame)`. This makes Feature `0x05` the strongest current
+production-HID report-mode candidate. The CLI command IDs and HID report IDs
+remain separate namespaces, however, and the table-driven panel-side HID
+consumer has not yet been connected directly to command 107 or its underlying
+state. See [WINDOWS_FEATURE70_AUTOBONDING_RE.md](WINDOWS_FEATURE70_AUTOBONDING_RE.md)
+and [WINDOWS_FEATURE05_SWITCH_MODE_RE.md](WINDOWS_FEATURE05_SWITCH_MODE_RE.md).
 
 The resource describes an engineering interface. Its presence is not evidence
 that it is reachable through the production HID path, and the driver must not
