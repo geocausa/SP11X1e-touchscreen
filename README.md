@@ -295,9 +295,11 @@ HID descriptor it contains a 274-command engineering description, a firmware
 logger dictionary, and the compressed Denali panel configuration. These
 resources independently confirm PRE_OS versus normal full-frame modes,
 display/hinge/FastHostId feedback, on-device calibration/noise/tracking paths,
-and the 68-by-46 sensor geometry. They do not yet prove that HID Feature
-`0x70` is the report-mode selector; see
-[docs/FIRMWARE_RESOURCE_CONTAINER.md](docs/FIRMWARE_RESOURCE_CONTAINER.md).
+and the 68-by-46 sensor geometry. Later handler-level analysis rules out HID
+Feature `0x70` as the report-mode selector: Microsoft's Surface pen adaptation
+driver identifies it as the host/OOB auto-bonding capability report. See
+[docs/FIRMWARE_RESOURCE_CONTAINER.md](docs/FIRMWARE_RESOURCE_CONTAINER.md) and
+[docs/WINDOWS_FEATURE70_AUTOBONDING_RE.md](docs/WINDOWS_FEATURE70_AUTOBONDING_RE.md).
 
 Phase 72 first delivered sustained multi-touch without the earlier class-3
 reset storm, providing the control that led through Phase 75 to Phase 91. The

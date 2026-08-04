@@ -103,7 +103,10 @@ natural panel-reset branch has not yet been exercised by a captured reset; see
   with the validated Phase 81 host safeguards. Its first cold boot had 10
   panel resets and three recovered protocol faults during startup, then ran
   7,410 Heat frames without another fault. This is improved but not clean and
-  does not replace Phase 75.
+  does not replace Phase 75. Static analysis now identifies report `0x70` as
+  Surface pen host/OOB auto-bonding capability traffic, not the Heat/full-frame
+  mode selector; see
+  [WINDOWS_FEATURE70_AUTOBONDING_RE.md](WINDOWS_FEATURE70_AUTOBONDING_RE.md).
 - `mshw0485_touch.host_fault_recovery=1` selects Phase 80's bounded cold
   recovery after an IRQ transport/protocol/drain failure. It is backed by the
   captured Windows timeout lifecycle. Its first boot recovered five protocol

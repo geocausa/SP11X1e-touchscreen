@@ -38,7 +38,10 @@ was caused by reading beyond `content_len` in a fixed-size debugger dump.
   [WINDOWS_SPB_20260804_LIVE_RESTART.md](WINDOWS_SPB_20260804_LIVE_RESTART.md).
 - The firmware resource CLI proves `PRE_OS` and `Normal (Full Frame)` modes and
   the panel configuration independently confirms the 68-by-46 Heat geometry.
-  It does not yet connect HID Feature `0x70` to that report-mode selector.
+  Feature `0x70` is now ruled out as that selector: the installed Surface pen
+  adaptation driver identifies it as the one-byte host/OOB auto-bonding
+  capability report for Slim Pen 2 / MPP 2.6 hardware. See
+  [WINDOWS_FEATURE70_AUTOBONDING_RE.md](WINDOWS_FEATURE70_AUTOBONDING_RE.md).
 
 ## Safe investigation order
 
@@ -61,12 +64,12 @@ experiment. Change one variable at a time:
    reached Heat; Phase 91 applies the measured Windows response cadence after
    an immediate Linux second-header read preceded the live reset storm, and is
    now validated across normal and immediate-login cold-boot stress;
-5. use the completed Windows producer trace and the decoded resource/logger
-   evidence in
-   [WINDOWS_REPORT09_FEEDBACK_RE.md](WINDOWS_REPORT09_FEEDBACK_RE.md) to locate
-   the generic HID feedback dispatcher, determine whether Feature `0x70`
-   selects normal full-frame mode, and establish the minimum Heat-only
-   feedback before testing any complete 63-byte path;
+5. treat Feature `0x70` as resolved pen auto-bonding traffic, not a Heat-mode
+   control. Use the completed Windows producer trace and decoded resource/logger
+   evidence to continue the full-frame-selector search in the Heat/feedback
+   activation owner, especially the independently observed `SET_FEATURE 0x05 =
+   01`, while separately establishing the minimum Heat-only feedback before
+   testing any complete 63-byte path;
 6. use a low-overhead reset-only KDNET soak to capture one genuine
    panel-initiated reset.
 
