@@ -18,9 +18,13 @@ re-enumeration interval.
 
 The Windows write-side semantics and observed panel behavior therefore agree
 strongly, making Feature `0x05 = 01` the best evidenced production-HID bridge
-to normal full-frame operation.  A later read-only experiment adds an important
-boundary: `GET_FEATURE 0x05` returns logical value `00` even while continuous
-Heat streaming is active.  Feature `0x05` is therefore not a readable mirror of
+to normal full-frame operation.  A fresh private HeatCore TraceLogging capture
+now closes the host-side semantic loop directly: the live framework completes a
+`SetFeature` buffer beginning `05 01` and immediately emits
+`HeatDevice_ReportingModeSwitchSent` with reporting mode `Heatmap`.  A later
+read-only experiment adds an important boundary: `GET_FEATURE 0x05` returns
+logical value `00` even while continuous Heat streaming is active.  Feature
+`0x05` is therefore not a readable mirror of
 the current firmware report mode.  The final panel-side table-driven SET
 consumer has not yet been recovered, so this document does **not** claim that
 Feature `0x05` directly invokes engineering CLI command 107, aliases engineering
@@ -253,6 +257,92 @@ engineering CLI command 107.  The remaining proof boundary is now entirely on
 the panel side: connect production HID usage `0xff00:0x00c8` to the firmware's
 internal report-mode state or generic HID Feature consumer.
 
+## Live HeatCore TraceLogging validation
+
+The installed HeatCore image also carries self-describing TraceLogging provider
+metadata.  These providers are not listed as ordinary manifest providers by
+`logman query providers`, but their name-derived ETW GUIDs are embedded in the
+binary itself:
+
+```text
+Microsoft.Windows.Heat.HeatCore
+  55a5dc53-e24e-5b53-5b52-ea83a0cc4e0c
+Microsoft.Windows.Heat.HeatCore.Test
+  54225112-eaa1-5e29-c8f8-1cb9924d6049
+Microsoft.Windows.Heat.HeatCore.Perf
+  9211ac87-37d7-5868-092f-010437c37f40
+```
+
+A controlled restart capture of the `Microsoft.Windows.Heat.HeatCore.Test`
+provider gives direct runtime confirmation of the static mode analysis.  On the
+live `HID\\MSHW0485&Col02` HEAT device, HeatCore emits this sequence on the
+same device and worker thread:
+
+```text
+HeatDevice_DeviceIoControl  SetFeature
+  report buffer: 05 01 00 00 00 ...
+HeatDevice_DeviceIoControl  completion: success
+HeatDevice_ReportingModeSwitchSent
+  ReportingMode: "Heatmap"
+```
+
+The completed `SetFeature` event is followed by
+`HeatDevice_ReportingModeSwitchSent` only 25 FILETIME ticks later, i.e. about
+2.5 microseconds.  From the start of the `SetFeature` event to the mode event is
+about 1.807 ms.  This is therefore not merely a correlation between separate
+initialization phases: Microsoft HeatCore itself reports the just-completed
+Feature-`0x05` write as a transition to `Heatmap` reporting mode.
+
+The same capture exposes HeatCore's parsed interface properties.  The live
+collection reports:
+
+```text
+VendorID:             0x045e
+ProductID:            0x0c83
+ProtocolVersion:      0
+FrameDataReportCount: 9
+ModeSwitchSupported:  1
+```
+
+HeatCore then enumerates the nine frame-data reports.  Report ID `0x12` is
+present with:
+
+```text
+ReportId:          18 (0x12)
+ChunkingSupported: 0
+ChunkLength:       3627
+ScanTimeSupported: 1
+```
+
+The HEAT framework's chunk length is an internal frame-data size and should not
+be confused with the 3,636-byte SPB report body, which includes the surrounding
+protocol/report framing.  Taken together with the independent SPB trace, the
+runtime chain is now:
+
+1. HeatCore attaches to the Col02 raw-HEAT collection and reports
+   `ModeSwitchSupported = 1`;
+2. it recognizes report `0x12` as a frame-data report;
+3. it sends the Feature buffer beginning `05 01`;
+4. it immediately logs reporting mode `Heatmap`;
+5. the panel resumes sustained 3,636-byte report-`0x12` traffic.
+
+The private runtime evidence remains outside Git:
+
+```text
+828070AF3FA0C8100CCF51B96AEFCFDD74378932C89E4EBAFE85B41459BC5615  heatcore-test-restart.etl
+65DF973760C1931CCD23DAA51A3C136D8C29034A1FEBDF7F3CCA1531B86FDA37  heatcore-test-restart.csv
+3BFA91232143A56950CB9EF0285BD201B1996769530D3F1535BEE884C8CE4C82  heatcore-main-restart.etl
+DDDA9C9B1892F3BD113719FB87ACC9F235680C92A7F0F5EA9DD30DCC0982499D  heatcore-main-restart.csv
+```
+
+This closes the Windows-side semantic question more strongly than static
+analysis alone.  The remaining uncertainty is still the same narrow panel-side
+boundary: the production HID `SET_FEATURE 0x05` consumer has not yet been
+connected by a direct ARC code edge to the engineering `SetReportMode` state.
+The successful `GET_FEATURE 0x05 = 00` readback while Heat streaming remains
+active also continues to rule out treating report `0x05` as a readable mirror
+of that state.
+
 ## Feedback-manager gate
 
 The switch sender first checks processor state byte `+0x262`.  Dedicated tiny
@@ -420,6 +510,25 @@ the `G/H/I/J` resource-header framing likewise did not identify a production
 HID dispatcher. This is consistent with the descriptor/resource evidence that
 the panel consumer is generic or table-driven; it is not proof of a specific
 implementation.
+
+Two additional ARC false positives were eliminated while following the
+full-frame producer path.  A seeded Ghidra project had decoded a literal
+`0x12` store at `0x200671c8`, but that address is beyond the executable/resource
+boundary at file offset `0x5f25f`; it lies inside the resource container and is
+not code.  A second literal-`0x12` store candidate around `0x2004fc70` is inside
+the executable address range, but a fresh raw `ARCv2:LE:32:default` import shows
+that region entering an embedded data island, including repeated table words
+and literal ASCII.  It is not a Heat report builder either.  These locations
+must not be used as evidence for a firmware report-`0x12` producer.
+
+A separate scan also tested the remaining obvious command-dispatch layout:
+274-entry absolute and relative handler tables, including 32-bit code-base,
+entry-relative and table-relative forms plus 16-bit signed relative forms at
+common scales.  No candidate produced a diverse 274-entry set of code targets;
+the high-scoring windows collapsed onto one or a few repeated addresses and are
+consistent with zero/data runs.  This further supports a generic registry or
+reflection-style command/HID consumer rather than a simple one-pointer-per-CLI-
+command table, without proving the exact implementation.
 
 The firmware logger dictionary provides a useful contrast. It contains an
 explicit `Set Feature Auto-Bonding Capability` diagnostic for Feature `0x70`

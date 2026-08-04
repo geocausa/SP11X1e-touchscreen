@@ -4,6 +4,12 @@ Start with [PHASE72_KDNET_ERRATUM.md](PHASE72_KDNET_ERRATUM.md). The earlier
 claim that Windows sends six logical bytes in feature reports `0x05` and `0x70`
 was caused by reading beyond `content_len` in a fixed-size debugger dump.
 
+For the current repo-wide closure matrix, including which old questions are now
+resolved versus genuinely validation-blocked, see
+[OPEN_QUESTIONS_AUDIT_20260804.md](OPEN_QUESTIONS_AUDIT_20260804.md). The
+matched-kernel/upstream boundary is decomposed separately in
+[TRANSPORT_PORTABILITY_AUDIT_20260804.md](TRANSPORT_PORTABILITY_AUDIT_20260804.md).
+
 ## Current known state
 
 - Phase 91 is the hardware-validated production DMA baseline. Two cold boots
@@ -43,14 +49,19 @@ was caused by reading beyond `content_len` in a fixed-size debugger dump.
   capability report for Slim Pen 2 / MPP 2.6 hardware. Windows instead names
   Feature `0x05 = 01` **Switch Mode Feedback**: TouchPenProcessor resolves
   vendor usage `0xff00:0x00c8`, constructs `{0x05, 0x01}`, and sends it during
-  normal Heat initialization. The firmware independently names report-mode
+  normal Heat initialization. A private HeatCore TraceLogging restart capture
+  now proves the live framework completes `SetFeature` buffer `05 01 ...` and
+  immediately emits `HeatDevice_ReportingModeSwitchSent` with mode `Heatmap`;
+  the same interface reports `ModeSwitchSupported = 1` and recognizes report
+  `0x12` as frame data. The firmware independently names report-mode
   value `1` as `Normal (Full Frame)`, and a fresh SPB restart trace enters
   continuous 3,636-byte Heat streaming 163.965 ms after the switch. A later
   read-only, SPB-confirmed `GET_FEATURE 0x05` returns logical `00` while that
   streaming is active, proving the HID readback is not a mirror of the current
-  firmware report-mode state. The write remains strong evidence for the
-  production-HID full-frame bridge, although its panel-side SET consumer is not
-  yet linked directly to firmware command 107. See
+  firmware report-mode state. The Windows-side write meaning is now runtime-
+  proven as `Heatmap`; the remaining gap is strictly panel-side because its
+  production SET consumer is not yet linked directly to the state exposed by
+  firmware command 107. See
   [WINDOWS_FEATURE70_AUTOBONDING_RE.md](WINDOWS_FEATURE70_AUTOBONDING_RE.md) and
   [WINDOWS_FEATURE05_SWITCH_MODE_RE.md](WINDOWS_FEATURE05_SWITCH_MODE_RE.md).
 
@@ -78,7 +89,9 @@ experiment. Change one variable at a time:
 5. treat Feature `0x70` as resolved pen auto-bonding traffic and Feature
    `0x05 = 01` as the host-side Switch Mode Feedback / **enable HEAT reporting
    mode** path. `HeatCore.dll` independently sets descriptor usage
-   `0xff00:0x00c8` through `HidP_SetUsageValue`; mode `1` is used when the
+   `0xff00:0x00c8` through `HidP_SetUsageValue`; live HeatCore TraceLogging also
+   records the completed `05 01` SetFeature as reporting mode `Heatmap` and
+   reports `ModeSwitchSupported = 1`. Mode `1` is used when the
    processor becomes loaded, on reset, and when restoring an already-active
    HEAT path after monitor power returns, while deinitialization uses mode `0`.
    `InitializeHardware` itself only queries properties and registers the
