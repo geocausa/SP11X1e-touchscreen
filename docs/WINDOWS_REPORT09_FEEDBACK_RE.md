@@ -150,14 +150,18 @@ FeedbackManager version. It does not replay a single captured 63-byte packet.
 2. The non-zero tail in the complete KDNET dump is real, but much of it is
    host feedback and some bytes may be retained from an earlier rich update.
 3. A Linux heat-only driver should not invent pen, touchpad, hinge or provider
-   state merely to reproduce a Windows capture. It should first establish
-   which minimum feedback the panel actually requires.
-4. Phase 72's short `8e 02` exchange remains an empirical hardware result, not
-   a reconstruction of this Windows producer.
-5. The next static target is the ARC firmware consumer of Output Report
-   `0x09`, especially the subtype dispatch and which V06 validity bits affect
-   raw Heat delivery. No production driver change is justified until that
-   consumer trace agrees with the host-side evidence.
+   state merely to reproduce a Windows capture.
+4. Historical Linux evidence now closes the minimum-Heat question: the
+   cold-boot-validated Phase 62 tree at `e35fbc4` contains no `0x8e` payload
+   and no client-side Output Report `0x09` send, yet that dedicated boot entered
+   Heat mode and streamed more than 1,500 decoded frames. Therefore **no report
+   `0x09` transaction is required for basic Heat activation/streaming**.
+5. Phase 72's short `8e 02` exchange remains an empirical hardware result, not
+   a reconstruction of the Windows FeedbackManager producer and not evidence
+   of a mandatory panel unlock.
+6. The ARC firmware consumer of Output Report `0x09` remains interesting for
+   display/hinge/pen/provider semantics, but it is no longer a blocker for the
+   minimal raw-Heat activation contract.
 
 ## Firmware-side corroboration
 

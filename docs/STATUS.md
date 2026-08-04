@@ -123,6 +123,12 @@ natural panel-reset branch has not yet been exercised by a captured reset; see
   [PHASE74_RESET_FINDING.md](PHASE74_RESET_FINDING.md).
 - Suspend/resume callbacks exist but platform suspend is not validated and is
   not claimed safe after earlier whole-device crashes.
+- Windows HEAT user-mode ownership is now narrowed to `dwm.exe -> ISM.exe ->`
+  `HeatCore.dll` plus the exact `TouchPenProcessor0C83.dll`: `heat.inf` grants
+  the DWM security group access, and a controlled restart shows DWM spawning a
+  replacement ISM that loads those modules and owns the COL02 HEAT registry
+  state. The usable HeatCore TraceLogging provider is
+  `Microsoft.Windows.Heat.HeatCore` / `{55A5DC53-E24E-5B53-5B52-EA83A0CC4E0C}`.
 
 ## Not implemented or not claimed
 
@@ -164,6 +170,11 @@ continuous Heat streaming strongly match firmware report-mode value `1 = Normal
 connected directly to that firmware state. See
 [WINDOWS_FEATURE05_SWITCH_MODE_RE.md](WINDOWS_FEATURE05_SWITCH_MODE_RE.md).
 The ARC subtype consumer and natural panel-reset trigger remain unresolved.
+The repo-wide status of resolved, narrowed, validation-blocked, and pure
+engineering items is tracked in
+[OPEN_QUESTIONS_AUDIT_20260804.md](OPEN_QUESTIONS_AUDIT_20260804.md). The exact
+matched GENI/GPI portability boundary is documented in
+[TRANSPORT_PORTABILITY_AUDIT_20260804.md](TRANSPORT_PORTABILITY_AUDIT_20260804.md).
 
 The older complete Windows SPB payload trace provides an independent cadence
 check: 1,381 raw Heat bodies coexist with exactly one attach-time A1/A5 pair,
@@ -173,3 +184,12 @@ multi-owner restart interleaving. See
 
 `main` represents the best validated project baseline, not a claim of generic
 hardware support, Windows parity, or upstream acceptance.
+
+## 2026-08-04 repo-wide closure update
+
+- Basic Heat streaming does **not** require Output Report `0x09`: the cold-boot-validated Phase 62 tree (`e35fbc4`) sends no report-09 payload and streamed more than 1,500 decoded Heat frames. Windows A1/A5 feedback is therefore control-plane state, not a mandatory Heat unlock.
+- Windows finger Touch does **not** support a Pressure capability in HeatCore; Width/Height Geometry is the relevant public contact-shape ABI. See [WINDOWS_TOUCH_CONTACT_ABI_RE.md](WINDOWS_TOUCH_CONTACT_ABI_RE.md).
+- The processor computes raw Width/Height as inclusive component bounds (`max-min+1`) and optionally applies per-track smoothing. The smoothing block is project configuration at offset `+0x294` (float alpha at `+0`, enable byte at `+4`); the active file/runtime value is not yet proven.
+- The remaining protocol-side private boundary is the ARC production HID SET-feature dispatcher that consumes Feature `0x05`; Windows-side semantics are already resolved.
+- Human labels for the four processor classifier classes remain unproven. Normal touch output accepts classes 0 and 2; telemetry vocabulary names Finger/FingerAwareness/Smear/SmearAwareness/Bunch, but those names are not safely index-mapped.
+- Genuine panel-originated reset capture, labelled palm/edge/close-contact validation, and system-suspend hardware validation remain evidence-blocked rather than static-analysis unknowns.

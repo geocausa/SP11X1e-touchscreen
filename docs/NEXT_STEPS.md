@@ -129,3 +129,15 @@ match, and Ghidra analysis boundary are recorded in
 [TOUCH_FIRMWARE_UPDATE_RE.md](TOUCH_FIRMWARE_UPDATE_RE.md).
 The appended descriptor/CLI/logger/configuration records are documented in
 [FIRMWARE_RESOURCE_CONTAINER.md](FIRMWARE_RESOURCE_CONTAINER.md).
+
+## Current priority after 2026-08-04 closure audit
+
+1. Recover the ARC production SET-feature callback path far enough to connect HEAT Feature `0x05` to the firmware report-mode state. Avoid more blind literal searches.
+2. Recover the active 0C83 project-profile values behind processor geometry smoothing (`project_config + 0x294`) and other remaining runtime-only context.
+3. Map the four classifier indices to human semantics only from a real code/telemetry relation or labelled intermediate capture; do not assign names by metadata order.
+4. Collect labelled palm/edge/corner/close-contact captures to validate the already recovered detector/tracker/geometry pipeline.
+5. Capture a spontaneous panel-originated reset with a low-overhead long-duration lifecycle trace before changing reset policy.
+6. Validate the existing suspend/resume callbacks only after the platform suspend path is safe.
+7. Keep Phase 91 as the production control while pressure/shape/merged-contact and transport-portability work stays on experimental branches.
+
+Output Report `0x09` is no longer a minimal-Heat blocker: Phase 62 cold-boot evidence proves Heat streaming without any client-side report-09 send.
