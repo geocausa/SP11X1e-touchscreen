@@ -76,8 +76,11 @@ experiment. Change one variable at a time:
 5. treat Feature `0x70` as resolved pen auto-bonding traffic and Feature
    `0x05 = 01` as the host-side Switch Mode Feedback / **enable HEAT reporting
    mode** path. `HeatCore.dll` independently sets descriptor usage
-   `0xff00:0x00c8` through `HidP_SetUsageValue`; its lifecycle uses `1` for
-   initialize/reset and `0` for deinitialize. Do not change the
+   `0xff00:0x00c8` through `HidP_SetUsageValue`; mode `1` is used when the
+   processor becomes loaded, on reset, and when restoring an already-active
+   HEAT path after monitor power returns, while deinitialization uses mode `0`.
+   `InitializeHardware` itself only queries properties and registers the
+   monitor-power callback. Do not change the
    hardware-validated Phase 91 chronology merely to make it more literal. The
    remaining mode-selector work is panel-side: reach the generic/table-driven
    HID Feature consumer or the underlying report-mode state from resource/HID

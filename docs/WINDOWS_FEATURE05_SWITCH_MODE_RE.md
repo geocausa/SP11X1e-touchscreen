@@ -132,6 +132,28 @@ SHA-256:      b5518a12e1891b1bbb5aef2b5852a653e03ad7536a3c60f53246dd34a933f169
 file description: Microsoft (R) Windows HEAT processor framework
 ```
 
+The matching Microsoft public symbols are reproducible from the PE's embedded
+CodeView identity:
+
+```text
+PDB:        HeatCore.pdb
+GUID:       c9d4046b-b9dc-bb39-c411-95272067deca
+age:        1
+symbol key: C9D4046BB9DCBB39C41195272067DECA1
+PDB size:   921600
+PDB sha256: f3d0134e85e2ae44f4e125d0aea4d6ef3dd4f8579332cf4942d2cd7dfe034924
+```
+
+The PDB was retrieved from Microsoft's public symbol server and is retained
+with the private capture evidence, not committed to Git.  It names the relevant
+functions at their current image addresses, including
+`HIDDeviceInterface::SetHeatReportingMode` (`0x18000fea0`),
+`CapImg::Protocol::HID::BuildFeatureReportForModeSwitch` (`0x180013dc8`),
+`HeatDevice::DeinitializeHardware` (`0x18002ffe0`),
+`HeatDevice::InitializeHardware` (`0x180030920`),
+`HeatDevice::ResetHardware` (`0x180030e30`), and
+`HeatDevice::SetProcessorLoaded` (`0x180031000`).
+
 The live `ISM.exe` process loads `HeatCore.dll` and is itself a child of
 `dwm.exe`.  This matches `heat.inf`, which binds `HID_DEVICE_UP:000D_U:000F`,
 creates the `Heat\VendorSpecific` registry subtree, and explicitly grants the
@@ -170,21 +192,34 @@ reporting-mode value.  Because that field is the sole eight-bit Feature field
 in report `0x05`, the live device resolves the operation to `{0x05, mode}`.
 
 The HEAT hardware lifecycle fixes the meaning of the two observed values.  The
-same virtual `SetHeatReportingMode` slot is called as follows:
+same virtual `SetHeatReportingMode` slot is reached as follows:
 
 ```text
-DeinitializeHardware -> mode 0
-ResetHardware        -> mode 1
-InitializeHardware   -> mode 1
+DeinitializeHardware     -> mode 0
+ResetHardware            -> mode 1
+SetProcessorLoaded(true) -> mode 1, when reporting is not already enabled
+monitor-power-on resume  -> mode 1, when an off transition was pending and reporting was active
 ```
 
-The matching binary diagnostics are explicit:
+PDB-assisted decompilation is important here because one diagnostic string is
+slightly misleading.  `HeatDevice::InitializeHardware` itself only queries the
+hardware properties (with one bounded retry), registers a
+`GUID_MONITOR_POWER_ON` notification, and returns.  The string
+`InitializeHardware: Failed to enable Heat reporting mode.` is emitted from
+`HeatDevice::SetProcessorLoaded(bool)`, where a transition to `true` calls the
+mode interface with value `1` and then marks reporting enabled.  Thus the
+message text must not be treated as the owning function name.
+
+The other diagnostics line up directly with their lifecycle owners:
 
 ```text
 DeinitializeHardware: Failed to disable Heat reporting mode.
 ResetHardware: Failed to enable Heat reporting mode.
-InitializeHardware: Failed to enable Heat reporting mode.
 ```
+
+The monitor-power callback does not send mode `0` when the display turns off.
+It records the off transition and, when the monitor turns back on, reissues mode
+`1` if HEAT reporting was already active.
 
 This independently proves that `0xff00:0x00c8 = 1` means **enable HEAT
 reporting mode**, while value `0` means **disable HEAT reporting mode**.  It
