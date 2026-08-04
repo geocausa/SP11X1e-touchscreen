@@ -191,6 +191,24 @@ it explicitly sets the descriptor field `0xff00:0x00c8` to the requested
 reporting-mode value.  Because that field is the sole eight-bit Feature field
 in report `0x05`, the live device resolves the operation to `{0x05, mode}`.
 
+The mode enum is recoverable directly from the same image.  The reporting-mode
+telemetry helper at `0x180033cc8` maps value `0` to the literal `Disabled`,
+value `1` to `Heatmap`, and every other value to `UNKNOWN`.  In
+`HIDDeviceInterface::SetHeatReportingMode`, the mode argument is compared with
+`1`; the result of that comparison is passed to
+`BuildFeatureReportForModeSwitch` as the HID usage value.  The recovered enum
+mapping is therefore:
+
+```text
+HeatReportingMode::Disabled = 0
+HeatReportingMode::Heatmap  = 1
+```
+
+Consequently, on this descriptor, `SET_FEATURE 0x05 = 01` is not merely an
+"enable-like" value inferred from timing: it is the exact host-side request for
+`HeatReportingMode::Heatmap`.  Conversely, mode `0` builds Feature `0x05` with
+usage value `0`, i.e. the disabled reporting state.
+
 The HEAT hardware lifecycle fixes the meaning of the two observed values.  The
 same virtual `SetHeatReportingMode` slot is reached as follows:
 
@@ -312,6 +330,74 @@ command 107 has yet been recovered.  Therefore the precise statement is:
 > normal raw-Heat streaming; it is strongly consistent with selecting the
 > firmware's Normal (Full Frame) report mode, but the panel-side production-HID
 > handler still needs to be connected to the firmware report-mode state.
+
+## Additional negative boundaries from the August 4 corpus
+
+The host-side reporting-mode result is stronger than the remaining panel-side
+static visibility, so the negative evidence is worth recording explicitly.
+It prevents generic parser state or unrelated ARC immediates from being
+mistaken for the production HID consumer.
+
+A parser-level scan of every raw Heat report `0x12` body in the August 4 SPB
+restart capture decoded the vendor `0xff00` metadata section in all 1,241
+frames. The 68 frames before re-enumeration and the 1,173 frames after it each
+contained exactly these record kinds:
+
+```text
+00 03 04 07 0b 32 ff
+```
+
+The TouchPenProcessor generic metadata parser also has callback slots `0x71`
+and `0x74` whose handlers can set an internal switch-feedback gate, but neither
+record occurs in any captured raw Heat frame. Those callbacks therefore must
+not be described as ordinary on-wire Heat metadata on the evidence available
+here. They are a separate framework/parser path and are not needed for the
+normal `InitializeHeatProcessor` proof above.
+
+ARC instruction-level searches also close several tempting literal-search
+routes. No analyzed firmware function contains either HID pair
+`0xff00:0x00c8` or `0xff00:0x00c9`. The only standalone `0xc8` hit is a
+structure load at offset `+0xc8`; the only standalone `0xc9` hit is transformed
+into an indexed structure offset before use. Searches for the observed
+3,632-byte Heat report payload size, the 68-by-46 sensor-plane byte count, and
+the `G/H/I/J` resource-header framing likewise did not identify a production
+HID dispatcher. This is consistent with the descriptor/resource evidence that
+the panel consumer is generic or table-driven; it is not proof of a specific
+implementation.
+
+The firmware logger dictionary provides a useful contrast. It contains an
+explicit `Set Feature Auto-Bonding Capability` diagnostic for Feature `0x70`
+and named set-feature handlers for other device functions, but no corresponding
+Feature-`0x05`/report-mode handler string. It does contain ordinary full-frame
+processing diagnostics, confirming that full-frame is a real firmware concept
+without exposing the production HID mode-switch consumer by name.
+
+A second, controlled ETW capture disabled and re-enabled only
+`ACPI\\MSHW0485` under `Microsoft-Windows-SPB-ClassExtension`. The device was
+successfully re-enabled and returned `CM_PROB_NONE`; `ISM.exe` and the Col02
+HEAT processor also reattached cleanly. The trace contains one logical Feature
+`0x05` write, again value `1`, and no value `0`:
+
+```text
+SET_FEATURE 0x05 = 01
+```
+
+The private evidence identities are:
+
+```text
+f9e9a03ca06a82f9125e664d2ba2765e222d36846cb17f647eb647c52d8c458e  sp11-spb-disable-enable.etl
+8d923df437d28dfe3c0e3583f39ef996e98799d61fd1968d0af5fa97d57fabe2  sp11-spb-disable-enable.csv
+```
+
+This does not contradict the PDB-proven `DeinitializeHardware -> mode 0`
+path. PnP disable/re-enable did not demonstrate that HeatCore lifecycle
+callback on the wire, so absence of `05 00` in this trace is only a boundary on
+this particular transition, not evidence that mode `0` is unused.
+
+The remaining proof gap is consequently narrow and panel-side only: identify
+the generic production-HID Feature consumer or the report-mode state it
+mutates, then connect Usage `0xff00:0x00c8` to the same state exposed by the
+engineering `GetCurrentReportMode`/`SetReportMode` interface.
 
 ## Consequences for Linux
 
