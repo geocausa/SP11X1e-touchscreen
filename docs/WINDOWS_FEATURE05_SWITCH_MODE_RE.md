@@ -16,12 +16,15 @@ A fresh Windows SPB restart capture shows `SET_FEATURE 0x05 = 01` followed
 full-frame traffic.  The previous Heat frame was 2.114 s earlier, before the
 re-enumeration interval.
 
-The host-side and firmware-side semantics therefore agree strongly, making
-Feature `0x05 = 01` the best evidenced production-HID bridge to normal
-full-frame operation.  The final panel-side table-driven HID consumer has not
-yet been recovered, so this document does **not** claim that Feature `0x05`
-directly invokes engineering CLI command 107 or that the two command namespaces
-are identical.
+The Windows write-side semantics and observed panel behavior therefore agree
+strongly, making Feature `0x05 = 01` the best evidenced production-HID bridge
+to normal full-frame operation.  A later read-only experiment adds an important
+boundary: `GET_FEATURE 0x05` returns logical value `00` even while continuous
+Heat streaming is active.  Feature `0x05` is therefore not a readable mirror of
+the current firmware report mode.  The final panel-side table-driven SET
+consumer has not yet been recovered, so this document does **not** claim that
+Feature `0x05` directly invokes engineering CLI command 107, aliases engineering
+`GetCurrentReportMode`, or shares an identical command namespace/state object.
 
 ## Evidence identities
 
@@ -305,6 +308,59 @@ roughly 8--10 ms full-frame delivery follows.  Several bounded attach/CFU
 responses still interleave before the first Heat frame, so the 163.965 ms value
 is an observed lifecycle interval, not a proposed Linux sleep constant.
 
+## Live `GET_FEATURE 0x05` boundary
+
+A read-only `HidD_GetFeature` experiment was performed against the live
+`HID\\MSHW0485&Col02` HEAT collection while continuous Heat reporting was
+already active.  The call succeeded and returned report `0x05` with one logical
+data byte equal to zero:
+
+```text
+HID API result: 05 00 ...
+```
+
+A simultaneous SPB-ClassExtension trace proves that this was not a HID-class
+cache result.  The host issued a real panel transaction:
+
+```text
+GET_FEATURE 0x05
+```
+
+and the panel returned the eight-byte response body:
+
+```text
+05 01 00 05 00 01 ab 0f
+```
+
+The response framing can be decoded directly by comparison with known live
+feature reads from the same device:
+
+```text
+GET_FEATURE 0x70 -> 05 01 00 70 02 00 00 00 -> logical content 02
+GET_FEATURE 0x73 -> 05 02 00 73 90 01 ab 0f -> logical content 90 01
+GET_FEATURE 0x05 -> 05 01 00 05 00 01 ab 0f -> logical content 00
+```
+
+Thus the panel itself returns `0x00` for Feature `0x05` even after Windows has
+sent `SET_FEATURE 0x05 = 01` and full 3,636-byte Heat streaming is running.
+This is a useful semantic boundary: the Feature-`0x05` read path is **not** a
+persistent mirror of the write-side enable value and must not be equated with
+engineering CLI command 95, `GetCurrentReportMode`.
+
+This does not negate the write-side proof.  HeatCore still explicitly constructs
+`0xff00:0x00c8 = 1` as its request to enable HEAT reporting, and the observed
+panel behavior still transitions into sustained full-frame Heat delivery after
+the write.  It does narrow the remaining firmware problem: recover the
+production **SET** Feature-`0x05` consumer/state transition, rather than looking
+for a bidirectional report-mode variable behind the HID report.
+
+The private evidence remains outside Git:
+
+```text
+EBCA99FFC2364A4F63F9F07B25ED45D88519538C4C1F08E10779F14F758B9EFF  feature05-get.etl
+2E34AE9E4C4D01FADE84C391E7E27048FE37E47AFFF1D1EA3429E94B6D646023  feature05-get.csv
+```
+
 ## Firmware-side semantic match
 
 The installed firmware's `GenericCliDescriptor.xml` independently declares:
@@ -411,6 +467,8 @@ engineering `GetCurrentReportMode`/`SetReportMode` interface.
 - Do not issue engineering CLI command 107 from Linux.  Its existence is static
   semantic corroboration, not evidence that the engineering interface belongs
   in the production driver.
-- The useful remaining static target is the ARC generic HID Feature dispatcher
-  or the underlying report-mode state variable, not further literal searches
-  for report ID `0x05`.
+- The useful remaining static target is specifically the ARC production
+  `SET_FEATURE 0x05` consumer and the state transition it triggers.  The live
+  readback result rules out treating `GET_FEATURE 0x05` as a mirror of the
+  engineering `GetCurrentReportMode` state; further literal searches for report
+  ID `0x05` are unlikely to help.

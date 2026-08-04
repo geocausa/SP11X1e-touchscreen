@@ -45,10 +45,12 @@ was caused by reading beyond `content_len` in a fixed-size debugger dump.
   vendor usage `0xff00:0x00c8`, constructs `{0x05, 0x01}`, and sends it during
   normal Heat initialization. The firmware independently names report-mode
   value `1` as `Normal (Full Frame)`, and a fresh SPB restart trace enters
-  continuous 3,636-byte Heat streaming 163.965 ms after the switch. This is
-  strong evidence for the production-HID full-frame bridge, although the
-  panel-side table-driven HID consumer is not yet linked directly to firmware
-  command 107. See
+  continuous 3,636-byte Heat streaming 163.965 ms after the switch. A later
+  read-only, SPB-confirmed `GET_FEATURE 0x05` returns logical `00` while that
+  streaming is active, proving the HID readback is not a mirror of the current
+  firmware report-mode state. The write remains strong evidence for the
+  production-HID full-frame bridge, although its panel-side SET consumer is not
+  yet linked directly to firmware command 107. See
   [WINDOWS_FEATURE70_AUTOBONDING_RE.md](WINDOWS_FEATURE70_AUTOBONDING_RE.md) and
   [WINDOWS_FEATURE05_SWITCH_MODE_RE.md](WINDOWS_FEATURE05_SWITCH_MODE_RE.md).
 
