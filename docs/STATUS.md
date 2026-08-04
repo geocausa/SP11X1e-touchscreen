@@ -155,7 +155,10 @@ resource container and firmware-side semantic corroboration are documented in
 CLI proves that firmware distinguishes PRE_OS from normal full-frame mode.
 Feature `0x70` is now ruled out as that selector, while the Heat software
 processor identifies Feature `0x05 = 01` as **Switch Mode Feedback** and sends
-it during normal Heat initialization. Its value and observed transition into
+it during normal Heat initialization. Microsoft's generic `HeatCore.dll`
+independently identifies descriptor usage `0xff00:0x00c8` as the HEAT reporting-
+mode switch, using value `1` for initialize/reset and `0` for deinitialize. Its
+value and observed transition into
 continuous Heat streaming strongly match firmware report-mode value `1 = Normal
 (Full Frame)`, but the table-driven panel-side HID consumer has not yet been
 connected directly to that firmware state. See

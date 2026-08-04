@@ -74,7 +74,10 @@ experiment. Change one variable at a time:
    an immediate Linux second-header read preceded the live reset storm, and is
    now validated across normal and immediate-login cold-boot stress;
 5. treat Feature `0x70` as resolved pen auto-bonding traffic and Feature
-   `0x05 = 01` as the host-side Switch Mode Feedback path. Do not change the
+   `0x05 = 01` as the host-side Switch Mode Feedback / **enable HEAT reporting
+   mode** path. `HeatCore.dll` independently sets descriptor usage
+   `0xff00:0x00c8` through `HidP_SetUsageValue`; its lifecycle uses `1` for
+   initialize/reset and `0` for deinitialize. Do not change the
    hardware-validated Phase 91 chronology merely to make it more literal. The
    remaining mode-selector work is panel-side: reach the generic/table-driven
    HID Feature consumer or the underlying report-mode state from resource/HID

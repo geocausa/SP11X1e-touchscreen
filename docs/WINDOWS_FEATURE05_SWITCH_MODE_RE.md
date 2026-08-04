@@ -119,6 +119,84 @@ The first byte is therefore descriptor-derived; on this panel it is report ID
 captured packet replay: Windows independently reconstructs `{0x05, 0x01}` from
 HID identity plus a fixed switch-mode value.
 
+## HeatCore framework proof
+
+Microsoft's generic HEAT framework independently assigns the same HID field a
+reporting-mode meaning.  The installed binary is:
+
+```text
+C:\Windows\System32\HeatCore.dll
+file version: 10.0.26100.8737
+length:       396800
+SHA-256:      b5518a12e1891b1bbb5aef2b5852a653e03ad7536a3c60f53246dd34a933f169
+file description: Microsoft (R) Windows HEAT processor framework
+```
+
+The live `ISM.exe` process loads `HeatCore.dll` and is itself a child of
+`dwm.exe`.  This matches `heat.inf`, which binds `HID_DEVICE_UP:000D_U:000F`,
+creates the `Heat\VendorSpecific` registry subtree, and explicitly grants the
+DWM user group access to the HEAT collection.
+
+`HeatCore.dll` contains the internal identifiers:
+
+```text
+CapImg::Protocol::HID::BuildFeatureReportForModeSwitch
+HIDDeviceInterface::SetHeatReportingMode
+CapImg::Protocol::HID::UpdateFrameDataTransferForReport
+HeatDevice_ReportingModeSwitchSent
+ReportingMode
+ModeSwitchSupported
+```
+
+The mode-switch builder at `0x180013dc8`, called by
+`HIDDeviceInterface::SetHeatReportingMode` at `0x18000fea0`, writes the
+report-ID byte into the output buffer and then calls the imported HID parser
+API `HidP_SetUsageValue`.  On the live descriptor the effective call is:
+
+```text
+ReportType      = HidP_Feature (2)
+UsagePage       = 0xff00
+LinkCollection  = 0
+Usage           = 0x00c8
+UsageValue      = reporting mode
+PreparsedData   = device HID preparsed data
+Report          = buffer beginning with report ID 0x05
+ReportLength    = descriptor-derived report length
+```
+
+Thus the generic framework does not treat byte `01` as an opaque vendor token:
+it explicitly sets the descriptor field `0xff00:0x00c8` to the requested
+reporting-mode value.  Because that field is the sole eight-bit Feature field
+in report `0x05`, the live device resolves the operation to `{0x05, mode}`.
+
+The HEAT hardware lifecycle fixes the meaning of the two observed values.  The
+same virtual `SetHeatReportingMode` slot is called as follows:
+
+```text
+DeinitializeHardware -> mode 0
+ResetHardware        -> mode 1
+InitializeHardware   -> mode 1
+```
+
+The matching binary diagnostics are explicit:
+
+```text
+DeinitializeHardware: Failed to disable Heat reporting mode.
+ResetHardware: Failed to enable Heat reporting mode.
+InitializeHardware: Failed to enable Heat reporting mode.
+```
+
+This independently proves that `0xff00:0x00c8 = 1` means **enable HEAT
+reporting mode**, while value `0` means **disable HEAT reporting mode**.  It
+strengthens the TouchPenProcessor `Switch Mode Feedback` result without
+requiring a live process-memory patch, an experimental report value, or a
+firmware command replay.
+
+It still does not prove that the panel-side HID handler literally dispatches to
+engineering CLI command 107.  The remaining proof boundary is now entirely on
+the panel side: connect production HID usage `0xff00:0x00c8` to the firmware's
+internal report-mode state or generic HID Feature consumer.
+
 ## Feedback-manager gate
 
 The switch sender first checks processor state byte `+0x262`.  Dedicated tiny
