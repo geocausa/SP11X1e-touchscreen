@@ -15,4 +15,19 @@ Recovered initialization chain so far:
 - `FUN_18004fb08` calls `FUN_18004c008` for 20 track/processor instances and passes its third argument as the runtime project object.
 - `FUN_18003d3a8` tail-calls `FUN_18004fb08` on an owning object at `+0x698`.
 
-Remaining task: trace construction/deserialization of that runtime project object and map its `+0x294` block back to the PSDB source field(s), or recover the values through a safe read-only runtime/telemetry path.
+The caller chain now resolves the serialized/runtime correspondence exactly. `FUN_18004a918` receives the PSDB/project base and is called with argument 4 = `project + 0x7b4` and argument 5 = `project + 0xdd0`. The smoothing chain uses argument 4. Therefore the block consumed as runtime `+0x294` maps to PSDB/project offset `0x7b4 + 0x294 = 0xa48`, not to the classifier substructure at `+0xdd0`.
+
+For project 0x0c83, PSDB `+0xa48` contains:
+
+```text
+cd cc 4c 3d 01 00 00 00 00 00 20 41 00 80 bb 44
+```
+
+Decoded according to the recovered consumer:
+
+- float at `+0`: `0.05000000074505806` (`0x3d4ccccd`)
+- enable byte at `+4`: `1`
+
+Thus geometry smoothing is enabled and uses coefficient `alpha = 0.05`. The update in `FUN_18004b318` is equivalent to `smoothed = raw * alpha + previous * (1-alpha)`, i.e. approximately 5% new raw dimension and 95% prior track dimension per update. The exact 0C80 project contains the same bytes and setting.
+
+The earlier direct `PSDB+0xdd0+0x294` test remains useful as a negative control: that location belongs to a different project substructure and must not be interpreted as this filter.
