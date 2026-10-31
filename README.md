@@ -1,5 +1,20 @@
 # Surface Pro 11 X Elite touchscreen driver
 
+## Current 7.3 sound/touch release
+
+For the accepted OLED unit on Ubuntu 26.10, use the
+[shared 7.3 recipe](recipes/sp11-7.3/README.md). It pins the complete audio/touch
+kernel composition and private payload requirements, includes the GPI ordering
+and lifetime repair, and provides verified staging and a guarded fresh installer.
+Two fresh boots passed normal touch and clear sound after quiet periods.
+Newer kernels and other units require qualification. Camera, microphone and
+system suspend are outside this acceptance.
+
+The 7.1.3 Phase 91 material below is retained as historical source and recovery
+reference. Its standalone module installer must not be used on 7.3.
+
+## Historical 7.1.3 baseline
+
 Linux support for the `MSHW0485` G6 touchscreen in the OLED Microsoft Surface
 Pro 11. The hardware-validated production baseline is Phase 91: QSPI/GPI-DMA
 multi-touch on `7.1.3-sp11-baseline1+`, with the recovered Windows upper

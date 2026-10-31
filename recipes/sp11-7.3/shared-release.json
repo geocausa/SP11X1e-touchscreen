@@ -1,0 +1,18 @@
+{
+  "recipe_id": "sp11-denali-oled-7.3-20261030",
+  "audio_repository": "https://github.com/geocausa/SP11X1e-audio.git",
+  "audio_commit": "1909e0edcce264655c7667200f627498f86fb166",
+  "release": "7.3.0-sp11-unified10",
+  "image_commit": "e8ceea84ec1d914c3fc813f0b0f4c9e8c95b9a7f",
+  "integration_commit": "cedc5a624a1869df3b313dd4ac0985d2f130ed61",
+  "integration_tree": "69bcf7af6130af195d7bdc0b1519f0e0a59760df",
+  "audio_files": {
+    "recipes/sp11-7.3/release-lock.json": "421a96ace4650270553d54185316a17a90a2fb9351896bce025cb0d5275e5cfc",
+    "recipes/sp11-7.3/recipe.py": "98a3d5b1e858927b93b008447d8366ce199741797432735e7716660a76b45623",
+    "recipes/sp11-7.3/module-files.sha256": "351920e25f8ae33d9121a13348227dcd9388713fe9d43ed41931d90e141f8b3b",
+    "recipes/sp11-7.3/config": "12a340d87e08edb5659ae79a493a5fe980e0638d97a5c4e0317e9023bae5d4ee",
+    "recipes/sp11-7.3/templates/50-ubig-production.conf": "9fbba46961a8c9f30d7086bc6d76ad4785c0f014585af8a55cb85e9cb70f2e48",
+    "recipes/sp11-7.3/templates/98-sp11-ubig.conf": "880e39d631cb1ea1de7c61ece4548cb307eb06cf3ad1e340a95ce3201c951954"
+  },
+  "gpi_patch_sha256": "cef811072a10b1d8f946ead92e0f337d13180dfba2fdcd0e386ae2d8ea4b88fd"
+}

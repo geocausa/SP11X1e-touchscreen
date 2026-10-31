@@ -1,6 +1,18 @@
 # Current status and boundaries
 
-## Production baseline
+## Current 7.3 checkpoint — 2026-10-31
+
+The tested-unit sound/touch release is now the
+[shared 7.3 recipe](../recipes/sp11-7.3/README.md), pinned to the audio recipe
+and repaired kernel integration cedc5a624. Two owner-confirmed fresh boots
+passed touch and clear first sound, with tracing off on the repeat. The recipe
+packages accepted artifacts; no new kernel compilation or live configuration
+change was made to prepare it. A destructive clean OS reinstall has not been
+performed. Camera, microphone and system suspend remain separately unqualified.
+
+The following Phase 91 status describes the historical 7.1.3 release only.
+
+## Historical 7.1.3 production baseline
 
 Phase 91 is the current hardware-validated baseline for the OLED Surface Pro
 11 (`MSHW0485`) on `7.1.3-sp11-baseline1+`:

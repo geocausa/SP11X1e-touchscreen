@@ -1,0 +1,186 @@
+diff --git a/drivers/dma/qcom/gpi.c b/drivers/dma/qcom/gpi.c
+index 29ac1ae29..2c7007db9 100644
+--- a/drivers/dma/qcom/gpi.c
++++ b/drivers/dma/qcom/gpi.c
+@@ -18,6 +18,9 @@
+ #include "../dmaengine.h"
+ #include "../virt-dma.h"
+ 
++#define CREATE_TRACE_POINTS
++#include <trace/events/qcom_gpi.h>
++
+ #define TRE_TYPE_DMA		0x10
+ #define TRE_TYPE_IMMEDIATE_DMA	0x11
+ #define TRE_TYPE_GO		0x20
+@@ -657,8 +660,13 @@ static inline u32 gpi_read_reg(struct gpii *gpii, void __iomem *addr)
+ 
+ static phys_addr_t gpi_read_ev_rp(struct gpii *gpii)
+ {
+-	u32 lsb = gpi_read_reg(gpii, gpii->ev_ring_rp_lsb_reg);
+-	u32 msb = gpi_read_reg(gpii, gpii->ev_ring_rp_lsb_reg + 4);
++	/*
++	 * The hardware RP publishes DMA writes to the coherent event ring.
++	 * Order subsequent event loads after observing that progress; relaxed
++	 * register reads alone do not serialize those DMA memory accesses.
++	 */
++	u32 lsb = readl(gpii->ev_ring_rp_lsb_reg);
++	u32 msb = readl(gpii->ev_ring_rp_lsb_reg + 4);
+ 
+ 	return ((phys_addr_t)msb << 32) | lsb;
+ }
+@@ -1285,6 +1293,9 @@ static void gpi_process_events(struct gpii *gpii)
+ 	do {
+ 		while (rp != ev_ring->rp) {
+ 			gpi_event = ev_ring->rp;
++			trace_gpi_event(gpii->gpii_id,
++					ev_ring->rp - ev_ring->base, cntxt_rp,
++					gpi_event->gpi_ere.dword);
+ 			chid = gpi_event->xfer_compl_event.chid;
+ 			type = gpi_event->xfer_compl_event.type;
+ 
+@@ -1686,12 +1697,10 @@ static void gpi_queue_xfer(struct gpii *gpii, struct gchan *gchan,
+ 
+ static void gpi_qspi_clear_deferred(struct gpii *gpii)
+ {
+-	if (!gpii->qspi_deferred_vd)
+-		return;
+-	timer_delete_sync(&gpii->qspi_deferred_timer);
+-
+-	dev_warn(gpii->gpi_dev->dev,
+-		 "SP11 QSPI clearing stale deferred TX completion on terminate/reset\n");
++	/* Caller holds pm_lock for write, excluding event-tasklet publication. */
++	if (gpii->qspi_deferred_vd)
++		dev_warn(gpii->gpi_dev->dev,
++			 "SP11 QSPI clearing stale deferred TX completion on terminate/reset\n");
+ 
+ 	gpii->qspi_deferred_vd = NULL;
+ 	gpii->qspi_deferred_gchan = NULL;
+@@ -1708,9 +1717,6 @@ static int gpi_terminate_all(struct dma_chan *chan)
+ 
+ 	mutex_lock(&gpii->ctrl_lock);
+ 
+-	if (gchan->protocol == QCOM_GPI_QSPI)
+-		gpi_qspi_clear_deferred(gpii);
+-
+ 	/*
+ 	 * treat both channels as a group if its protocol is not UART
+ 	 * STOP, RESET, or START needs to be in lockstep
+@@ -1718,15 +1724,23 @@ static int gpi_terminate_all(struct dma_chan *chan)
+ 	schid = (gchan->protocol == QCOM_GPI_UART) ? gchan->chid : 0;
+ 	echid = (gchan->protocol == QCOM_GPI_UART) ? schid + 1 : MAX_CHANNELS_PER_GPII;
+ 
++	/*
++	 * Quiesce the whole pair and clear its deferred pointer atomically with
++	 * respect to the event tasklet. Clearing first leaves a window in which
++	 * a TX EOT can publish another descriptor that reset subsequently frees.
++	 */
++	write_lock_irq(&gpii->pm_lock);
++	for (i = schid; i < echid; i++)
++		gpii->gchan[i].pm_state = PREPARE_TERMINATE;
++	if (gchan->protocol == QCOM_GPI_QSPI)
++		gpi_qspi_clear_deferred(gpii);
++	write_unlock_irq(&gpii->pm_lock);
++	if (gchan->protocol == QCOM_GPI_QSPI)
++		timer_delete_sync(&gpii->qspi_deferred_timer);
++
+ 	/* stop the channel */
+ 	for (i = schid; i < echid; i++) {
+ 		gchan = &gpii->gchan[i];
+-
+-		/* disable ch state so no more TRE processing */
+-		write_lock_irq(&gpii->pm_lock);
+-		gchan->pm_state = PREPARE_TERMINATE;
+-		write_unlock_irq(&gpii->pm_lock);
+-
+ 		/* send command to Stop the channel */
+ 		ret = gpi_stop_chan(gchan);
+ 	}
+@@ -2180,6 +2194,9 @@ static void gpi_issue_pending(struct dma_chan *chan)
+ 	}
+ 
+ 	gpi_desc->db = ch_ring->wp;
++	trace_gpi_submit(gpii->gpii_id, gchan->chid, vd->tx.cookie,
++			 ch_ring->phys_addr, to_physical(ch_ring, gpi_desc->db),
++			 gpi_desc->len);
+ 	gpi_write_ch_db(gchan, &gchan->ch_ring, gpi_desc->db);
+ 	read_unlock_irqrestore(&gpii->pm_lock, pm_lock_flags);
+ }
+@@ -2281,7 +2298,12 @@ static void gpi_free_chan_resources(struct dma_chan *chan)
+ 	/* disable ch state so no more TRE processing for this channel */
+ 	write_lock_irq(&gpii->pm_lock);
+ 	gchan->pm_state = PREPARE_TERMINATE;
++	if (gchan->protocol == QCOM_GPI_QSPI &&
++	    gpii->qspi_deferred_gchan == gchan)
++		gpi_qspi_clear_deferred(gpii);
+ 	write_unlock_irq(&gpii->pm_lock);
++	if (gchan->protocol == QCOM_GPI_QSPI && gchan->chid == GPI_TX_CHAN)
++		timer_delete_sync(&gpii->qspi_deferred_timer);
+ 
+ 	/* attempt to do graceful hardware shutdown */
+ 	if (cur_state == ACTIVE_STATE) {
+diff --git a/include/trace/events/qcom_gpi.h b/include/trace/events/qcom_gpi.h
+new file mode 100644
+index 000000000..07c720892
+--- /dev/null
++++ b/include/trace/events/qcom_gpi.h
+@@ -0,0 +1,60 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++#undef TRACE_SYSTEM
++#define TRACE_SYSTEM qcom_gpi
++
++#if !defined(_TRACE_QCOM_GPI_H) || defined(TRACE_HEADER_MULTI_READ)
++#define _TRACE_QCOM_GPI_H
++
++#include <linux/tracepoint.h>
++
++TRACE_EVENT(gpi_event,
++	    TP_PROTO(u32 instance, u32 offset, u64 producer, const u32 *words),
++	    TP_ARGS(instance, offset, producer, words),
++
++	    TP_STRUCT__entry(__field(u32, instance)
++			     __field(u32, offset)
++			     __field(u64, producer)
++			     __array(u32, words, 4)
++	    ),
++
++	    TP_fast_assign(__entry->instance = instance;
++			   __entry->offset = offset;
++			   __entry->producer = producer;
++			   memcpy(__entry->words, words, sizeof(__entry->words));
++	    ),
++
++	    TP_printk("instance=%u offset=%u producer=%#llx event=%08x:%08x:%08x:%08x",
++		      __entry->instance, __entry->offset, __entry->producer,
++		      __entry->words[0], __entry->words[1],
++		      __entry->words[2], __entry->words[3])
++);
++
++TRACE_EVENT(gpi_submit,
++	    TP_PROTO(u32 instance, u32 channel, int cookie, u64 base,
++		     u64 doorbell, u32 length),
++	    TP_ARGS(instance, channel, cookie, base, doorbell, length),
++
++	    TP_STRUCT__entry(__field(u32, instance)
++			     __field(u32, channel)
++			     __field(int, cookie)
++			     __field(u64, base)
++			     __field(u64, doorbell)
++			     __field(u32, length)
++	    ),
++
++	    TP_fast_assign(__entry->instance = instance;
++			   __entry->channel = channel;
++			   __entry->cookie = cookie;
++			   __entry->base = base;
++			   __entry->doorbell = doorbell;
++			   __entry->length = length;
++	    ),
++
++	    TP_printk("instance=%u channel=%u cookie=%d base=%#llx doorbell=%#llx length=%u",
++		      __entry->instance, __entry->channel, __entry->cookie,
++		      __entry->base, __entry->doorbell, __entry->length)
++);
++
++#endif /* _TRACE_QCOM_GPI_H */
++
++#include <trace/define_trace.h>
