@@ -1,18 +1,20 @@
 {
-  "recipe_id": "sp11-denali-oled-7.3-20261030",
+  "recipe_id": "sp11-denali-oled-7.3-20261031-wifi",
   "audio_repository": "https://github.com/geocausa/SP11X1e-audio.git",
-  "audio_commit": "444491cbf11c6145b22373d33195920f27a51869",
+  "audio_commit": "1261677c02689846aef87f68b27f931a05de15ae",
   "release": "7.3.0-sp11-unified10",
   "image_commit": "e8ceea84ec1d914c3fc813f0b0f4c9e8c95b9a7f",
-  "integration_commit": "cedc5a624a1869df3b313dd4ac0985d2f130ed61",
-  "integration_tree": "69bcf7af6130af195d7bdc0b1519f0e0a59760df",
+  "integration_commit": "e9e5dd622ee88f33fdc7e275963d0cb9e42aa40a",
+  "integration_tree": "3304b75eddf74cfd0711772babb18cccbed67ae0",
   "audio_files": {
-    "recipes/sp11-7.3/release-lock.json": "421a96ace4650270553d54185316a17a90a2fb9351896bce025cb0d5275e5cfc",
-    "recipes/sp11-7.3/recipe.py": "93bde6cfcbb533912a336d441ce1428141bcb6560d16af25cc2a5cd6709ba740",
-    "recipes/sp11-7.3/module-files.sha256": "351920e25f8ae33d9121a13348227dcd9388713fe9d43ed41931d90e141f8b3b",
+    "recipes/sp11-7.3/release-lock.json": "0008298d5f83d9e012a24dcee3369ef762a271b21ffebcaaaff15b860257cabe",
+    "recipes/sp11-7.3/recipe.py": "9289227b36bcaabd8c7959678538ac83d3225b12ebf0de41e2b819c07162e379",
+    "recipes/sp11-7.3/module-files.sha256": "8b30833fe35a5833954e82c0ab4f1984ce85ecd54bf0db05143409a0f4b7b406",
     "recipes/sp11-7.3/config": "12a340d87e08edb5659ae79a493a5fe980e0638d97a5c4e0317e9023bae5d4ee",
     "recipes/sp11-7.3/templates/50-ubig-production.conf": "9fbba46961a8c9f30d7086bc6d76ad4785c0f014585af8a55cb85e9cb70f2e48",
-    "recipes/sp11-7.3/templates/98-sp11-ubig.conf": "880e39d631cb1ea1de7c61ece4548cb307eb06cf3ad1e340a95ce3201c951954"
+    "recipes/sp11-7.3/templates/98-sp11-ubig.conf": "880e39d631cb1ea1de7c61ece4548cb307eb06cf3ad1e340a95ce3201c951954",
+    "recipes/sp11-7.3/wifi-vdev-count.patch": "37eb1ab24126d96c301878bd6bdf7761dfb0283956779b24789d551d306c66d7"
   },
-  "gpi_patch_sha256": "cef811072a10b1d8f946ead92e0f337d13180dfba2fdcd0e386ae2d8ea4b88fd"
+  "gpi_patch_sha256": "cef811072a10b1d8f946ead92e0f337d13180dfba2fdcd0e386ae2d8ea4b88fd",
+  "gpi_integration_commit": "cedc5a624a1869df3b313dd4ac0985d2f130ed61"
 }

@@ -1,12 +1,14 @@
 # Surface Pro 11 X Elite touchscreen driver
 
-## Current 7.3 sound/touch release
+## Current 7.3 sound/touch/Wi-Fi release
 
 For the accepted OLED unit on Ubuntu 26.10, use the
 [shared 7.3 recipe](recipes/sp11-7.3/README.md). It pins the complete audio/touch
 kernel composition and private payload requirements, includes the GPI ordering
 and lifetime repair, and provides verified staging and a guarded fresh installer.
-Two fresh boots passed normal touch and clear sound after quiet periods.
+Two fresh boots passed normal touch and clear sound after quiet periods. The
+shared release now includes the accepted Wi-Fi channel-restart counter repair
+and required early module loading, tested through completed live channel changes.
 Newer kernels and other units require qualification. Camera, microphone and
 system suspend are outside this acceptance.
 

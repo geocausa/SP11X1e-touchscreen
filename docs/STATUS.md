@@ -4,9 +4,9 @@
 
 The tested-unit sound/touch release is now the
 [shared 7.3 recipe](../recipes/sp11-7.3/README.md), pinned to the audio recipe
-and repaired kernel integration cedc5a624. Two owner-confirmed fresh boots
-passed touch and clear first sound, with tracing off on the repeat. The recipe
-packages accepted artifacts; no new kernel compilation or live configuration
+and repaired GPI integration cedc5a624 plus Wi-Fi integration e9e5dd622. Two owner-confirmed fresh boots
+passed touch and clear first sound, with tracing off on the repeat. The current Wi-Fi follow-up passed completed live channel changes and owner
+sound/touch/Resources checks. The recipe packages accepted artifacts; no new kernel compilation or live configuration
 change was made to prepare it. A destructive clean OS reinstall has not been
 performed. Camera, microphone and system suspend remain separately unqualified.
 

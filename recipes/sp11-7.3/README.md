@@ -8,7 +8,7 @@ Do not install their transport modules over 7.3.
 
 The accepted client alone was insufficient: 7.3 also needed matching GENI/GPI
 transport, device tree, boot arguments, audio power behavior and userspace.
-We therefore use one shared release, `sp11-denali-oled-7.3-20261030`, owned by
+We therefore use one shared release, `sp11-denali-oled-7.3-20261031-wifi`, owned by
 the [audio repository](https://github.com/geocausa/SP11X1e-audio).
 `shared-release.json` pins the audio commit and recipe files by hash. The
 wrapper refuses a mismatched recipe before running any install action.
@@ -63,7 +63,7 @@ the accepted repaired-GPI integration is
 This patch is **relative to that integrated base**, not a standalone patch for
 stock 7.3 or a replacement for the entire shared kernel integration. The
 private bundle's complete source archive reconstructs the pinned integration
-tree; its 38-patch series records the changes after the pristine 7.3 snapshot.
+tree; its 39-patch series records the changes after the pristine 7.3 snapshot.
 No new kernel was compiled to package this release.
 
 Offline tests and a new initrd rehearsal passed. Physical acceptance comes
@@ -76,3 +76,20 @@ parent-controller restart to force touch initialization.
 Camera, microphone and system suspend remain separately unqualified. Newer
 kernels/package versions or another hardware unit require a reviewed port and
 the same physical gates; copying the recipe does not establish compatibility.
+
+## Accepted Wi-Fi follow-up
+
+The current shared release adds ath12k core integration
+`e9e5dd622ee88f33fdc7e275963d0cb9e42aa40a` on top of the GPI integration above.
+Only the Wi-Fi core was rebuilt; touch, GPI, audio and the main image retain
+their accepted bytes. Two completed live router channel switches were captured
+with zero statistics timeouts and 387.6 seconds of responsive follow-up. The
+owner confirmed normal touch, clear cold audio twice and responsive Resources.
+The router's original settings were restored.
+
+The canonical audio recipe pins the full four-file WCN7850 firmware closure,
+loads the core early using `rd.driver.pre=ath12k`, and verifies actual loaded
+identities. A first initrd-only attempt had loaded the old core after switching
+to the root disk; this loading requirement is part of the recipe. The matching
+small source delta is `wifi-vdev-count.patch` in the audio recipe. Its complete
+source archive and ordered 39 changes remain in the owner-private bundle.
