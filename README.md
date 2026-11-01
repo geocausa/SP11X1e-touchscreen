@@ -1,5 +1,12 @@
 # Surface Pro 11 X Elite touchscreen driver
 
+The current qualified 7.3 host-integration recipe is
+[`recipes/sp11-7.3-host-integration/`](recipes/sp11-7.3-host-integration/README.md).
+It shares the complete locked kernel/audio/touch/firmware/battery recipe with
+the audio repository. Two kernel boots passed owner touch and cold-sound checks;
+the corrected startup image passed the repeat boot. The older recipe remains
+available as a separate recovery release.
+
 ## Current 7.3 sound/touch/Wi-Fi release
 
 For the accepted OLED unit on Ubuntu 26.10, use the
