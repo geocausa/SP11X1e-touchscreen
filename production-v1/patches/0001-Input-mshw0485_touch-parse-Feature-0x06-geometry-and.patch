@@ -1,0 +1,307 @@
+From 8f735ed2f0f44696491dacc550aef68cb3604529 Mon Sep 17 00:00:00 2001
+From: geoca <geoca@localhost>
+Date: Tue, 24 Nov 2026 20:02:09 +0000
+Subject: [PATCH 1/8] Input: mshw0485_touch - parse Feature 0x06 geometry and
+ accept all Col02 Heat IDs
+
+Parse live Feature 0x06 CapImg 0x0200 V0/V1 device properties to
+validate sensor dimensions and derive physical input resolution
+(units/mm) for ABS_MT_POSITION_X/Y. Accept all nine Col02 CapImg Heat
+report IDs (0x07, 0x08, 0x0a..0x0d, 0x12, 0x1a, 0x1c), initialize the
+heatmap buffer to the idle zero-signal baseline for sparse RLV frames,
+handle 0xff CCP padding terminators, and ignore valid non-touch CapImg
+frames without incrementing heat_errors.
+---
+ drivers/input/touchscreen/mshw0485_touch.c | 172 ++++++++++++++++++++-
+ 1 file changed, 164 insertions(+), 8 deletions(-)
+
+diff --git a/drivers/input/touchscreen/mshw0485_touch.c b/drivers/input/touchscreen/mshw0485_touch.c
+index df1605b1f..aca70b084 100644
+--- a/drivers/input/touchscreen/mshw0485_touch.c
++++ b/drivers/input/touchscreen/mshw0485_touch.c
+@@ -44,8 +44,15 @@
+ #define G6TS_HEAT_ROWS			46U
+ #define G6TS_HEAT_COLS			68U
+ #define G6TS_HEAT_SAMPLES		(G6TS_HEAT_ROWS * G6TS_HEAT_COLS)
++#define G6TS_CAPIMG_CONTAINER_SECTION	0x0000
+ #define G6TS_HEAT_SECTION		0x0100
++#define G6TS_CAPIMG_PROPS_SECTION	0x0200
+ #define G6TS_METADATA_SECTION		0xff00
++#define G6TS_CAPIMG_PROPS_V0_MIN_SIZE	0x17U
++#define G6TS_CAPIMG_PROPS_V1_MIN_SIZE	0x70U
++#define G6TS_FEATURE06_LEN		119U
++#define G6TS_DEFAULT_HIMETRIC_WIDTH	27389U
++#define G6TS_DEFAULT_HIMETRIC_HEIGHT	18259U
+ #define G6TS_NSR_BINS			16U
+ #define G6TS_NSR_CUTOFF			655U
+ /*
+@@ -501,7 +508,14 @@ struct g6ts {
+ 	u64 ready_heat_frames;
+ 	u64 ready_verification_failures;
+ 	u64 heat_frames;
++	u64 non_touch_heat_frames;
+ 	u64 heat_errors;
++	u32 sensor_rows;
++	u32 sensor_cols;
++	u32 himetric_width;
++	u32 himetric_height;
++	u8 sensor_orientation;
++	bool feature06_valid;
+ 	u64 component_total;
+ 	u64 contact_total;
+ 	u64 weak_rejections;
+@@ -660,7 +674,11 @@ static ssize_t behavior_stats_show(struct device *dev,
+ 			    "last_content_len=%u\n"
+ 			    "mode_enabled=%u\n"
+ 			    "awaiting_ready_heat=%u\n"
++			    "feature06_valid=%u\n"
++			    "sensor_geometry=%ux%u\n"
++			    "himetric_size=%ux%u\n"
+ 			    "heat_frames=%llu\n"
++			    "non_touch_heat_frames=%llu\n"
+ 			    "heat_errors=%llu\n"
+ 			    "components=%llu\n"
+ 			    "accepted_contacts=%llu\n"
+@@ -712,7 +730,11 @@ static ssize_t behavior_stats_show(struct device *dev,
+ 			    ts->last_header, ts->last_class,
+ 			    ts->last_content_id, ts->last_content_len,
+ 			    ts->mode_enabled, ts->awaiting_ready_heat,
+-			    ts->heat_frames, ts->heat_errors,
++			    ts->feature06_valid,
++			    ts->sensor_rows, ts->sensor_cols,
++			    ts->himetric_width, ts->himetric_height,
++			    ts->heat_frames, ts->non_touch_heat_frames,
++			    ts->heat_errors,
+ 			    ts->component_total, ts->contact_total,
+ 			    ts->weak_rejections, ts->nsr_rejections,
+ 			    ts->palm_rejections, ts->assignment_matches,
+@@ -949,6 +971,122 @@ static void g6ts_clear_last_response(struct g6ts *ts)
+ 	ts->last_content_id = 0xff;
+ }
+ 
++static bool g6ts_is_heat_report_id(u8 content_id)
++{
++	switch (content_id) {
++	case 0x07:
++	case 0x08:
++	case 0x0a:
++	case 0x0b:
++	case 0x0c:
++	case 0x0d:
++	case 0x12:
++	case 0x1a:
++	case 0x1c:
++		return true;
++	default:
++		return false;
++	}
++}
++
++static void g6ts_apply_input_resolution(struct g6ts *ts)
++{
++	u32 width_hm = ts->himetric_width ? ts->himetric_width :
++					    G6TS_DEFAULT_HIMETRIC_WIDTH;
++	u32 height_hm = ts->himetric_height ? ts->himetric_height :
++					      G6TS_DEFAULT_HIMETRIC_HEIGHT;
++	u32 res_x = DIV_ROUND_CLOSEST_ULL((u64)G6TS_LOGICAL_MAX * 100U,
++					  width_hm);
++	u32 res_y = DIV_ROUND_CLOSEST_ULL((u64)G6TS_LOGICAL_MAX * 100U,
++					  height_hm);
++
++	if (!ts->input)
++		return;
++	input_abs_set_res(ts->input, ABS_MT_POSITION_X, res_x);
++	input_abs_set_res(ts->input, ABS_MT_POSITION_Y, res_y);
++}
++
++static int g6ts_parse_feature06(struct g6ts *ts, const u8 *content,
++				size_t content_len)
++{
++	const u8 *props = NULL;
++	size_t props_len = 0;
++	u32 outer_len, rows, cols, width_hm, height_hm;
++	u16 outer_type;
++	u8 version, orientation = 0;
++
++	if (content_len < 7)
++		return -EMSGSIZE;
++
++	outer_len = get_unaligned_le32(content);
++	outer_type = get_unaligned_le16(content + 4);
++	if (outer_len < 7 || outer_len > content_len)
++		return -EPROTO;
++
++	if (outer_type == G6TS_CAPIMG_PROPS_SECTION) {
++		props = content;
++		props_len = outer_len;
++	} else if (outer_type == G6TS_CAPIMG_CONTAINER_SECTION) {
++		size_t offset = 7;
++
++		while (offset < outer_len) {
++			u32 sub_len;
++			u16 sub_type;
++
++			if (outer_len - offset < 7)
++				return -EPROTO;
++			sub_len = get_unaligned_le32(content + offset);
++			sub_type = get_unaligned_le16(content + offset + 4);
++			if (sub_len < 7 || sub_len > outer_len - offset)
++				return -EPROTO;
++			if (sub_type == G6TS_CAPIMG_PROPS_SECTION) {
++				props = content + offset;
++				props_len = sub_len;
++				break;
++			}
++			offset += sub_len;
++		}
++	} else {
++		return -EPROTO;
++	}
++
++	if (!props)
++		return -ENOENT;
++
++	version = props[6];
++	if (version == 0) {
++		if (props_len < G6TS_CAPIMG_PROPS_V0_MIN_SIZE)
++			return -EPROTO;
++		rows = get_unaligned_le16(props + 0x07);
++		cols = get_unaligned_le16(props + 0x0b);
++		width_hm = get_unaligned_le32(props + 0x0f);
++		height_hm = get_unaligned_le32(props + 0x13);
++	} else if (version == 1) {
++		if (props_len < G6TS_CAPIMG_PROPS_V1_MIN_SIZE)
++			return -EPROTO;
++		rows = get_unaligned_le32(props + 0x07);
++		cols = get_unaligned_le32(props + 0x0b);
++		width_hm = get_unaligned_le32(props + 0x0f);
++		height_hm = get_unaligned_le32(props + 0x13);
++		orientation = props[0x17];
++	} else {
++		return -EPROTO;
++	}
++
++	if (rows != G6TS_HEAT_ROWS || cols != G6TS_HEAT_COLS ||
++	    !width_hm || !height_hm)
++		return -EPROTO;
++
++	ts->sensor_rows = rows;
++	ts->sensor_cols = cols;
++	ts->himetric_width = width_hm;
++	ts->himetric_height = height_hm;
++	ts->sensor_orientation = orientation;
++	ts->feature06_valid = true;
++	g6ts_apply_input_resolution(ts);
++	return 0;
++}
++
+ static int g6ts_extract_nsr_metadata(struct g6ts *ts, const u8 *section,
+ 				     size_t section_len)
+ {
+@@ -960,10 +1098,14 @@ static int g6ts_extract_nsr_metadata(struct g6ts *ts, const u8 *section,
+ 		const u8 *record;
+ 		unsigned int count, i;
+ 
++		if (section[position] == 0xff)
++			break;
+ 		if (section_len - position < 4)
+ 			return -EPROTO;
+ 		record = section + position;
+ 		payload_len = get_unaligned_le16(record + 2);
++		if (record[0] == 0x00 && payload_len == 0)
++			break;
+ 		if (payload_len > section_len - position - 4)
+ 			return -EPROTO;
+ 		record_end = position + 4 + payload_len;
+@@ -1043,7 +1185,7 @@ static int g6ts_extract_heatmap(struct g6ts *ts, const u8 *content,
+ 		if (found || section[6] != 1 || section[7] != 8)
+ 			return -EPROTO;
+ 
+-		memset(ts->heatmap, 0, sizeof(ts->heatmap));
++		memset(ts->heatmap, G6TS_HEAT_SIGNAL_ZERO, sizeof(ts->heatmap));
+ 		memset(ts->heat_seen, 0, sizeof(ts->heat_seen));
+ 		position = offset + 8;
+ 		while (position < section_end) {
+@@ -1068,7 +1210,7 @@ static int g6ts_extract_heatmap(struct g6ts *ts, const u8 *content,
+ 			written += count;
+ 			position += count;
+ 		}
+-		if (written != G6TS_HEAT_SAMPLES)
++		if (!written || written > G6TS_HEAT_SAMPLES)
+ 			return -EPROTO;
+ 		found = true;
+ 		offset = section_end;
+@@ -2145,7 +2287,10 @@ static int g6ts_report_heat_contacts(struct g6ts *ts, const u8 *content,
+ 
+ 	ret = g6ts_extract_heatmap(ts, content, content_len);
+ 	if (ret) {
+-		ts->heat_errors++;
++		if (ret == -ENOENT)
++			ts->non_touch_heat_frames++;
++		else
++			ts->heat_errors++;
+ 		return ret;
+ 	}
+ 	count = g6ts_find_contacts(ts);
+@@ -2199,7 +2344,7 @@ static void g6ts_handle_data_report(struct g6ts *ts)
+ 	 * until a complete Heat frame has passed the normal structural parser.
+ 	 */
+ 	if (ts->awaiting_ready_heat &&
+-	    ts->last_content_id != G6TS_HEATMAP_REPORT_ID)
++	    !g6ts_is_heat_report_id(ts->last_content_id))
+ 		return;
+ 
+ 	if (ts->last_content_id == 0x40 && ts->last_content_len == 5) {
+@@ -2214,11 +2359,13 @@ static void g6ts_handle_data_report(struct g6ts *ts)
+ 		return;
+ 	}
+ 
+-	if (ts->last_content_id == G6TS_HEATMAP_REPORT_ID &&
++	if (g6ts_is_heat_report_id(ts->last_content_id) &&
+ 	    ts->last_content_len + 1 <= G6TS_MAX_BODY) {
+ 		int ret;
+ 
+ 		ret = g6ts_report_heat_contacts(ts, payload, ts->last_content_len);
++		if (ret == -ENOENT)
++			return;
+ 		if (ret) {
+ 			if (ts->awaiting_ready_heat)
+ 				ts->ready_verification_failures++;
+@@ -2778,12 +2925,16 @@ static int g6ts_windows_cold_attach_locked(struct g6ts *ts)
+ 	ret = g6ts_dma_feature_exchange(ts, GET_FEATURE, 0x06, NULL, 0);
+ 	if (ret)
+ 		return ret;
+-	ret = g6ts_expect_response(ts, GET_FEATURE_RESPONSE, 0x06, 119);
+-	if (ret || ts->last_content_len != 119)
++	ret = g6ts_expect_response(ts, GET_FEATURE_RESPONSE, 0x06,
++				   G6TS_FEATURE06_LEN);
++	if (ret || ts->last_content_len != G6TS_FEATURE06_LEN)
+ 		return ret ? ret : -EPROTO;
+ 	content = ts->body + HIDSPI_INPUT_BODY_HEADER_SIZE;
+ 	memcpy(ts->parity_feature06_prefix, content,
+ 	       sizeof(ts->parity_feature06_prefix));
++	ret = g6ts_parse_feature06(ts, content, ts->last_content_len);
++	if (ret)
++		return ret;
+ 
+ 	if (!g6ts_windows_feedback_provider_valid()) {
+ 		ts->initialization_stage = G6TS_INIT_WINDOWS_FEEDBACK_REQUIRED;
+@@ -3302,10 +3453,15 @@ static int g6ts_probe(struct spi_device *spi)
+ 	ts->input->name = "Microsoft Surface G6 Touch";
+ 	ts->input->id.bustype = BUS_SPI;
+ 	ts->input->dev.parent = &spi->dev;
++	ts->sensor_rows = G6TS_HEAT_ROWS;
++	ts->sensor_cols = G6TS_HEAT_COLS;
++	ts->himetric_width = G6TS_DEFAULT_HIMETRIC_WIDTH;
++	ts->himetric_height = G6TS_DEFAULT_HIMETRIC_HEIGHT;
+ 	input_set_abs_params(ts->input, ABS_MT_POSITION_X, 0,
+ 			     G6TS_LOGICAL_MAX, 0, 0);
+ 	input_set_abs_params(ts->input, ABS_MT_POSITION_Y, 0,
+ 			     G6TS_LOGICAL_MAX, 0, 0);
++	g6ts_apply_input_resolution(ts);
+ 	touchscreen_parse_properties(ts->input, true, &ts->prop);
+ 	ret = input_mt_init_slots(ts->input, G6TS_MAX_CONTACTS,
+ 				  INPUT_MT_DIRECT | INPUT_MT_DROP_UNUSED |
+-- 
+2.55.0
+

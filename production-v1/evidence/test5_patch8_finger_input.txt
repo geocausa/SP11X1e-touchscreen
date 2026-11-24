@@ -1,0 +1,53 @@
+Date (UTC): 2026-11-24T21:01:43.553419+00:00
+Kernel: 7.3.0-sp11-unified13
+Owner reported: finger tap/drag and two-finger pinch work.
+Read-only behavior_stats after that test:
+profile=production-v1
+initialization_stage=wait-heat
+last_header=03 8d 43 5a
+last_class=1
+last_content_id=18
+last_content_len=3629
+mode_enabled=1
+awaiting_ready_heat=0
+feature06_valid=1
+sensor_geometry=46x68
+himetric_size=27389x18259
+heat_frames=414
+non_touch_heat_frames=1
+heat_errors=0
+components=426
+accepted_contacts=420
+weak_rejections=6
+nsr_rejections=0
+palm_rejections=0
+edge_palm_rejections=0
+merged_splits=0
+duplicate_merges=0
+assignment_matches=410
+new_tracks=10
+output_frames=414
+output_contacts=410
+processing_average_ns=35912
+processing_max_ns=88069
+panel_resets=0
+recovery_successes=2
+recovery_failures=0
+hardware_recovery_attempts=2
+host_fault_recoveries=0
+irq_transport_errors=0
+irq_protocol_errors=0
+quiesced_empty_reads=0
+cadence_single_response_irqs=415
+last_host_fault=0
+ready_heat_frames=1
+ready_verification_failures=0
+pm_sleep_mode=off
+pm_sleep_acks=0
+pm_off_acks=1
+pm_sleep_fallbacks=0
+pm_warm_wakes=0
+pm_cold_fallbacks=0
+pm_last_wake_us=0
+
+No reboot, reload, suspend, or module installation performed for this check.

@@ -1,0 +1,82 @@
+From 78d15cd9f53882d6ce78b17c3866aace3d6635fa Mon Sep 17 00:00:00 2001
+From: geoca <geoca@localhost>
+Date: Tue, 24 Nov 2026 20:15:54 +0000
+Subject: [PATCH 6/8] Input: mshw0485_touch - make SET_POWER(SLEEP/OFF)
+ write-only and default to off
+
+Windows HidSpiCx and the HID-over-SPI specification complete
+SET_POWER(SLEEP) and SET_POWER(OFF) on write without waiting for a
+device COMMAND_RESPONSE; only SET_POWER(ON) produces an ACK. Live
+pm_test=devices cycles on Surface Pro 11 OLED confirm that
+SET_POWER(OFF) + rail cut (matching Windows D3Cold Modern Standby)
+completes suspend cleanly, drops synchronous g6ts_resume() latency
+from 810 ms to < 1 ms, finishes async cold attach ~340 ms after
+suspend exit with zero panel resets, and avoids the extra reset seen
+after SET_POWER(ON) warm wake.
+---
+ drivers/input/touchscreen/mshw0485_touch.c | 29 +++++++++++++++-------
+ 1 file changed, 20 insertions(+), 9 deletions(-)
+
+diff --git a/drivers/input/touchscreen/mshw0485_touch.c b/drivers/input/touchscreen/mshw0485_touch.c
+index 8df2dea9c..b244a3dbe 100644
+--- a/drivers/input/touchscreen/mshw0485_touch.c
++++ b/drivers/input/touchscreen/mshw0485_touch.c
+@@ -283,15 +283,17 @@ MODULE_PARM_DESC(clean_init,
+ 
+ /*
+  * HidSpiCx-conformant suspend/resume policy:
+- *  - "sleep":  send SET_POWER(SLEEP), retain rails, warm-wake with SET_POWER(ON)
+- *              (falls back asynchronously to cold reset on timeout/D3Cold).
+- *  - "off":    send SET_POWER(OFF) and cut rails, recover asynchronously on wake.
++ *  - "off":    send write-only SET_POWER(OFF) and cut rails (matching Windows
++ *              SP11 D3Cold Modern Standby), then recover asynchronously on wake
++ *              with zero synchronous PM stall and zero standby rail draw.
++ *  - "sleep":  send write-only SET_POWER(SLEEP), retain rails, and warm-wake
++ *              with SET_POWER(ON) (async cold fallback on timeout/D3Cold).
+  *  - "legacy": skip SET_POWER and synchronously power-cycle GPIOs on wake.
+  */
+-static char *g6ts_pm_sleep_mode = "sleep";
++static char *g6ts_pm_sleep_mode = "off";
+ module_param_named(pm_sleep_mode, g6ts_pm_sleep_mode, charp, 0444);
+ MODULE_PARM_DESC(pm_sleep_mode,
+-		 "HID-SPI suspend/resume mode: sleep (default), off, or legacy");
++		 "HID-SPI suspend/resume mode: off (default), sleep, or legacy");
+ 
+ /*
+  * Evidence-only cold-attach path.  It follows the byte-exact Windows cold
+@@ -2780,12 +2782,12 @@ static irqreturn_t g6ts_interrupt_thread(int irq, void *data)
+ 
+ static int g6ts_parse_pm_mode(const char *mode_name, enum g6ts_pm_mode *mode)
+ {
+-	if (!mode_name || !strcmp(mode_name, "sleep")) {
+-		*mode = G6TS_PM_SLEEP;
++	if (!mode_name || !strcmp(mode_name, "off")) {
++		*mode = G6TS_PM_OFF;
+ 		return 0;
+ 	}
+-	if (!strcmp(mode_name, "off")) {
+-		*mode = G6TS_PM_OFF;
++	if (!strcmp(mode_name, "sleep")) {
++		*mode = G6TS_PM_SLEEP;
+ 		return 0;
+ 	}
+ 	if (!strcmp(mode_name, "legacy")) {
+@@ -2809,6 +2811,15 @@ static int g6ts_hidspi_set_power_locked(struct g6ts *ts,
+ 	if (ret)
+ 		return ret;
+ 
++	/*
++	 * Per the HID-over-SPI specification and Windows HidSpiCx state
++	 * machine (c_writingPowerDownRequest -> c_completingPowerSuccessOnPowerDown),
++	 * SET_POWER(SLEEP) and SET_POWER(OFF) complete on write with no device
++	 * response.  Only SET_POWER(ON) produces a COMMAND_RESPONSE ACK.
++	 */
++	if (state != HIDSPI_ON)
++		return 0;
++
+ 	deadline = jiffies + msecs_to_jiffies(G6TS_HIDSPI_CMD_TIMEOUT_MS);
+ 	for (response_index = 0;
+ 	     response_index < G6TS_FEATURE_RESPONSE_LIMIT;
+-- 
+2.55.0
+

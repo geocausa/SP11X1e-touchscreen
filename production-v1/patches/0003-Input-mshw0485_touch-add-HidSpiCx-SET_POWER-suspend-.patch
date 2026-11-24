@@ -1,0 +1,319 @@
+From 133799b27f4f6ec9b74d6a2fe3291b22c6244de7 Mon Sep 17 00:00:00 2001
+From: geoca <geoca@localhost>
+Date: Tue, 24 Nov 2026 20:02:09 +0000
+Subject: [PATCH 3/8] Input: mshw0485_touch - add HidSpiCx SET_POWER
+ suspend/resume and fast warm wake
+
+Implement HID-over-SPI SET_POWER command/response handling
+(COMMAND_CONTENT type 7, command ID 1, COMMAND_RESPONSE type 4 with
+2000 ms timeout) matching Windows HidSpiCx power management. Quiesce the
+IRQ and panel cleanly via SET_POWER(SLEEP) on suspend and attempt fast
+warm wake via SET_POWER(ON) on resume, falling back asynchronously to
+hardware cold recovery on timeout or D3Cold rail loss without blocking
+resume for 800 ms.
+---
+ drivers/input/touchscreen/mshw0485_touch.c | 192 ++++++++++++++++++++-
+ 1 file changed, 184 insertions(+), 8 deletions(-)
+
+diff --git a/drivers/input/touchscreen/mshw0485_touch.c b/drivers/input/touchscreen/mshw0485_touch.c
+index 3688f26f3..402b3e69e 100644
+--- a/drivers/input/touchscreen/mshw0485_touch.c
++++ b/drivers/input/touchscreen/mshw0485_touch.c
+@@ -119,6 +119,14 @@
+ #define G6TS_WINDOWS_CFU_TOKEN		0xa0U
+ #define G6TS_WINDOWS_HEADER_BODY_MIN_US	490U
+ #define G6TS_WINDOWS_HEADER_BODY_MAX_US	550U
++#define G6TS_HIDSPI_CMD_TIMEOUT_MS	2000U
++#define G6TS_HIDSPI_CMD_STATUS_OK	0x01U
++
++enum g6ts_pm_mode {
++	G6TS_PM_SLEEP,
++	G6TS_PM_OFF,
++	G6TS_PM_LEGACY,
++};
+ 
+ enum g6ts_initialization_stage {
+ 	G6TS_INIT_IDLE,
+@@ -267,6 +275,18 @@ module_param_named(clean_init, g6ts_clean_init, bool, 0444);
+ MODULE_PARM_DESC(clean_init,
+ 		 "Use clean zero-cmdline Col02 touch-only initialization (default: true)");
+ 
++/*
++ * HidSpiCx-conformant suspend/resume policy:
++ *  - "sleep":  send SET_POWER(SLEEP), retain rails, warm-wake with SET_POWER(ON)
++ *              (falls back asynchronously to cold reset on timeout/D3Cold).
++ *  - "off":    send SET_POWER(OFF) and cut rails, recover asynchronously on wake.
++ *  - "legacy": skip SET_POWER and synchronously power-cycle GPIOs on wake.
++ */
++static char *g6ts_pm_sleep_mode = "sleep";
++module_param_named(pm_sleep_mode, g6ts_pm_sleep_mode, charp, 0444);
++MODULE_PARM_DESC(pm_sleep_mode,
++		 "HID-SPI suspend/resume mode: sleep (default), off, or legacy");
++
+ /*
+  * Evidence-only cold-attach path.  It follows the byte-exact Windows cold
+  * sequence through each operation whose owner and contents are known. Dynamic
+@@ -526,6 +546,12 @@ struct g6ts {
+ 	u64 cadence_single_response_irqs;
+ 	u64 ready_heat_frames;
+ 	u64 ready_verification_failures;
++	u64 pm_sleep_acks;
++	u64 pm_off_acks;
++	u64 pm_sleep_fallbacks;
++	u64 pm_warm_wakes;
++	u64 pm_cold_fallbacks;
++	u64 pm_last_wake_us;
+ 	u64 heat_frames;
+ 	u64 non_touch_heat_frames;
+ 	u64 heat_errors;
+@@ -557,6 +583,7 @@ struct g6ts {
+ 	bool nsr_valid;
+ 	bool awaiting_ready_heat;
+ 	bool mode_enabled;
++	bool suspended_in_sleep;
+ 	bool fatal_transport_error;
+ 	bool stopping;
+ 	bool parity_feedback_required;
+@@ -737,7 +764,14 @@ static ssize_t behavior_stats_show(struct device *dev,
+ 			    "cadence_single_response_irqs=%llu\n"
+ 			    "last_host_fault=%d\n"
+ 			    "ready_heat_frames=%llu\n"
+-			    "ready_verification_failures=%llu\n",
++			    "ready_verification_failures=%llu\n"
++			    "pm_sleep_mode=%s\n"
++			    "pm_sleep_acks=%llu\n"
++			    "pm_off_acks=%llu\n"
++			    "pm_sleep_fallbacks=%llu\n"
++			    "pm_warm_wakes=%llu\n"
++			    "pm_cold_fallbacks=%llu\n"
++			    "pm_last_wake_us=%llu\n",
+ 			    g6ts_profile_name(),
+ 			    g6ts_parity_linux_power,
+ 			    g6ts_windows_read_cadence,
+@@ -785,7 +819,14 @@ static ssize_t behavior_stats_show(struct device *dev,
+ 			    ts->cadence_single_response_irqs,
+ 			    ts->last_host_fault,
+ 			    ts->ready_heat_frames,
+-			    ts->ready_verification_failures);
++			    ts->ready_verification_failures,
++			    g6ts_pm_sleep_mode,
++			    ts->pm_sleep_acks,
++			    ts->pm_off_acks,
++			    ts->pm_sleep_fallbacks,
++			    ts->pm_warm_wakes,
++			    ts->pm_cold_fallbacks,
++			    ts->pm_last_wake_us);
+ 	mutex_unlock(&ts->io_lock);
+ 
+ 	return length;
+@@ -2608,6 +2649,75 @@ static irqreturn_t g6ts_interrupt_thread(int irq, void *data)
+ 	return IRQ_HANDLED;
+ }
+ 
++static int g6ts_parse_pm_mode(const char *mode_name, enum g6ts_pm_mode *mode)
++{
++	if (!mode_name || !strcmp(mode_name, "sleep")) {
++		*mode = G6TS_PM_SLEEP;
++		return 0;
++	}
++	if (!strcmp(mode_name, "off")) {
++		*mode = G6TS_PM_OFF;
++		return 0;
++	}
++	if (!strcmp(mode_name, "legacy")) {
++		*mode = G6TS_PM_LEGACY;
++		return 0;
++	}
++	return -EINVAL;
++}
++
++static int g6ts_hidspi_set_power_locked(struct g6ts *ts,
++					enum hidspi_power_state state)
++{
++	u8 power_state = (u8)state;
++	unsigned long deadline;
++	unsigned int response_index;
++	int ret;
++
++	ret = g6ts_dma_hidspi_output(ts, COMMAND_CONTENT,
++				     HIDSPI_SET_POWER_CMD_ID,
++				     &power_state, sizeof(power_state));
++	if (ret)
++		return ret;
++
++	deadline = jiffies + msecs_to_jiffies(G6TS_HIDSPI_CMD_TIMEOUT_MS);
++	for (response_index = 0;
++	     response_index < G6TS_FEATURE_RESPONSE_LIMIT;
++	     response_index++) {
++		unsigned int remaining_ms;
++
++		if (!time_before(jiffies, deadline))
++			return -ETIMEDOUT;
++		remaining_ms = max_t(unsigned int, 1U,
++				     jiffies_to_msecs(deadline - jiffies));
++
++		ret = g6ts_wait_pending(ts, remaining_ms);
++		if (ret)
++			return ret;
++
++		ret = g6ts_dma_read_response(ts);
++		if (ret)
++			return ret;
++
++		if (ts->last_class == COMMAND_RESPONSE &&
++		    ts->last_content_id == HIDSPI_SET_POWER_CMD_ID &&
++		    ts->last_content_len == 1 &&
++		    ts->body[HIDSPI_INPUT_BODY_HEADER_SIZE] ==
++		    G6TS_HIDSPI_CMD_STATUS_OK)
++			return 0;
++		if (ts->last_class == RESET_RESPONSE)
++			return -EPIPE;
++		if (ts->last_class == DATA ||
++		    (ts->last_class == OUTPUT_REPORT_RESPONSE &&
++		     ts->last_content_id == 0x09))
++			continue;
++
++		return -EPROTO;
++	}
++
++	return -EOVERFLOW;
++}
++
+ static int g6ts_dma_feature_exchange(struct g6ts *ts, u8 report_type,
+ 				     u8 content_id, const u8 *content,
+ 				     size_t content_len)
+@@ -3506,9 +3616,15 @@ static void g6ts_recovery_work(struct work_struct *work)
+ 
+ static int g6ts_probe(struct spi_device *spi)
+ {
++	enum g6ts_pm_mode pm_mode;
+ 	struct g6ts *ts;
+ 	int ret;
+ 
++	if (g6ts_parse_pm_mode(g6ts_pm_sleep_mode, &pm_mode))
++		return dev_err_probe(&spi->dev, -EINVAL,
++				     "invalid pm_sleep_mode '%s' (expected sleep, off, or legacy)\n",
++				     g6ts_pm_sleep_mode);
++
+ 	if (g6ts_behavior_v2 && g6ts_windows_orchestrator)
+ 		return dev_err_probe(&spi->dev, -EINVAL,
+ 				     "behavior_v2 and windows_orchestrator are mutually exclusive\n");
+@@ -3617,12 +3733,16 @@ static int g6ts_probe(struct spi_device *spi)
+ static void g6ts_remove(struct spi_device *spi)
+ {
+ 	struct g6ts *ts = spi_get_drvdata(spi);
++	bool was_active = READ_ONCE(ts->mode_enabled);
+ 
+ 	WRITE_ONCE(ts->stopping, true);
+ 	WRITE_ONCE(ts->mode_enabled, false);
++	disable_irq(ts->interrupt_irq);
+ 	cancel_delayed_work_sync(&ts->recovery_work);
+ 	mutex_lock(&ts->io_lock);
+ 	g6ts_release_contacts(ts);
++	if (was_active && !ts->fatal_transport_error)
++		(void)g6ts_hidspi_set_power_locked(ts, HIDSPI_OFF);
+ 	mutex_unlock(&ts->io_lock);
+ 	(void)g6ts_power_off(ts);
+ }
+@@ -3630,15 +3750,43 @@ static void g6ts_remove(struct spi_device *spi)
+ static int g6ts_suspend(struct device *dev)
+ {
+ 	struct g6ts *ts = dev_get_drvdata(dev);
+-	int ret;
++	bool was_active = READ_ONCE(ts->mode_enabled);
++	enum g6ts_pm_mode mode = G6TS_PM_SLEEP;
++	int ret = 0;
+ 
++	g6ts_parse_pm_mode(g6ts_pm_sleep_mode, &mode);
+ 	WRITE_ONCE(ts->mode_enabled, false);
+ 	disable_irq(ts->interrupt_irq);
+ 	cancel_delayed_work_sync(&ts->recovery_work);
+ 
+ 	mutex_lock(&ts->io_lock);
+ 	g6ts_release_contacts(ts);
+-	ret = g6ts_power_off(ts);
++	ts->suspended_in_sleep = false;
++
++	if (mode == G6TS_PM_SLEEP && was_active && !ts->fatal_transport_error) {
++		ret = g6ts_hidspi_set_power_locked(ts, HIDSPI_SLEEP);
++		if (!ret) {
++			ts->pm_sleep_acks++;
++			ts->suspended_in_sleep = true;
++		} else {
++			ts->pm_sleep_fallbacks++;
++			dev_warn(&ts->spi->dev,
++				 "SET_POWER(SLEEP) failed (%d); falling back to power off\n",
++				 ret);
++			ret = g6ts_power_off(ts);
++		}
++	} else if (mode == G6TS_PM_OFF) {
++		if (was_active && !ts->fatal_transport_error) {
++			if (!g6ts_hidspi_set_power_locked(ts, HIDSPI_OFF))
++				ts->pm_off_acks++;
++			else
++				ts->pm_sleep_fallbacks++;
++		}
++		ret = g6ts_power_off(ts);
++	} else {
++		ret = g6ts_power_off(ts);
++	}
++	ts->handled_interrupt_edges = atomic64_read(&ts->interrupt_edges);
+ 	mutex_unlock(&ts->io_lock);
+ 
+ 	if (ret) {
+@@ -3654,20 +3802,48 @@ static int g6ts_suspend(struct device *dev)
+ static int g6ts_resume(struct device *dev)
+ {
+ 	struct g6ts *ts = dev_get_drvdata(dev);
+-	int ret;
++	u64 started_ns = ktime_get_ns();
++	enum g6ts_pm_mode mode = G6TS_PM_SLEEP;
++	bool warm_woke = false;
++	int ret = 0;
+ 
++	g6ts_parse_pm_mode(g6ts_pm_sleep_mode, &mode);
+ 	mutex_lock(&ts->io_lock);
+ 	ts->fatal_transport_error = false;
+ 	ts->recovery_fail_streak = 0;
+ 	ts->recovery_path = G6TS_RECOVERY_HARDWARE;
+-	ret = g6ts_power_on(ts);
++
++	if (ts->suspended_in_sleep) {
++		ts->suspended_in_sleep = false;
++		ret = g6ts_hidspi_set_power_locked(ts, HIDSPI_ON);
++		if (!ret) {
++			ts->pm_warm_wakes++;
++			ts->handled_interrupt_edges =
++				atomic64_read(&ts->interrupt_edges);
++			WRITE_ONCE(ts->mode_enabled, true);
++			warm_woke = true;
++		} else {
++			ts->pm_cold_fallbacks++;
++			dev_warn(&ts->spi->dev,
++				 "SET_POWER(ON) warm wake failed (%d); scheduling cold recovery\n",
++				 ret);
++			ret = 0;
++		}
++	} else if (mode == G6TS_PM_LEGACY) {
++		ret = g6ts_power_on(ts);
++	}
++
++	ts->pm_last_wake_us = div_u64(ktime_get_ns() - started_ns, 1000);
+ 	mutex_unlock(&ts->io_lock);
+ 	if (ret)
+ 		return ret;
+ 
+ 	enable_irq(ts->interrupt_irq);
+-	schedule_delayed_work(&ts->recovery_work,
+-			      msecs_to_jiffies(G6TS_RECOVERY_DELAY_MS));
++	if (!warm_woke)
++		schedule_delayed_work(&ts->recovery_work,
++				      mode == G6TS_PM_LEGACY ?
++				      msecs_to_jiffies(G6TS_RECOVERY_DELAY_MS) :
++				      0);
+ 	return 0;
+ }
+ 
+-- 
+2.55.0
+
