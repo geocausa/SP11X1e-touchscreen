@@ -101,6 +101,17 @@ runtime dependency. Its synthetic tests demonstrate parsing boundaries only.
 This makes the missing evidence inspectable without pretending to supply a pen
 receiver.
 
+An offline clean-room mathematical specification of the MPP 2.6 ("Hasta")
+receiver algorithms (CCP `0x5B`/`0x5C`/`0x5F`/`0x62` layouts, `WindowType 6..11`
+slot allocation, 3-point/5-point antenna centroids, tip-to-ring tilt/azimuth and
+HID Cartesian projection, 10-entry frequency pressure + hybrid 10-bit digital
+unwrapping, Extended Hamming(16,11) odd-parity check, ITU-T CRC-4 `x^4+x+1`,
+buttons/battery/Pen ID reassembly, and azimuth-sector radial palm rejection) is
+documented in [PEN_HASTA_RECEIVER_SPEC.md](PEN_HASTA_RECEIVER_SPEC.md) with an
+offline reference prototype in `tools/pen_hasta_prototype.py`. **Both remain
+unvalidated against a physical Surface Pen** and are not wired into the Linux
+kernel driver; real pen captures and live verification are still required.
+
 ## Provenance and publication boundary
 
 The source snapshot and eight patches come from the owner's GPL-2.0 kernel work;
