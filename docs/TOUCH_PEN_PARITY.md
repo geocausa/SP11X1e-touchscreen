@@ -10,11 +10,11 @@ one touchscreen and contains no pen input device or raw pen receiver.
 
 | Capability | Current Linux candidate | Remaining acceptance |
 | --- | --- | --- |
-| HID-over-SPI transport, attach, fault recovery | Implemented; runtime touch has no transport/reset faults | Exact final-image cold boot, sustained soak, reset fault validation |
+| HID-over-SPI transport, attach, fault recovery | Implemented; isolated zero-cmdline cold boot (`test6`) and runtime touch have no transport/reset faults | Sustained soak, reset fault injection validation |
 | Finger multitouch | Up to 10 slots, tracking, edge snap, merged-finger splitting, duplicate suppression | Keyboard cadence, edge/crossing/slow-drag regressions on final image |
 | Contact size, touch pressure | Estimated from heatmap shape/signal | Calibration/accuracy comparison; these are not measured pen force |
 | Geometry | Feature 0x06 parsed, 46x68 accepted, physical resolution set | Other panels/geometries unsupported; orientation flags are recorded, not a general orientation transform |
-| Power management | OFF by default, asynchronous cold recovery; optional SLEEP/warm path | Final Patch 8 real s2idle plus post-wake touch; repeated cycles and battery measurements |
+| Power management | OFF by default, asynchronous cold recovery; final Patch 8 cold-booted real `s2idle` + post-wake touch passed (`test7`, 147 ms post-exit init, +1,052 Heat frames, 0 resets); optional SLEEP/warm path | Repeated `s2idle` cycles and battery-draw measurements |
 | Firmware-decoded fallback pen (`Col07`, report 0x01) | No Linux decoding/input path | Descriptor-verified packet layout and live pen test in fallback mode |
 | Pen alongside HEAT multitouch (`Col02`, vendor section 0xFF00) | No MPP/Hasta receiver, no pen coordinates/events | Raw pen windows, calibration, decoding/state machine, replay oracle and live tests |
 | Pen hover/pressure/tilt/barrel/eraser | No Linux event reporting | Valid receiver output, Linux input mapping, limits/units, lift/reset/PM cleanup |
@@ -64,8 +64,11 @@ simultaneous firmware pen and HEAT must be demonstrated before relying on it.
   is not proof of Windows processing parity. Keep proven facts separate from
   Linux heuristics and untested provider state.
 - `test4` proves command/initialization progress; it contains zero touch frames.
-  The added owner-assisted `test5` closes runtime finger operation, not cold-boot
-  acceptance or complete post-resume readiness timing.
+  `test5` closes runtime finger operation, `test6` closes isolated zero-cmdline
+  cold boot (`sp11-touch-final`), and `test7` closes a single real `s2idle`
+  cycle plus post-wake touch on the cold-booted Patch 8 image (147 ms post-exit
+  init, +1,052 Heat frames, zero resets). Sustained multi-cycle soak and pen
+  support remain open.
 - Sleep/OFF are write-only. The helper emulation case called a sleep "Ack"
   does not override the later protocol correction or turn write success into
   a device acknowledgment.

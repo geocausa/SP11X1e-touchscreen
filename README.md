@@ -1,12 +1,13 @@
 # Surface Pro 11 X Elite touchscreen driver
 
-## November 24 touch and pen update
+## November 24–25 touch and pen update
 
 The [production-v1 candidate](production-v1/README.md) preserves the latest
 zero-cmdline 7.3 finger-touch driver, eight kernel patches, and Linux evidence.
-Runtime tap/drag and pinch are confirmed on the owner's OLED unit; final-image
-cold-boot qualification remains pending. **Pen and full Windows parity remain
-unfinished.** See the [capability audit and remaining work](docs/TOUCH_PEN_PARITY.md).
+Runtime tap/drag/pinch, isolated one-shot zero-cmdline cold boot, and real
+full-SoC `s2idle` + post-wake touch are confirmed on the owner's OLED unit.
+**Pen and full Windows parity remain unfinished.** See the
+[capability audit and remaining work](docs/TOUCH_PEN_PARITY.md).
 The historical releases and build paths below remain available for recovery.
 
 Linux support for the `MSHW0485` G6 touchscreen in the OLED Microsoft Surface
