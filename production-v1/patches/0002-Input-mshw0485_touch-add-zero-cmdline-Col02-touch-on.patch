@@ -1,0 +1,265 @@
+From 16b7022f71f513f3bc484fe2fe4fdbe704c72e48 Mon Sep 17 00:00:00 2001
+From: geoca <geoca@localhost>
+Date: Tue, 24 Nov 2026 20:02:09 +0000
+Subject: [PATCH 2/8] Input: mshw0485_touch - add zero-cmdline Col02 touch-only
+ init and Phase 91 defaults
+
+Promote the hardware-validated Phase 91 scheduling cadence (490-550 us
+header-to-body delay and one response per threaded IRQ), behavior_v2
+contact pipeline, host_fault_recovery, and ready_quiesce as built-in
+defaults. Add a clean Col02-only initialization path (Feature 0x06
+geometry, Output 0x09 A1/A5 display feedback, Feature 0x05=1 HEAT mode)
+that omits Col05 pen-BLE and Col06 CFU traffic so zero machine-specific
+kernel command-line parameters are required.
+---
+ drivers/input/touchscreen/mshw0485_touch.c | 149 +++++++++++++++++++--
+ 1 file changed, 138 insertions(+), 11 deletions(-)
+
+diff --git a/drivers/input/touchscreen/mshw0485_touch.c b/drivers/input/touchscreen/mshw0485_touch.c
+index aca70b084..3688f26f3 100644
+--- a/drivers/input/touchscreen/mshw0485_touch.c
++++ b/drivers/input/touchscreen/mshw0485_touch.c
+@@ -107,6 +107,9 @@
+ #define G6TS_SP11_VERSION_ID		0x0004U
+ #define G6TS_SP11_DESCRIPTOR_FLAGS	0x0001U
+ #define G6TS_WINDOWS_FEEDBACK_LEN	63U
++#define G6TS_CLEAN_DISPLAY_ON		1U
++#define G6TS_CLEAN_HINGE_SLATE		400U
++#define G6TS_CLEAN_FAST_HOST_ID		1U
+ #define G6TS_WINDOWS_REPORT56_ID_LEN	6U
+ #define G6TS_WINDOWS_CONFIG_DELAY_MS	470U
+ #define G6TS_WINDOWS_CFU_DELAY_MS	825U
+@@ -143,6 +146,10 @@ enum g6ts_initialization_stage {
+ 	G6TS_INIT_WINDOWS_CFU_END_LIST,
+ 	G6TS_INIT_WINDOWS_FINAL_FEATURE73,
+ 	G6TS_INIT_WINDOWS_HEAT_OWNER_REQUIRED,
++	G6TS_INIT_CLEAN_HEAT_CAPS06,
++	G6TS_INIT_CLEAN_FEEDBACK_A1,
++	G6TS_INIT_CLEAN_FEEDBACK_A5,
++	G6TS_INIT_CLEAN_SET_FEATURE05,
+ 	G6TS_INIT_SET_FEATURE05,
+ 	G6TS_INIT_GET_FEATURE70,
+ 	G6TS_INIT_SET_FEATURE70,
+@@ -170,10 +177,10 @@ MODULE_PARM_DESC(windows_orchestrator,
+  * previously tested two-frame admission window; weak and nearby split
+  * candidates retain their longer gates.
+  */
+-static bool g6ts_behavior_v2;
++static bool g6ts_behavior_v2 = true;
+ module_param_named(behavior_v2, g6ts_behavior_v2, bool, 0444);
+ MODULE_PARM_DESC(behavior_v2,
+-		 "Use Phase 76 low-latency Windows-derived contact behavior (default: false)");
++		 "Use low-latency Windows-derived contact behavior (default: true)");
+ 
+ /*
+  * Phase 72 hardware-validated a coupled experiment: append the Linux panel's
+@@ -231,10 +238,10 @@ MODULE_PARM_DESC(reset_storm_breaker,
+  * explicit and observable.  It uses the already proven cold hardware path;
+  * it does not invent another panel command sequence.
+  */
+-static bool g6ts_host_fault_recovery;
++static bool g6ts_host_fault_recovery = true;
+ module_param_named(host_fault_recovery, g6ts_host_fault_recovery, bool, 0444);
+ MODULE_PARM_DESC(host_fault_recovery,
+-		 "Recover with a cold re-enumeration after an IRQ transport/protocol fault (default: false)");
++		 "Recover with a cold re-enumeration after an IRQ transport/protocol fault (default: true)");
+ 
+ /*
+  * Phase 80 live evidence found invalid second headers immediately after valid
+@@ -243,10 +250,22 @@ MODULE_PARM_DESC(host_fault_recovery,
+  * treats an invalid header as an empty trailing read only if ready deasserted;
+  * a still-asserted line remains a real protocol fault handled by Phase 80.
+  */
+-static bool g6ts_ready_quiesce;
++static bool g6ts_ready_quiesce = true;
+ module_param_named(ready_quiesce, g6ts_ready_quiesce, bool, 0444);
+ MODULE_PARM_DESC(ready_quiesce,
+-		 "Ignore one invalid trailing header after GPIO51 deasserts (default: false)");
++		 "Ignore one invalid trailing header after GPIO51 deasserts (default: true)");
++
++/*
++ * Clean touch-only cold/reset initialization using only Col02 (HEAT)
++ * exchanges: Feature 0x06 geometry, Output 0x09 A1/A5 display feedback, and
++ * Feature 0x05=1 HEAT mode activation.  Omits Col05 pen-BLE (0x70/0x56/0x73)
++ * and Col06 CFU (0x60/0x65) so zero machine-specific cmdline parameters are
++ * required.  Bypassed when legacy windows_init_parity=1 is explicitly set.
++ */
++static bool g6ts_clean_init = true;
++module_param_named(clean_init, g6ts_clean_init, bool, 0444);
++MODULE_PARM_DESC(clean_init,
++		 "Use clean zero-cmdline Col02 touch-only initialization (default: true)");
+ 
+ /*
+  * Evidence-only cold-attach path.  It follows the byte-exact Windows cold
+@@ -278,10 +297,10 @@ MODULE_PARM_DESC(parity_linux_power,
+  * services one complete response per interrupt. Phase 91 isolates that
+  * measured cadence from all initialization and contact-processing choices.
+  */
+-static bool g6ts_windows_read_cadence;
++static bool g6ts_windows_read_cadence = true;
+ module_param_named(windows_read_cadence, g6ts_windows_read_cadence, bool, 0444);
+ MODULE_PARM_DESC(windows_read_cadence,
+-		 "Use measured Windows header/body and one-response IRQ cadence");
++		 "Use measured Windows header/body and one-response IRQ cadence (default: true)");
+ 
+ /*
+  * Provider inputs are deliberately invalid by default.  The Windows producer
+@@ -515,6 +534,7 @@ struct g6ts {
+ 	u32 himetric_width;
+ 	u32 himetric_height;
+ 	u8 sensor_orientation;
++	u8 feedback_v06_seq;
+ 	bool feature06_valid;
+ 	u64 component_total;
+ 	u64 contact_total;
+@@ -605,6 +625,14 @@ g6ts_initialization_stage_name(enum g6ts_initialization_stage stage)
+ 		return "windows-final-feature73";
+ 	case G6TS_INIT_WINDOWS_HEAT_OWNER_REQUIRED:
+ 		return "windows-heat-owner-required";
++	case G6TS_INIT_CLEAN_HEAT_CAPS06:
++		return "clean-heat-caps06";
++	case G6TS_INIT_CLEAN_FEEDBACK_A1:
++		return "clean-feedback-a1";
++	case G6TS_INIT_CLEAN_FEEDBACK_A5:
++		return "clean-feedback-a5";
++	case G6TS_INIT_CLEAN_SET_FEATURE05:
++		return "clean-set-feature05";
+ 	case G6TS_INIT_SET_FEATURE05:
+ 		return "set-feature05";
+ 	case G6TS_INIT_GET_FEATURE70:
+@@ -624,6 +652,8 @@ static const char *g6ts_profile_name(void)
+ {
+ 	if (g6ts_windows_init_parity)
+ 		return "windows-init-parity";
++	if (g6ts_clean_init)
++		return "clean-v1";
+ 	if (g6ts_ready_quiesce && g6ts_feature70_one_byte)
+ 		return "phase82";
+ 	if (g6ts_ready_quiesce)
+@@ -2694,6 +2724,99 @@ static bool g6ts_windows_config_provider_valid(void)
+ 		g6ts_parity_report56_flag == 1);
+ }
+ 
++static void g6ts_build_clean_feedback_a1(u8 content[G6TS_WINDOWS_FEEDBACK_LEN])
++{
++	memset(content, 0, G6TS_WINDOWS_FEEDBACK_LEN);
++	content[0] = 0x8e;
++	content[1] = 0xa1;
++	content[2] = G6TS_CLEAN_DISPLAY_ON;
++	content[3] = 0;
++	put_unaligned_le32(G6TS_CLEAN_HINGE_SLATE, &content[4]);
++	put_unaligned_le16(G6TS_CLEAN_FAST_HOST_ID, &content[40]);
++}
++
++static void g6ts_build_clean_feedback_a5(struct g6ts *ts,
++					 u8 content[G6TS_WINDOWS_FEEDBACK_LEN])
++{
++	memset(content, 0, G6TS_WINDOWS_FEEDBACK_LEN);
++	content[0] = 0x8e;
++	content[1] = 0xa5;
++	content[2] = ts->feedback_v06_seq;
++	content[3] = BIT(1);
++	put_unaligned_le16(G6TS_CLEAN_FAST_HOST_ID, &content[39]);
++	put_unaligned_le16(0x0040, &content[46]);
++}
++
++/*
++ * Clean Col02-only touch initialization: parses live Feature 0x06 geometry,
++ * sends the attach-time Display-On A1 + V06 A5 feedback pair, and enables HEAT
++ * streaming via Feature 0x05=1 without touching Col05 (pen BLE) or Col06 (CFU).
++ */
++static int g6ts_clean_touch_attach_locked(struct g6ts *ts,
++					  enum g6ts_recovery_path path)
++{
++	u8 feedback[G6TS_WINDOWS_FEEDBACK_LEN];
++	const u8 *content;
++	int ret;
++
++	ts->initialization_stage = G6TS_INIT_CLEAN_HEAT_CAPS06;
++	ret = g6ts_dma_feature_exchange(ts, GET_FEATURE, 0x06, NULL, 0);
++	if (ret)
++		return ret;
++	ret = g6ts_expect_response(ts, GET_FEATURE_RESPONSE, 0x06,
++				   G6TS_FEATURE06_LEN);
++	if (ret || ts->last_content_len != G6TS_FEATURE06_LEN)
++		return ret ? ret : -EPROTO;
++	content = ts->body + HIDSPI_INPUT_BODY_HEADER_SIZE;
++	memcpy(ts->parity_feature06_prefix, content,
++	       sizeof(ts->parity_feature06_prefix));
++	ret = g6ts_parse_feature06(ts, content, ts->last_content_len);
++	if (ret)
++		return ret;
++
++	ts->initialization_stage = G6TS_INIT_CLEAN_FEEDBACK_A1;
++	g6ts_build_clean_feedback_a1(feedback);
++	ret = g6ts_dma_hidspi_output(ts, OUTPUT_REPORT, 0x09, feedback,
++				     sizeof(feedback));
++	if (ret) {
++		ts->fatal_transport_error = true;
++		return ret;
++	}
++	ret = g6ts_recovery_read_expected(ts, DATA, 0xa0, 1);
++	if (ret || ts->last_content_len != 1 ||
++	    ts->body[HIDSPI_INPUT_BODY_HEADER_SIZE] != 0x01) {
++		if (path == G6TS_RECOVERY_HARDWARE || ret == -EPIPE)
++			return ret ? ret : -EPROTO;
++		dev_dbg(&ts->spi->dev,
++			"software recovery A1 ack skipped (ret=%d)\n", ret);
++	}
++
++	ts->initialization_stage = G6TS_INIT_CLEAN_FEEDBACK_A5;
++	g6ts_build_clean_feedback_a5(ts, feedback);
++	ret = g6ts_dma_hidspi_output(ts, OUTPUT_REPORT, 0x09, feedback,
++				     sizeof(feedback));
++	if (ret) {
++		ts->fatal_transport_error = true;
++		return ret;
++	}
++	ts->feedback_v06_seq++;
++
++	ts->initialization_stage = G6TS_INIT_CLEAN_SET_FEATURE05;
++	ret = g6ts_dma_feature_exchange(ts, SET_FEATURE, 0x05,
++					g6ts_mode_enable,
++					sizeof(g6ts_mode_enable));
++	if (ret)
++		return ret;
++	ret = g6ts_expect_response(ts, SET_FEATURE_RESPONSE, 0x05, 0);
++	if (ret || ts->last_content_len != 0)
++		return ret ? ret : -EPROTO;
++
++	ts->initialization_stage = G6TS_INIT_WAIT_HEAT;
++	ts->awaiting_ready_heat = true;
++	ts->mode_enabled = true;
++	return 0;
++}
++
+ static void g6ts_build_windows_feedback_a1(u8 content[G6TS_WINDOWS_FEEDBACK_LEN])
+ {
+ 	memset(content, 0, G6TS_WINDOWS_FEEDBACK_LEN);
+@@ -3178,6 +3301,13 @@ static int g6ts_full_reinitialize_locked(struct g6ts *ts,
+ 		return 0;
+ 	}
+ 
++	if (g6ts_clean_init) {
++		ret = g6ts_clean_touch_attach_locked(ts, path);
++		if (ret)
++			goto out;
++		return 0;
++	}
++
+ 	/*
+ 	 * Enter the panel's streaming personality with the smallest sequence
+ 	 * proven by the Phase 55 through Phase 65 cold boots and reset recoveries.
+@@ -3392,9 +3522,6 @@ static int g6ts_probe(struct spi_device *spi)
+ 	    (!g6ts_windows_init_parity || !g6ts_parity_cfu_inventory))
+ 		return dev_err_probe(&spi->dev, -EINVAL,
+ 				     "parity_heat_input requires windows_init_parity and parity_cfu_inventory\n");
+-	if (g6ts_windows_read_cadence && !g6ts_windows_init_parity)
+-		return dev_err_probe(&spi->dev, -EINVAL,
+-				     "windows_read_cadence requires windows_init_parity\n");
+ 
+ 	ts = devm_kzalloc(&spi->dev, sizeof(*ts), GFP_KERNEL);
+ 	if (!ts)
+-- 
+2.55.0
+

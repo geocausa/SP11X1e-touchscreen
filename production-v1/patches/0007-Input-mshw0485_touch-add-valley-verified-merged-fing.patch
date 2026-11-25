@@ -1,0 +1,452 @@
+From 472b149661d72b412faa0663925813cb979bb758 Mon Sep 17 00:00:00 2001
+From: geoca <geoca@localhost>
+Date: Tue, 24 Nov 2026 20:31:09 +0000
+Subject: [PATCH 7/8] Input: mshw0485_touch - add valley-verified merged-finger
+ split and bezel edge-palm guard
+
+When two close fingers merge into one connected capacitive component,
+partition the component via Voronoi assignment around strong local
+maxima separated by at least 2 sensor cells (~8 mm) with at least a
+15% capacitive valley between peaks so close pinches separate cleanly
+while flat palms and single fingertips stay unsplit. Add a bezel
+edge-palm guard rejecting wide (>= 7 cell) or heavy unclassified edge
+grips while preserving narrow bezel swipes.
+---
+ drivers/input/touchscreen/mshw0485_touch.c | 349 ++++++++++++++++++---
+ 1 file changed, 305 insertions(+), 44 deletions(-)
+
+diff --git a/drivers/input/touchscreen/mshw0485_touch.c b/drivers/input/touchscreen/mshw0485_touch.c
+index b244a3dbe..c41d34d75 100644
+--- a/drivers/input/touchscreen/mshw0485_touch.c
++++ b/drivers/input/touchscreen/mshw0485_touch.c
+@@ -69,7 +69,14 @@
+ #define G6TS_HEAT_STRONG_MAX		162U
+ #define G6TS_HEAT_MIN_PIXELS		3U
+ #define G6TS_HEAT_PALM_PIXELS		48U
++#define G6TS_HEAT_MERGED_MAX_PIXELS	64U
+ #define G6TS_HEAT_PALM_SPAN		12U
++#define G6TS_EDGE_PALM_SPAN		7U
++#define G6TS_EDGE_PALM_PIXELS		28U
++#define G6TS_EDGE_CONFIRM_PIXELS	16U
++#define G6TS_SPLIT_MIN_DIST_SQ		4U
++#define G6TS_SPLIT_VALLEY_PCT		85U
++#define G6TS_SPLIT_MAX_PEAKS		4U
+ #define G6TS_MAX_CONTACTS		10U
+ #define G6TS_LOGICAL_MAX		32767U
+ #define G6TS_MT_AXIS_MAX_TENTH_MM	1000U
+@@ -472,6 +479,7 @@ struct g6ts_contact {
+ 	u8 strong_local_peak_count;
+ 	u8 shape_class;
+ 	bool shape_allowed;
++	bool touches_edge;
+ };
+ 
+ struct g6ts_track {
+@@ -581,6 +589,8 @@ struct g6ts {
+ 	u64 weak_rejections;
+ 	u64 nsr_rejections;
+ 	u64 palm_rejections;
++	u64 edge_palm_rejections;
++	u64 merged_splits;
+ 	u64 duplicate_merges;
+ 	u64 assignment_matches;
+ 	u64 new_tracks;
+@@ -761,6 +771,8 @@ static ssize_t behavior_stats_show(struct device *dev,
+ 			    "weak_rejections=%llu\n"
+ 			    "nsr_rejections=%llu\n"
+ 			    "palm_rejections=%llu\n"
++			    "edge_palm_rejections=%llu\n"
++			    "merged_splits=%llu\n"
+ 			    "duplicate_merges=%llu\n"
+ 			    "assignment_matches=%llu\n"
+ 			    "new_tracks=%llu\n"
+@@ -821,7 +833,8 @@ static ssize_t behavior_stats_show(struct device *dev,
+ 			    ts->heat_errors,
+ 			    ts->component_total, ts->contact_total,
+ 			    ts->weak_rejections, ts->nsr_rejections,
+-			    ts->palm_rejections, ts->duplicate_merges,
++			    ts->palm_rejections, ts->edge_palm_rejections,
++			    ts->merged_splits, ts->duplicate_merges,
+ 			    ts->assignment_matches,
+ 			    ts->new_tracks, ts->output_frames,
+ 			    ts->output_contacts, average_ns,
+@@ -1805,6 +1818,270 @@ static u8 g6ts_classify_contact(struct g6ts_contact *contact)
+ 	return best_class;
+ }
+ 
++static bool g6ts_contact_touches_edge(const struct g6ts_contact *contact)
++{
++	return contact->min_col == 0 ||
++	       contact->max_col == G6TS_HEAT_COLS - 1 ||
++	       contact->min_row == 0 ||
++	       contact->max_row == G6TS_HEAT_ROWS - 1;
++}
++
++static bool g6ts_is_edge_palm(const struct g6ts_contact *contact,
++			      bool post_classify)
++{
++	unsigned int edge_span = 0;
++
++	if (!contact->touches_edge)
++		return false;
++
++	if (contact->min_col == 0 || contact->max_col == G6TS_HEAT_COLS - 1)
++		edge_span = max_t(unsigned int, edge_span,
++				  contact->max_row - contact->min_row + 1);
++	if (contact->min_row == 0 || contact->max_row == G6TS_HEAT_ROWS - 1)
++		edge_span = max_t(unsigned int, edge_span,
++				  contact->max_col - contact->min_col + 1);
++	if (edge_span >= G6TS_EDGE_PALM_SPAN)
++		return true;
++
++	return post_classify &&
++	       contact->pixels >= G6TS_EDGE_PALM_PIXELS &&
++	       !contact->shape_allowed;
++}
++
++static void g6ts_finalize_component(struct g6ts *ts,
++				    struct g6ts_contact *contact)
++{
++	u32 peak_sig;
++
++	contact->touches_edge = g6ts_contact_touches_edge(contact);
++	contact->x = div_u64(contact->weighted_x * G6TS_LOGICAL_MAX,
++			     (u64)contact->strength * (G6TS_HEAT_COLS - 1));
++	contact->y = div_u64(contact->weighted_y * G6TS_LOGICAL_MAX,
++			     (u64)contact->strength * (G6TS_HEAT_ROWS - 1));
++	contact->output_x = contact->x;
++	contact->output_y = contact->y;
++	peak_sig = G6TS_HEAT_SIGNAL_ZERO -
++		   min_t(u8, contact->peak_value, G6TS_HEAT_SIGNAL_ZERO);
++	contact->pressure = clamp_t(u32,
++				    DIV_ROUND_CLOSEST(peak_sig *
++						      G6TS_MT_PRESSURE_MAX,
++						      G6TS_HEAT_SIGNAL_ZERO),
++				    1U, G6TS_MT_PRESSURE_MAX);
++	contact->sensor_x_q24 = div_u64(contact->weighted_x << 24,
++					contact->strength);
++	contact->sensor_y_q24 = div_u64(contact->weighted_y << 24,
++					contact->strength);
++	if (g6ts_behavior_v2)
++		g6ts_phase76_output_centroid(ts, contact);
++	g6ts_local_peak_counts(ts, contact);
++	contact->features_q12[0] = contact->pixels << G6TS_CLASSIFIER_SHIFT;
++	g6ts_secondary_features(ts, contact);
++	g6ts_geometry_features(ts, contact);
++	contact->features_q12[9] = g6ts_halo_feature(ts, contact);
++	contact->shape_class = g6ts_classify_contact(contact);
++	/* FUN_180049458 permits the classifier's classes zero and two. */
++	contact->shape_allowed = contact->shape_class == 0 ||
++				 contact->shape_class == 2;
++	dev_dbg(&ts->spi->dev,
++		"candidate class=%u allowed=%u pixels=%u edge=%u peaks=%u/%u halo_q12=%d scores=[%lld,%lld,%lld,%lld]\n",
++		contact->shape_class, contact->shape_allowed, contact->pixels,
++		contact->touches_edge, contact->local_peak_count,
++		contact->strong_local_peak_count, contact->features_q12[9],
++		contact->scores_q24[0], contact->scores_q24[1],
++		contact->scores_q24[2], contact->scores_q24[3]);
++}
++
++struct g6ts_split_peak {
++	u8 row;
++	u8 col;
++	u8 strength;
++};
++
++static bool g6ts_peaks_have_valley(const struct g6ts *ts,
++				   const struct g6ts_split_peak *a,
++				   const struct g6ts_split_peak *b)
++{
++	unsigned int min_peak = min_t(unsigned int, a->strength, b->strength);
++	unsigned int min_seg = U8_MAX;
++	unsigned int step;
++
++	for (step = 1; step <= 3; step++) {
++		unsigned int r = ((unsigned int)a->row * (4U - step) +
++				  (unsigned int)b->row * step + 2U) / 4U;
++		unsigned int c = ((unsigned int)a->col * (4U - step) +
++				  (unsigned int)b->col * step + 2U) / 4U;
++		u8 raw = ts->heatmap[r * G6TS_HEAT_COLS + c];
++		unsigned int sig = raw < G6TS_HEAT_SIGNAL_ZERO ?
++				   G6TS_HEAT_SIGNAL_ZERO - raw : 0;
++
++		min_seg = min_t(unsigned int, min_seg, sig);
++	}
++
++	return min_seg * 100U <= min_peak * G6TS_SPLIT_VALLEY_PCT;
++}
++
++/*
++ * Split a merged close-pinch component into separate fingers only when at
++ * least two strong local maxima sit >= 2 sensor cells (~8 mm) apart with a
++ * >= 15% capacitive valley between them.  Flat palms and single fingertips
++ * fail the valley test and remain unsplit.
++ */
++static bool g6ts_try_split_merged_component(struct g6ts *ts,
++					    unsigned int comp_len,
++					    unsigned int *contact_count)
++{
++	static const s8 neighbours[][2] = {
++		{ -1, 0 }, { 1, 0 }, { 0, -1 }, { 0, 1 },
++	};
++	struct g6ts_split_peak candidates[G6TS_LOCAL_PEAK_CAPACITY];
++	struct g6ts_split_peak selected[G6TS_SPLIT_MAX_PEAKS];
++	unsigned int cand_count = 0, sel_count = 0;
++	unsigned int i, j, k;
++
++	for (i = 0; i < comp_len && cand_count < G6TS_LOCAL_PEAK_CAPACITY; i++) {
++		unsigned int index = ts->heat_queue[i];
++		unsigned int row = index / G6TS_HEAT_COLS;
++		unsigned int col = index % G6TS_HEAT_COLS;
++		u8 raw = ts->heatmap[index];
++		s32 current_signal;
++		unsigned int lower = 0, near_equal = 0, n;
++		unsigned int equal_index = UINT_MAX;
++		bool is_peak;
++
++		if (raw > G6TS_HEAT_STRONG_MAX)
++			continue;
++		current_signal = g6ts_signal_q12(raw);
++		if (current_signal <= G6TS_LOCAL_PEAK_FLOOR_Q12)
++			continue;
++		for (n = 0; n < ARRAY_SIZE(neighbours); n++) {
++			int nc = (int)col + neighbours[n][0];
++			int nr = (int)row + neighbours[n][1];
++			unsigned int nidx;
++			s32 nsig;
++
++			if (nr < 0 || nr >= G6TS_HEAT_ROWS ||
++			    nc < 0 || nc >= G6TS_HEAT_COLS) {
++				nidx = UINT_MAX;
++				nsig = 0;
++			} else {
++				nidx = nr * G6TS_HEAT_COLS + nc;
++				nsig = g6ts_signal_q12(ts->heatmap[nidx]);
++			}
++			if (current_signal > nsig) {
++				lower++;
++			} else if (current_signal == nsig) {
++				near_equal++;
++				equal_index = nidx;
++			}
++		}
++		is_peak = lower == 4 ||
++			  (lower == 3 && near_equal == 1 && index < equal_index);
++		if (!is_peak)
++			continue;
++
++		candidates[cand_count].row = row;
++		candidates[cand_count].col = col;
++		candidates[cand_count].strength = G6TS_HEAT_SIGNAL_ZERO - raw;
++		cand_count++;
++	}
++
++	if (cand_count < 2)
++		return false;
++
++	/* Sort strongest peaks first. */
++	for (i = 1; i < cand_count; i++) {
++		struct g6ts_split_peak key = candidates[i];
++
++		j = i;
++		while (j > 0 && candidates[j - 1].strength < key.strength) {
++			candidates[j] = candidates[j - 1];
++			j--;
++		}
++		candidates[j] = key;
++	}
++
++	for (i = 0; i < cand_count && sel_count < G6TS_SPLIT_MAX_PEAKS; i++) {
++		bool distinct = true;
++
++		for (j = 0; j < sel_count; j++) {
++			int dr = (int)candidates[i].row - selected[j].row;
++			int dc = (int)candidates[i].col - selected[j].col;
++
++			if ((unsigned int)(dr * dr + dc * dc) <
++			    G6TS_SPLIT_MIN_DIST_SQ ||
++			    !g6ts_peaks_have_valley(ts, &candidates[i],
++						    &selected[j])) {
++				distinct = false;
++				break;
++			}
++		}
++		if (distinct)
++			selected[sel_count++] = candidates[i];
++	}
++
++	if (sel_count < 2)
++		return false;
++
++	for (k = 0; k < sel_count; k++) {
++		struct g6ts_contact sub = {
++			.min_col = G6TS_HEAT_COLS - 1,
++			.min_row = G6TS_HEAT_ROWS - 1,
++			.peak_value = U8_MAX,
++		};
++
++		memset(ts->heat_component, 0, sizeof(ts->heat_component));
++		for (i = 0; i < comp_len; i++) {
++			unsigned int index = ts->heat_queue[i];
++			unsigned int row = index / G6TS_HEAT_COLS;
++			unsigned int col = index % G6TS_HEAT_COLS;
++			unsigned int best_k = 0;
++			unsigned int best_d = UINT_MAX;
++
++			for (j = 0; j < sel_count; j++) {
++				int dr = (int)row - selected[j].row;
++				int dc = (int)col - selected[j].col;
++				unsigned int d = dr * dr + dc * dc;
++
++				if (d < best_d) {
++					best_d = d;
++					best_k = j;
++				}
++			}
++			if (best_k != k)
++				continue;
++
++			ts->heat_component[index] = 1;
++			sub.pixels++;
++			sub.strength += G6TS_HEAT_SIGNAL_ZERO - ts->heatmap[index];
++			sub.weighted_x += (u64)col *
++					  (G6TS_HEAT_SIGNAL_ZERO - ts->heatmap[index]);
++			sub.weighted_y += (u64)row *
++					  (G6TS_HEAT_SIGNAL_ZERO - ts->heatmap[index]);
++			sub.min_col = min_t(u8, sub.min_col, col);
++			sub.max_col = max_t(u8, sub.max_col, col);
++			sub.min_row = min_t(u8, sub.min_row, row);
++			sub.max_row = max_t(u8, sub.max_row, row);
++			sub.peak_value = min_t(u8, sub.peak_value,
++					       ts->heatmap[index]);
++		}
++		if (!sub.pixels || !sub.strength)
++			continue;
++		if (sub.pixels < G6TS_HEAT_MIN_PIXELS &&
++		    sub.peak_value > G6TS_HEAT_STRONG_MAX)
++			continue;
++		g6ts_finalize_component(ts, &sub);
++		if (g6ts_is_edge_palm(&sub, true)) {
++			ts->edge_palm_rejections++;
++			continue;
++		}
++		g6ts_store_contact(ts, &sub, contact_count);
++	}
++
++	memset(ts->heat_component, 0, sizeof(ts->heat_component));
++	ts->merged_splits++;
++	return true;
++}
++
+ static unsigned int g6ts_find_contacts(struct g6ts *ts)
+ {
+ 	unsigned int contact_count = 0;
+@@ -1818,7 +2095,7 @@ static unsigned int g6ts_find_contacts(struct g6ts *ts)
+ 			.min_row = G6TS_HEAT_ROWS - 1,
+ 			.peak_value = U8_MAX,
+ 		};
+-		unsigned int head = 0, tail = 0;
++		unsigned int head = 0, tail = 0, comp_len, idx;
+ 
+ 		if (ts->heat_seen[start] || !g6ts_heat_active(ts, start))
+ 			continue;
+@@ -1867,6 +2144,7 @@ static unsigned int g6ts_find_contacts(struct g6ts *ts)
+ 			}
+ 		}
+ 
++		comp_len = tail;
+ 		ts->component_total++;
+ 		if (contact.pixels < G6TS_HEAT_MIN_PIXELS &&
+ 		    contact.peak_value > G6TS_HEAT_STRONG_MAX) {
+@@ -1888,56 +2166,36 @@ static unsigned int g6ts_find_contacts(struct g6ts *ts)
+ 				}
+ 			}
+ 		}
+-		if (contact.pixels > G6TS_HEAT_PALM_PIXELS ||
++		if (contact.pixels > G6TS_HEAT_MERGED_MAX_PIXELS ||
+ 		    contact.max_col - contact.min_col + 1 > G6TS_HEAT_PALM_SPAN ||
+ 		    contact.max_row - contact.min_row + 1 > G6TS_HEAT_PALM_SPAN) {
+ 			ts->palm_rejections++;
+ 			continue;
+ 		}
+-		contact.x = div_u64(contact.weighted_x * G6TS_LOGICAL_MAX,
+-				    (u64)contact.strength * (G6TS_HEAT_COLS - 1));
+-		contact.y = div_u64(contact.weighted_y * G6TS_LOGICAL_MAX,
+-				    (u64)contact.strength * (G6TS_HEAT_ROWS - 1));
+-		contact.output_x = contact.x;
+-		contact.output_y = contact.y;
+-		{
+-			u32 peak_sig = G6TS_HEAT_SIGNAL_ZERO -
+-				       min_t(u8, contact.peak_value,
+-					     G6TS_HEAT_SIGNAL_ZERO);
+-
+-			contact.pressure = clamp_t(u32,
+-						   DIV_ROUND_CLOSEST(peak_sig *
+-								     G6TS_MT_PRESSURE_MAX,
+-								     G6TS_HEAT_SIGNAL_ZERO),
+-						   1U, G6TS_MT_PRESSURE_MAX);
++		if (contact.pixels >= 6 &&
++		    g6ts_try_split_merged_component(ts, comp_len,
++						    &contact_count))
++			continue;
++
++		if (contact.pixels > G6TS_HEAT_PALM_PIXELS) {
++			ts->palm_rejections++;
++			continue;
+ 		}
+-		contact.sensor_x_q24 = div_u64(contact.weighted_x << 24,
+-					       contact.strength);
+-		contact.sensor_y_q24 = div_u64(contact.weighted_y << 24,
+-					       contact.strength);
++		contact.touches_edge = g6ts_contact_touches_edge(&contact);
++		if (g6ts_is_edge_palm(&contact, false)) {
++			ts->edge_palm_rejections++;
++			continue;
++		}
++
+ 		memset(ts->heat_component, 0, sizeof(ts->heat_component));
+-		while (tail)
+-			ts->heat_component[ts->heat_queue[--tail]] = 1;
+-		if (g6ts_behavior_v2)
+-			g6ts_phase76_output_centroid(ts, &contact);
+-		g6ts_local_peak_counts(ts, &contact);
+-		contact.features_q12[0] =
+-			contact.pixels << G6TS_CLASSIFIER_SHIFT;
+-		g6ts_secondary_features(ts, &contact);
+-		g6ts_geometry_features(ts, &contact);
+-		contact.features_q12[9] = g6ts_halo_feature(ts, &contact);
+-		contact.shape_class = g6ts_classify_contact(&contact);
+-		/* FUN_180049458 permits the classifier's classes zero and two. */
+-		contact.shape_allowed = contact.shape_class == 0 ||
+-					contact.shape_class == 2;
+-		dev_dbg(&ts->spi->dev,
+-			"candidate class=%u allowed=%u pixels=%u peaks=%u/%u halo_q12=%d scores=[%lld,%lld,%lld,%lld]\n",
+-			contact.shape_class, contact.shape_allowed, contact.pixels,
+-			contact.local_peak_count, contact.strong_local_peak_count,
+-			contact.features_q12[9], contact.scores_q24[0],
+-			contact.scores_q24[1], contact.scores_q24[2],
+-			contact.scores_q24[3]);
++		for (idx = 0; idx < comp_len; idx++)
++			ts->heat_component[ts->heat_queue[idx]] = 1;
++		g6ts_finalize_component(ts, &contact);
+ 		memset(ts->heat_component, 0, sizeof(ts->heat_component));
++		if (g6ts_is_edge_palm(&contact, true)) {
++			ts->edge_palm_rejections++;
++			continue;
++		}
+ 		g6ts_store_contact(ts, &contact, &contact_count);
+ 	}
+ 
+@@ -2133,6 +2391,9 @@ static u8 g6ts_confirmation_requirement(const struct g6ts *ts,
+ 	 */
+ 	if (contact->pixels < G6TS_HEAT_MIN_PIXELS)
+ 		required = G6TS_TRACK_CONFIRM_WEAK;
++	if (contact->touches_edge &&
++	    contact->pixels >= G6TS_EDGE_CONFIRM_PIXELS)
++		required = max_t(u8, required, G6TS_TRACK_CONFIRM_NORMAL);
+ 	if (!contact->shape_allowed)
+ 		required = max_t(u8, required, G6TS_TRACK_CONFIRM_WEAK);
+ 
+-- 
+2.55.0
+

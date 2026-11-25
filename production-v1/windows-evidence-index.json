@@ -1,0 +1,50 @@
+{
+  "audit_date": "2026-11-24",
+  "description": "Local research inspected; file contents are not distributed. Hashes identify evidence, not correctness.",
+  "files": [
+    {
+      "path": "README.md",
+      "sha256": "c22b5aa542b480f283db20b36f987a6aee7ae0805febd86f5a8024798cef9553"
+    },
+    {
+      "path": "docs/00_PROJECT_SCOPE_AND_SAFETY.md",
+      "sha256": "feb35e6be309f53dfd53f6497b18a63bd2425cb2a5bea808d78d67d84177e2e9"
+    },
+    {
+      "path": "docs/01_SP11_TOUCH_PROTOCOL_ABI_AND_L3_SMOKE_TEST.md",
+      "sha256": "3397e26d8b8cff3b6649b4ae672c4a50706701c20b694da99e433b61182d1380"
+    },
+    {
+      "path": "docs/02_SP11_PEN_BLE_HAPTICS_AND_FULL_STACK_COMPLETE.md",
+      "sha256": "2f9f15b34fb369158d71a6d6c136a8a0ad44a13526b92de275ed80bba66f729d"
+    },
+    {
+      "path": "docs/03_PEN_0xFF00_CCP_AND_HASTA_SPEC.md",
+      "sha256": "df811e8c4c1c7539bdcf2b0a6ca951e375cb95d439d20cd761bfc750e279e04f"
+    },
+    {
+      "path": "docs/04_TOUCH_DSP_PALM_AND_OUT09_FEEDBACK_SPEC.md",
+      "sha256": "5d2030ecf5548e895767a438a45895e415ef5a53fb12d4e6e7eacac300858daa"
+    },
+    {
+      "path": "docs/05_HIDSPI_SUSPEND_RESUME_AND_RESET_SPEC.md",
+      "sha256": "478fcb78aec7165838839e14ca0ffc9f1326d07874c6a639f6e5ed4ecdff63cd"
+    },
+    {
+      "path": "workspace/reconstructed-touch-processor/Sp11PenAndCompanionCore.c",
+      "sha256": "72ecc26fe02a9c0068a4f4d91d41d1db0d1f5b0ce1270da7fedb95ecfdf0e0d1"
+    },
+    {
+      "path": "workspace/reconstructed-touch-processor/Sp11TouchCapImgCore.c",
+      "sha256": "ea00c7bf1c7add710a8555736952ac7976be5be61865a9d4afcb1f1d702a3f3f"
+    },
+    {
+      "path": "workspace/reconstructed-touch-processor/Sp11TouchHeatPlugin.c",
+      "sha256": "63d55edad7b421a319596b414abc4f42a983921ed19ef894f1129ece86586319"
+    },
+    {
+      "path": "workspace/reports/sp11_touch_processor_arm64_emulation.txt",
+      "sha256": "422055951454373ede75e0f367b400c1c10eb7a70e4e4c6e85fb3b2e530e3886"
+    }
+  ]
+}

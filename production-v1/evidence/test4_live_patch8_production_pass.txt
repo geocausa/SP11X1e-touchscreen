@@ -1,0 +1,104 @@
+=== PATCH 8 INIT + 8S IDLE SOAK ===
+profile=production-v1
+initialization_stage=wait-heat
+last_header=03 01 40 5a
+last_class=9
+last_content_id=112
+last_content_len=0
+mode_enabled=1
+awaiting_ready_heat=1
+feature06_valid=1
+sensor_geometry=46x68
+himetric_size=27389x18259
+heat_frames=0
+non_touch_heat_frames=0
+heat_errors=0
+components=0
+accepted_contacts=0
+weak_rejections=0
+nsr_rejections=0
+palm_rejections=0
+edge_palm_rejections=0
+merged_splits=0
+duplicate_merges=0
+assignment_matches=0
+new_tracks=0
+output_frames=0
+output_contacts=0
+processing_average_ns=0
+processing_max_ns=0
+panel_resets=0
+recovery_successes=1
+recovery_failures=0
+hardware_recovery_attempts=1
+host_fault_recoveries=0
+irq_transport_errors=0
+irq_protocol_errors=0
+quiesced_empty_reads=0
+cadence_single_response_irqs=0
+last_host_fault=0
+ready_heat_frames=0
+ready_verification_failures=0
+pm_sleep_mode=off
+pm_sleep_acks=0
+pm_off_acks=0
+pm_sleep_fallbacks=0
+pm_warm_wakes=0
+pm_cold_fallbacks=0
+pm_last_wake_us=0
+=== PM_TEST=DEVICES CYCLE ===
+=== POST PM_TEST STATS ===
+profile=production-v1
+initialization_stage=wait-heat
+last_header=03 01 40 5a
+last_class=9
+last_content_id=112
+last_content_len=0
+mode_enabled=1
+awaiting_ready_heat=1
+feature06_valid=1
+sensor_geometry=46x68
+himetric_size=27389x18259
+heat_frames=0
+non_touch_heat_frames=0
+heat_errors=0
+components=0
+accepted_contacts=0
+weak_rejections=0
+nsr_rejections=0
+palm_rejections=0
+edge_palm_rejections=0
+merged_splits=0
+duplicate_merges=0
+assignment_matches=0
+new_tracks=0
+output_frames=0
+output_contacts=0
+processing_average_ns=0
+processing_max_ns=0
+panel_resets=0
+recovery_successes=2
+recovery_failures=0
+hardware_recovery_attempts=2
+host_fault_recoveries=0
+irq_transport_errors=0
+irq_protocol_errors=0
+quiesced_empty_reads=0
+cadence_single_response_irqs=0
+last_host_fault=0
+ready_heat_frames=0
+ready_verification_failures=0
+pm_sleep_mode=off
+pm_sleep_acks=0
+pm_off_acks=1
+pm_sleep_fallbacks=0
+pm_warm_wakes=0
+pm_cold_fallbacks=0
+pm_last_wake_us=0
+=== DMESG ===
+[ 3937.160314] mshw0485-touch spi0.0: touch controller initialization scheduled profile=production-v1
+[ 3938.219446] mshw0485-touch spi0.0: touch controller initialized recoveries=1 resets=0
+[ 3945.168843] PM: suspend entry (s2idle)
+[ 3945.463882] PM: suspend debug: Waiting for 5 second(s).
+[ 3951.229321] PM: suspend exit
+[ 3951.573306] mshw0485-touch spi0.0: touch controller initialized recoveries=2 resets=0

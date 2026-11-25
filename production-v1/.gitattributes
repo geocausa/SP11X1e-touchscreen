@@ -1,0 +1,2 @@
+# Preserve kernel-format patch context and signature whitespace.
+patches/*.patch -whitespace

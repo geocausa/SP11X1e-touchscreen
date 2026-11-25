@@ -1,0 +1,83 @@
+=== Date ===
+2026-11-24T20:22:51Z
+=== Kernel ===
+Linux SP11Lin 7.3.0-sp11-unified13 #1 SMP PREEMPT_DYNAMIC Sun, 1 Nov 2026 10:09:19 +0000 aarch64 GNU/Linux
+=== behavior_stats ===
+profile=clean-v1
+parity_linux_power=0
+windows_read_cadence=1
+initialization_stage=wait-heat
+parity_feedback_required=0
+parity_config_owner_required=0
+parity_cfu_owner_required=0
+parity_cfu_branch_required=0
+parity_heat_owner_required=0
+parity_feature73_early=00 00
+parity_feature73_late=00 00
+parity_feature06_prefix=77 00 00 00 00 00 00 70 00 00 00 00 02 01 2e 00
+parity_cfu_version_prefix=00 00 00 00 00 00 00 00 00 00 00 00
+parity_cfu_offer_response=00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+last_header=03 8d 43 5a
+last_class=1
+last_content_id=18
+last_content_len=3629
+mode_enabled=1
+awaiting_ready_heat=0
+feature06_valid=1
+sensor_geometry=46x68
+himetric_size=27389x18259
+heat_frames=315
+non_touch_heat_frames=2
+heat_errors=0
+components=230
+accepted_contacts=229
+weak_rejections=1
+nsr_rejections=0
+palm_rejections=0
+duplicate_merges=0
+assignment_matches=223
+new_tracks=6
+output_frames=315
+output_contacts=223
+processing_average_ns=31637
+processing_max_ns=99684
+panel_resets=0
+recovery_successes=2
+recovery_failures=0
+hardware_recovery_attempts=2
+software_recovery_attempts=0
+software_recovery_fallbacks=0
+reset_storm_escalations=0
+rapid_reset_streak=0
+host_fault_recoveries=0
+irq_transport_errors=0
+irq_protocol_errors=0
+irq_drain_overflows=0
+quiesced_empty_reads=0
+cadence_single_response_irqs=317
+last_host_fault=0
+ready_heat_frames=2
+ready_verification_failures=0
+pm_sleep_mode=off
+pm_sleep_acks=0
+pm_off_acks=1
+pm_sleep_fallbacks=0
+pm_warm_wakes=0
+pm_cold_fallbacks=0
+pm_last_wake_us=1
+=== dmesg ===
+[ 2260.639982] PM: suspend entry (s2idle)
+[ 2260.963839] PM: suspend debug: Waiting for 5 second(s).
+[ 2266.688704] PM: suspend exit
+[ 2267.023535] mshw0485-touch spi0.0: touch controller initialized path=hardware recoveries=2 resets=0
+[ 2268.692544] PM: suspend entry (s2idle)
+[ 2268.967104] PM: suspend debug: Waiting for 5 second(s).
+[ 2274.685129] PM: suspend exit
+[ 2275.025950] mshw0485-touch spi0.0: touch controller initialized path=hardware recoveries=3 resets=0
+[ 2329.128022] mshw0485-touch spi0.0: touch controller initialization scheduled profile=clean-v1
+[ 2330.196092] mshw0485-touch spi0.0: touch controller initialized path=hardware recoveries=1 resets=0
+[ 2544.512410] mshw0485-touch spi0.0: touch input ready after first valid Heat frame
+[ 2636.783581] PM: suspend entry (s2idle)
+[ 2639.310124] PM: suspend exit
+[ 2639.465817] mshw0485-touch spi0.0: touch controller initialized path=hardware recoveries=2 resets=0
+[ 2640.935831] mshw0485-touch spi0.0: touch input ready after first valid Heat frame

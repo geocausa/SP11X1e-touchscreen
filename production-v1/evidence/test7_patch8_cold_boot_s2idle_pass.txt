@@ -1,0 +1,112 @@
+=== TEST 7: PATCH 8 COLD-BOOTED IMAGE REAL FULL-SOC s2idle + POST-WAKE TOUCH ===
+2026-11-25T07:14:08+00:00
+Linux SP11Lin 7.3.0-sp11-unified13 #1 SMP PREEMPT_DYNAMIC Sun, 1 Nov 2026 10:09:19 +0000 aarch64 GNU/Linux
+=== /sys/module/mshw0485_touch/srcversion ===
+2CD3A3123ABDF93462D80E7
+=== PRE-SUSPEND SNAPSHOT ===
+profile=production-v1
+initialization_stage=wait-heat
+last_header=03 8d 43 5a
+last_class=1
+last_content_id=18
+last_content_len=3629
+mode_enabled=1
+awaiting_ready_heat=0
+feature06_valid=1
+sensor_geometry=46x68
+himetric_size=27389x18259
+heat_frames=851
+non_touch_heat_frames=6
+heat_errors=0
+components=412
+accepted_contacts=404
+weak_rejections=8
+nsr_rejections=0
+palm_rejections=0
+edge_palm_rejections=0
+merged_splits=0
+duplicate_merges=0
+assignment_matches=372
+new_tracks=32
+output_frames=851
+output_contacts=369
+processing_average_ns=27154
+processing_max_ns=91193
+panel_resets=0
+recovery_successes=1
+recovery_failures=0
+hardware_recovery_attempts=1
+host_fault_recoveries=0
+irq_transport_errors=0
+irq_protocol_errors=0
+quiesced_empty_reads=0
+cadence_single_response_irqs=857
+last_host_fault=0
+ready_heat_frames=1
+ready_verification_failures=0
+pm_sleep_mode=off
+pm_sleep_acks=0
+pm_off_acks=0
+pm_sleep_fallbacks=0
+pm_warm_wakes=0
+pm_cold_fallbacks=0
+pm_last_wake_us=0
+=== POST-WAKE SNAPSHOT (AFTER REAL s2idle + POWER-BUTTON WAKE + TOUCH) ===
+profile=production-v1
+initialization_stage=wait-heat
+last_header=03 8d 43 5a
+last_class=1
+last_content_id=18
+last_content_len=3629
+mode_enabled=1
+awaiting_ready_heat=0
+feature06_valid=1
+sensor_geometry=46x68
+himetric_size=27389x18259
+heat_frames=1903
+non_touch_heat_frames=9
+heat_errors=0
+components=1417
+accepted_contacts=1402
+weak_rejections=15
+nsr_rejections=0
+palm_rejections=0
+edge_palm_rejections=0
+merged_splits=0
+duplicate_merges=0
+assignment_matches=1349
+new_tracks=53
+output_frames=1903
+output_contacts=1346
+processing_average_ns=31683
+processing_max_ns=91193
+panel_resets=0
+recovery_successes=2
+recovery_failures=0
+hardware_recovery_attempts=2
+host_fault_recoveries=0
+irq_transport_errors=0
+irq_protocol_errors=0
+quiesced_empty_reads=0
+cadence_single_response_irqs=1912
+last_host_fault=0
+ready_heat_frames=2
+ready_verification_failures=0
+pm_sleep_mode=off
+pm_sleep_acks=0
+pm_off_acks=1
+pm_sleep_fallbacks=0
+pm_warm_wakes=0
+pm_cold_fallbacks=0
+pm_last_wake_us=0
+=== DMESG COLD BOOT + REAL s2idle + POST-WAKE ===
+[    0.000000] Kernel command line: BOOT_IMAGE=/boot/sp11-unified13-7.3.0-sp11-unified13/vmlinuz-7.3.0-sp11-unified13 root=UUID=<redacted> ro clk_ignore_unused pd_ignore_unused cma=128M efi=noruntime quiet splash console=tty0 crashkernel=2G-4G:320M,4G-32G:512M,32G-64G:1024M,64G-128G:2048M,128G-:4096M sp11_cps_parity_v2=1 sp11_cps_v3=1 sp11_volume_transaction=1 sp11_softpause=1 sp11_headroom_link=1 sp11_wsa_clockstop=1 sp11_visense_parity=1 sp11_wsa_windows_init=1 sp11_wsa_macro0db_oracle=1 sp11_wsa_winproducer_nohd2_v3=1 sp11_wsa_csren0_v4=1 sp11_wsa_csren0_v5_idlegated=1 sp11_wsa_windows_3state_v26=1 sp11_wsa_windows_3state_retain_v27=1 sp11_wsa_dp2_offsetctrl2_v28=1 sp11_entry=touch-final rd.driver.pre=ath12k rd.driver.pre=gpi rd.driver.pre=spi-geni-qcom rd.driver.pre=mshw0485_touch soundwire_qcom.sp11_feedback_active_offset2_zero=1 soundwire_qcom.sp11_cps_pcm_route_105c=1
+[    1.308864] mshw0485_touch: loading out-of-tree module taints kernel.
+[    1.794779] input: Microsoft Surface G6 Touch as /devices/platform/soc@0/ac0000.geniqup/a88000.spi/spi_master/spi0/spi0.0/input/input0
+[    2.607260] mshw0485-touch spi0.0: touch controller initialization scheduled profile=production-v1
+[    3.713699] mshw0485-touch spi0.0: touch controller initialized recoveries=1 resets=0
+[   30.277413] mshw0485-touch spi0.0: touch input ready after first valid Heat frame
+[  144.133133] PM: suspend entry (s2idle)
+[  146.570624] PM: suspend exit
+[  146.717587] mshw0485-touch spi0.0: touch controller initialized recoveries=2 resets=0
+[  147.807343] mshw0485-touch spi0.0: touch input ready after first valid Heat frame

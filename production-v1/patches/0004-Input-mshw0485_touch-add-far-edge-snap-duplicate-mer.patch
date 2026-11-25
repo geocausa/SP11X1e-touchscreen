@@ -1,0 +1,289 @@
+From 2d889deb84ba1918666ba4f7d3e6354757a00e39 Mon Sep 17 00:00:00 2001
+From: geoca <geoca@localhost>
+Date: Tue, 24 Nov 2026 20:02:09 +0000
+Subject: [PATCH 4/8] Input: mshw0485_touch - add far-edge snap, duplicate
+ merge, and MT major/minor/pressure
+
+Complete the default touch contact pipeline with one-cell boundary edge
+snapping for reliable bezel swipes, same-frame duplicate sub-blob
+suppression within 6 mm (< 36 mm^2), and calibrated ABS_MT_TOUCH_MAJOR,
+ABS_MT_TOUCH_MINOR (0.1 mm resolution from principal covariance axes),
+and ABS_MT_PRESSURE reporting.
+---
+ drivers/input/touchscreen/mshw0485_touch.c | 151 +++++++++++++++++++--
+ 1 file changed, 141 insertions(+), 10 deletions(-)
+
+diff --git a/drivers/input/touchscreen/mshw0485_touch.c b/drivers/input/touchscreen/mshw0485_touch.c
+index 402b3e69e..45520c0a7 100644
+--- a/drivers/input/touchscreen/mshw0485_touch.c
++++ b/drivers/input/touchscreen/mshw0485_touch.c
+@@ -72,6 +72,10 @@
+ #define G6TS_HEAT_PALM_SPAN		12U
+ #define G6TS_MAX_CONTACTS		10U
+ #define G6TS_LOGICAL_MAX		32767U
++#define G6TS_MT_AXIS_MAX_TENTH_MM	1000U
++#define G6TS_MT_AXIS_RES		10U
++#define G6TS_MT_PRESSURE_MAX		255U
++#define G6TS_DUPLICATE_MERGE_DIST_SQ	36U
+ #define G6TS_TRACK_MATCH_MAX		4096U
+ #define G6TS_CONTACT_HOLD_FRAMES	6U
+ #define G6TS_TRACK_CONFIRM_NORMAL	3U
+@@ -450,6 +454,9 @@ struct g6ts_contact {
+ 	u16 y;
+ 	u16 output_x;
+ 	u16 output_y;
++	u16 touch_major;
++	u16 touch_minor;
++	u8 pressure;
+ 	u8 peak_value;
+ 	u8 min_col;
+ 	u8 max_col;
+@@ -469,6 +476,9 @@ struct g6ts_track {
+ 	u16 raw_y;
+ 	u16 output_x;
+ 	u16 output_y;
++	u16 touch_major;
++	u16 touch_minor;
++	u8 pressure;
+ 	u16 pixels;
+ 	u32 sensor_x_q24;
+ 	u32 sensor_y_q24;
+@@ -567,6 +577,7 @@ struct g6ts {
+ 	u64 weak_rejections;
+ 	u64 nsr_rejections;
+ 	u64 palm_rejections;
++	u64 duplicate_merges;
+ 	u64 assignment_matches;
+ 	u64 new_tracks;
+ 	u64 output_frames;
+@@ -742,6 +753,7 @@ static ssize_t behavior_stats_show(struct device *dev,
+ 			    "weak_rejections=%llu\n"
+ 			    "nsr_rejections=%llu\n"
+ 			    "palm_rejections=%llu\n"
++			    "duplicate_merges=%llu\n"
+ 			    "assignment_matches=%llu\n"
+ 			    "new_tracks=%llu\n"
+ 			    "output_frames=%llu\n"
+@@ -801,7 +813,8 @@ static ssize_t behavior_stats_show(struct device *dev,
+ 			    ts->heat_errors,
+ 			    ts->component_total, ts->contact_total,
+ 			    ts->weak_rejections, ts->nsr_rejections,
+-			    ts->palm_rejections, ts->assignment_matches,
++			    ts->palm_rejections, ts->duplicate_merges,
++			    ts->assignment_matches,
+ 			    ts->new_tracks, ts->output_frames,
+ 			    ts->output_contacts, average_ns,
+ 			    ts->processing_ns_max, ts->reset_notifications,
+@@ -1360,6 +1373,22 @@ static void g6ts_phase76_output_centroid(struct g6ts *ts,
+ 				    weight_total * (G6TS_HEAT_COLS - 1));
+ 	contact->output_y = div_u64(weighted_y * G6TS_LOGICAL_MAX,
+ 				    weight_total * (G6TS_HEAT_ROWS - 1));
++
++	/*
++	 * Mirror FUN_180054690: snap one-cell-wide boundary components cleanly
++	 * to the physical display edges so bezel swipes reach 0..32767.
++	 */
++	if (contact->min_col == 0 && contact->max_col == 0)
++		contact->output_x = 0;
++	else if (contact->min_col == G6TS_HEAT_COLS - 1 &&
++		 contact->max_col == G6TS_HEAT_COLS - 1)
++		contact->output_x = G6TS_LOGICAL_MAX;
++
++	if (contact->min_row == 0 && contact->max_row == 0)
++		contact->output_y = 0;
++	else if (contact->min_row == G6TS_HEAT_ROWS - 1 &&
++		 contact->max_row == G6TS_HEAT_ROWS - 1)
++		contact->output_y = G6TS_LOGICAL_MAX;
+ }
+ 
+ /*
+@@ -1533,9 +1562,18 @@ static void g6ts_geometry_features(struct g6ts *ts,
+ 	u64 sum_xx = 0, sum_yy = 0, sum_xy = 0;
+ 	s64 var_x, var_y, covariance, trace, delta, discriminant;
+ 	u64 denominator;
++	u32 sigma_major_q12, sigma_minor_q12;
+ 	u32 major_axis, minor_axis;
++	u32 pitch_tenth_mm, major_tenth_mm, minor_tenth_mm;
+ 	unsigned int index;
+ 
++	pitch_tenth_mm = DIV_ROUND_CLOSEST(ts->himetric_width ?
++					   ts->himetric_width :
++					   G6TS_DEFAULT_HIMETRIC_WIDTH,
++					   (G6TS_HEAT_COLS - 1) * 10U);
++	contact->touch_major = pitch_tenth_mm;
++	contact->touch_minor = pitch_tenth_mm;
++
+ 	for (index = 0; index < G6TS_HEAT_SAMPLES; index++) {
+ 		u32 row, col;
+ 		s32 signal;
+@@ -1570,15 +1608,29 @@ static void g6ts_geometry_features(struct g6ts *ts,
+ 	trace = max_t(s64, 0, var_x + var_y);
+ 	delta = var_x - var_y;
+ 	discriminant = int_sqrt64(delta * delta + 4 * covariance * covariance);
+-	major_axis = int_sqrt64(((trace + discriminant) / 2) <<
+-				 G6TS_CLASSIFIER_SHIFT);
+-	minor_axis = int_sqrt64(max_t(s64, 0, (trace - discriminant) / 2) <<
+-				 G6TS_CLASSIFIER_SHIFT);
++	sigma_major_q12 = int_sqrt64(((trace + discriminant) / 2) <<
++				     G6TS_CLASSIFIER_SHIFT);
++	sigma_minor_q12 = int_sqrt64(max_t(s64, 0, (trace - discriminant) / 2) <<
++				     G6TS_CLASSIFIER_SHIFT);
++	/*
++	 * For a uniform elliptical contact, full diameter is 4*sigma along
++	 * each principal axis.  Convert to 0.1 mm (ABS_MT_TOUCH_* res=10)
++	 * floored at one sensor pitch so light single-cell taps stay nonzero.
++	 */
++	major_tenth_mm = ((u64)sigma_major_q12 * 4U * pitch_tenth_mm) >>
++			 G6TS_CLASSIFIER_SHIFT;
++	minor_tenth_mm = ((u64)sigma_minor_q12 * 4U * pitch_tenth_mm) >>
++			 G6TS_CLASSIFIER_SHIFT;
++	contact->touch_major = clamp_t(u32, major_tenth_mm, pitch_tenth_mm,
++				       G6TS_MT_AXIS_MAX_TENTH_MM);
++	contact->touch_minor = clamp_t(u32, minor_tenth_mm, pitch_tenth_mm,
++				       contact->touch_major);
++
+ 	major_axis = max_t(u32, 1U << G6TS_CLASSIFIER_SHIFT,
+-			   ((u64)major_axis * G6TS_AXIS_SCALE_Q12) >>
++			   ((u64)sigma_major_q12 * G6TS_AXIS_SCALE_Q12) >>
+ 			   G6TS_CLASSIFIER_SHIFT);
+ 	minor_axis = max_t(u32, 1U << G6TS_CLASSIFIER_SHIFT,
+-			   ((u64)minor_axis * G6TS_AXIS_SCALE_Q12) >>
++			   ((u64)sigma_minor_q12 * G6TS_AXIS_SCALE_Q12) >>
+ 			   G6TS_CLASSIFIER_SHIFT);
+ 	contact->features_q12[7] = div_u64((u64)major_axis <<
+ 					   G6TS_CLASSIFIER_SHIFT, minor_axis);
+@@ -1840,6 +1892,17 @@ static unsigned int g6ts_find_contacts(struct g6ts *ts)
+ 				    (u64)contact.strength * (G6TS_HEAT_ROWS - 1));
+ 		contact.output_x = contact.x;
+ 		contact.output_y = contact.y;
++		{
++			u32 peak_sig = G6TS_HEAT_SIGNAL_ZERO -
++				       min_t(u8, contact.peak_value,
++					     G6TS_HEAT_SIGNAL_ZERO);
++
++			contact.pressure = clamp_t(u32,
++						   DIV_ROUND_CLOSEST(peak_sig *
++								     G6TS_MT_PRESSURE_MAX,
++								     G6TS_HEAT_SIGNAL_ZERO),
++						   1U, G6TS_MT_PRESSURE_MAX);
++		}
+ 		contact.sensor_x_q24 = div_u64(contact.weighted_x << 24,
+ 					       contact.strength);
+ 		contact.sensor_y_q24 = div_u64(contact.weighted_y << 24,
+@@ -2228,6 +2291,9 @@ static void g6ts_update_track(struct g6ts_track *track,
+ 		track->output_y = g6ts_filter_coordinate(track->output_y,
+ 							 contact->y);
+ 	}
++	track->touch_major = contact->touch_major;
++	track->touch_minor = contact->touch_minor;
++	track->pressure = contact->pressure;
+ 	track->strength = contact->strength;
+ 	track->pixels = contact->pixels;
+ 	track->shape_class = contact->shape_class;
+@@ -2261,7 +2327,10 @@ static int g6ts_new_track(struct g6ts *ts,
+ 		track->output_y = g6ts_behavior_v2 ? contact->output_y : contact->y;
+ 		track->sensor_x_q24 = contact->sensor_x_q24;
+ 		track->sensor_y_q24 = contact->sensor_y_q24;
+-		track->strength = contact->strength;
++		track->touch_major = contact->touch_major;
++	track->touch_minor = contact->touch_minor;
++	track->pressure = contact->pressure;
++	track->strength = contact->strength;
+ 		track->pixels = contact->pixels;
+ 		track->shape_class = contact->shape_class;
+ 		track->age = 1;
+@@ -2325,20 +2394,74 @@ g6ts_create_unmatched_tracks(struct g6ts *ts, unsigned int count,
+ static void g6ts_collect_linux_contacts(struct g6ts *ts,
+ 					unsigned long current_slots)
+ {
++	const u32 x_scale = G6TS_WINDOWS_ASSIGN_X_SCALE_Q24;
++	const u32 y_scale = G6TS_WINDOWS_ASSIGN_Y_SCALE_Q24;
++	unsigned long suppressed_slots = 0;
+ 	unsigned int reported = 0;
+-	unsigned int i;
++	unsigned int i, j;
++
++	/*
++	 * Suppress duplicate sub-blobs whose physical centers lie within 6 mm
++	 * (< 36 mm^2) on the same frame, keeping the stronger/older finger.
++	 */
++	for (i = 0; i < G6TS_MAX_CONTACTS; i++) {
++		const struct g6ts_track *first = &ts->tracks[i];
++		u16 first_x, first_y;
++
++		if (!first->active || !first->confirmed ||
++		    !(current_slots & BIT(i)) || (suppressed_slots & BIT(i)))
++			continue;
++		first_x = g6ts_windows_assignment_coordinate(first->sensor_x_q24,
++							     x_scale);
++		first_y = g6ts_windows_assignment_coordinate(first->sensor_y_q24,
++							     y_scale);
++		for (j = i + 1; j < G6TS_MAX_CONTACTS; j++) {
++			const struct g6ts_track *second = &ts->tracks[j];
++			u16 second_x, second_y;
++			s32 dx, dy;
++
++			if (!second->active || !second->confirmed ||
++			    !(current_slots & BIT(j)) ||
++			    (suppressed_slots & BIT(j)))
++				continue;
++			second_x = g6ts_windows_assignment_coordinate(second->sensor_x_q24,
++								      x_scale);
++			second_y = g6ts_windows_assignment_coordinate(second->sensor_y_q24,
++								      y_scale);
++			dx = (s32)first_x - second_x;
++			dy = (s32)first_y - second_y;
++			if ((u32)(dx * dx + dy * dy) >=
++			    G6TS_DUPLICATE_MERGE_DIST_SQ)
++				continue;
++
++			if (second->strength > first->strength ||
++			    (second->strength == first->strength &&
++			     second->age > first->age)) {
++				suppressed_slots |= BIT(i);
++				ts->duplicate_merges++;
++				break;
++			}
++			suppressed_slots |= BIT(j);
++			ts->duplicate_merges++;
++		}
++	}
+ 
+ 	for (i = 0; i < G6TS_MAX_CONTACTS; i++) {
+ 		struct g6ts_track *track = &ts->tracks[i];
+ 
+ 		/* Retained tracks remain assignable but never become ghost contacts. */
+ 		if (!track->active || !track->confirmed ||
+-		    !(current_slots & BIT(i)))
++		    !(current_slots & BIT(i)) || (suppressed_slots & BIT(i)))
+ 			continue;
+ 		input_mt_slot(ts->input, i);
+ 		input_mt_report_slot_state(ts->input, MT_TOOL_FINGER, true);
+ 		touchscreen_report_pos(ts->input, &ts->prop, track->output_x,
+ 				       track->output_y, true);
++		input_report_abs(ts->input, ABS_MT_TOUCH_MAJOR,
++				 track->touch_major);
++		input_report_abs(ts->input, ABS_MT_TOUCH_MINOR,
++				 track->touch_minor);
++		input_report_abs(ts->input, ABS_MT_PRESSURE, track->pressure);
+ 		reported++;
+ 	}
+ 	input_mt_sync_frame(ts->input);
+@@ -3704,6 +3827,14 @@ static int g6ts_probe(struct spi_device *spi)
+ 			     G6TS_LOGICAL_MAX, 0, 0);
+ 	input_set_abs_params(ts->input, ABS_MT_POSITION_Y, 0,
+ 			     G6TS_LOGICAL_MAX, 0, 0);
++	input_set_abs_params(ts->input, ABS_MT_TOUCH_MAJOR, 0,
++			     G6TS_MT_AXIS_MAX_TENTH_MM, 0, 0);
++	input_set_abs_params(ts->input, ABS_MT_TOUCH_MINOR, 0,
++			     G6TS_MT_AXIS_MAX_TENTH_MM, 0, 0);
++	input_set_abs_params(ts->input, ABS_MT_PRESSURE, 0,
++			     G6TS_MT_PRESSURE_MAX, 0, 0);
++	input_abs_set_res(ts->input, ABS_MT_TOUCH_MAJOR, G6TS_MT_AXIS_RES);
++	input_abs_set_res(ts->input, ABS_MT_TOUCH_MINOR, G6TS_MT_AXIS_RES);
+ 	g6ts_apply_input_resolution(ts);
+ 	touchscreen_parse_properties(ts->input, true, &ts->prop);
+ 	ret = input_mt_init_slots(ts->input, G6TS_MAX_CONTACTS,
+-- 
+2.55.0
+

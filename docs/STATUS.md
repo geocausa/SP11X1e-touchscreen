@@ -1,5 +1,15 @@
 # Current status and boundaries
 
+## November 24–25 touch and pen update
+
+The [production-v1 candidate](../production-v1/README.md) preserves the latest
+zero-cmdline 7.3 finger-touch driver, eight kernel patches, and Linux evidence.
+Runtime tap/drag/pinch, isolated one-shot zero-cmdline cold boot, and real
+full-SoC `s2idle` + post-wake touch are confirmed on the owner's OLED unit.
+**Pen and full Windows parity remain unfinished.** See the
+[capability audit and remaining work](TOUCH_PEN_PARITY.md).
+The historical releases and build paths below remain available for recovery.
+
 ## Production baseline
 
 Phase 91 is the current hardware-validated baseline for the OLED Surface Pro

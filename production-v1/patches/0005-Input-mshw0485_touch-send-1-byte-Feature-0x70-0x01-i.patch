@@ -1,0 +1,73 @@
+From 5a26d161272b3afbe9f7ba2f394ea02080a9e57f Mon Sep 17 00:00:00 2001
+From: geoca <geoca@localhost>
+Date: Tue, 24 Nov 2026 20:08:47 +0000
+Subject: [PATCH 5/8] Input: mshw0485_touch - send 1-byte Feature 0x70={0x01}
+ in clean init
+
+Live hardware testing isolated a deterministic 5.19 s firmware attach
+watchdog when clean_init omitted GET/SET Feature 0x70={0x01}. Adding
+the single-byte 0x70 acknowledgment after SET_FEATURE 0x05=1 silences
+the watchdog completely (0 resets) without needing machine-specific
+report 0x56 (BT MAC) or CFU 0x60/0x65 traffic.
+---
+ drivers/input/touchscreen/mshw0485_touch.c | 30 ++++++++++++++++++++++
+ 1 file changed, 30 insertions(+)
+
+diff --git a/drivers/input/touchscreen/mshw0485_touch.c b/drivers/input/touchscreen/mshw0485_touch.c
+index 45520c0a7..8df2dea9c 100644
+--- a/drivers/input/touchscreen/mshw0485_touch.c
++++ b/drivers/input/touchscreen/mshw0485_touch.c
+@@ -162,6 +162,8 @@ enum g6ts_initialization_stage {
+ 	G6TS_INIT_CLEAN_FEEDBACK_A1,
+ 	G6TS_INIT_CLEAN_FEEDBACK_A5,
+ 	G6TS_INIT_CLEAN_SET_FEATURE05,
++	G6TS_INIT_CLEAN_GET_FEATURE70,
++	G6TS_INIT_CLEAN_SET_FEATURE70,
+ 	G6TS_INIT_SET_FEATURE05,
+ 	G6TS_INIT_GET_FEATURE70,
+ 	G6TS_INIT_SET_FEATURE70,
+@@ -671,6 +673,10 @@ g6ts_initialization_stage_name(enum g6ts_initialization_stage stage)
+ 		return "clean-feedback-a5";
+ 	case G6TS_INIT_CLEAN_SET_FEATURE05:
+ 		return "clean-set-feature05";
++	case G6TS_INIT_CLEAN_GET_FEATURE70:
++		return "clean-get-feature70";
++	case G6TS_INIT_CLEAN_SET_FEATURE70:
++		return "clean-set-feature70";
+ 	case G6TS_INIT_SET_FEATURE05:
+ 		return "set-feature05";
+ 	case G6TS_INIT_GET_FEATURE70:
+@@ -3044,6 +3050,30 @@ static int g6ts_clean_touch_attach_locked(struct g6ts *ts,
+ 	if (ret || ts->last_content_len != 0)
+ 		return ret ? ret : -EPROTO;
+ 
++	/*
++	 * Live hardware isolation proves the Touch G6 firmware runs a 5.19 s
++	 * post-attach watchdog waiting for the one-byte Feature 0x70={0x01}
++	 * host acknowledgment.  Machine-specific report 0x56 (BT MAC) and
++	 * CFU 0x60/0x65 are not required.
++	 */
++	ts->initialization_stage = G6TS_INIT_CLEAN_GET_FEATURE70;
++	ret = g6ts_dma_feature_exchange(ts, GET_FEATURE, 0x70, NULL, 0);
++	if (ret)
++		return ret;
++	ret = g6ts_expect_response(ts, GET_FEATURE_RESPONSE, 0x70, 1);
++	if (ret)
++		return ret;
++
++	ts->initialization_stage = G6TS_INIT_CLEAN_SET_FEATURE70;
++	ret = g6ts_dma_feature_exchange(ts, SET_FEATURE, 0x70,
++					g6ts_mode_enable,
++					sizeof(g6ts_mode_enable));
++	if (ret)
++		return ret;
++	ret = g6ts_expect_response(ts, SET_FEATURE_RESPONSE, 0x70, 0);
++	if (ret || ts->last_content_len != 0)
++		return ret ? ret : -EPROTO;
++
+ 	ts->initialization_stage = G6TS_INIT_WAIT_HEAT;
+ 	ts->awaiting_ready_heat = true;
+ 	ts->mode_enabled = true;
+-- 
+2.55.0
+
